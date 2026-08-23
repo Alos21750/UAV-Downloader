@@ -29,7 +29,11 @@ from uav_downloader.core.ssl import SharedSSLAdapter, get_shared_ssl_context
 from uav_downloader.sites.jabletv import JableTVBrowser
 from uav_downloader.sites.missav import MissAVBrowser
 from uav_downloader.sites.supjav import SupJavBrowser
-from uav_downloader.sites.hanime1 import Hanime1Browser, SiteHanime1
+from uav_downloader.sites.hanime1 import (
+    HANIME1_FILTER_TAG_GROUPS,
+    Hanime1Browser,
+    SiteHanime1,
+)
 from uav_downloader.sites.base import MirrorsBlockedError
 from uav_downloader.core.config import headers
 from uav_downloader.i18n.locales import T, set_lang, get_lang, ui_font, LANGUAGES, state_label
@@ -942,6 +946,11 @@ class ModernApp(ctk.CTk):
         self._selected_urls: set = set()
         self._selected_source_subtitle_evidence: dict[str, tuple[str, ...]] = {}
         self._sidebar_expanded: dict[str, bool] = {}
+        self._hanime_filter_state = {
+            'query': '', 'genre': '', 'sort': '', 'date': '',
+            'duration': '', 'tags': (),
+        }
+        self._hanime_filter_popup = None
         self._grid_gen: int = 0  # bumps on each page refresh so stale thumbs are dropped
         self._grid_columns = browse_columns_for_width(1280)
         self._resize_after_id = None
@@ -1737,20 +1746,33 @@ class ModernApp(ctk.CTk):
             font=(ui_font(), 11), dropdown_font=(ui_font(), 11))
         self._cat_menu.pack(side='left', padx=(10, 0))
 
+        self._hanime_filter_box = ctk.CTkFrame(
+            filters, fg_color='transparent')
+        self._hanime_filter_btn = ctk.CTkButton(
+            self._hanime_filter_box, text=T('hanime_filter_button'),
+            command=self._open_hanime_filters,
+            width=112, height=36, corner_radius=CONTROL_RADIUS,
+            fg_color='transparent', border_width=1,
+            border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI, font=(ui_font(), 10, 'bold'))
+        self._hanime_filter_btn.pack()
+
         self._search_var = ctk.StringVar()
-        search_entry = ctk.CTkEntry(filters, textvariable=self._search_var,
-                                     placeholder_text=T('search_placeholder'),
-                                     height=36,
-                                     fg_color=BG_INPUT, border_color=BORDER,
-                                     border_width=1, corner_radius=CONTROL_RADIUS,
-                                     text_color=TEXT_PRI, font=(ui_font(), 11))
-        search_entry.pack(side='left', fill='x', expand=True, padx=(10, 8))
-        search_entry.bind('<Return>', lambda e: self._on_search())
+        self._search_entry = ctk.CTkEntry(
+            filters, textvariable=self._search_var,
+            placeholder_text=T('search_placeholder'), height=36,
+            fg_color=BG_INPUT, border_color=BORDER, border_width=1,
+            corner_radius=CONTROL_RADIUS, text_color=TEXT_PRI,
+            font=(ui_font(), 11))
+        self._search_entry.pack(
+            side='left', fill='x', expand=True, padx=(10, 8))
+        self._search_entry.bind('<Return>', lambda e: self._on_search())
         ctk.CTkButton(filters, text=T('search_btn'), command=self._on_search,
                       width=76, height=36, corner_radius=CONTROL_RADIUS,
                       fg_color=ACCENT,
                       hover_color=ACCENT_HOVER,
                       text_color=WHITE, font=(ui_font(), 11, 'bold')).pack(side='left')
+        self._sync_hanime_filter_button_visibility()
 
         actions = ctk.CTkFrame(top, fg_color='transparent')
         actions.pack(fill='x', padx=20, pady=(0, 10))
@@ -2829,8 +2851,356 @@ class ModernApp(ctk.CTk):
                 self._set_card_selected(url, True)
         self._update_selection_count()
 
+    def _hanime_filters_active(self) -> bool:
+        return any(
+            self._hanime_filter_state.get(key)
+            for key in ('query', 'genre', 'sort', 'date', 'duration', 'tags')
+        )
+
+    def _refresh_hanime_filter_button(self):
+        button = getattr(self, '_hanime_filter_btn', None)
+        if button is None:
+            return
+        active = self._hanime_filters_active()
+        try:
+            button.configure(
+                text=(T('hanime_filter_active') if active else
+                      T('hanime_filter_button')),
+                fg_color=ACCENT_DIM if active else 'transparent',
+                border_color=ACCENT if active else BORDER_HOVER,
+                text_color=ACCENT if active else TEXT_PRI,
+            )
+        except tk.TclError:
+            pass
+
+    def _sync_hanime_filter_button_visibility(self):
+        box = getattr(self, '_hanime_filter_box', None)
+        search_entry = getattr(self, '_search_entry', None)
+        if box is None or search_entry is None:
+            return
+        try:
+            if self._site_key == 'Hanime1':
+                if not box.winfo_manager():
+                    box.pack(
+                        side='left', padx=(10, 0), before=search_entry)
+                self._refresh_hanime_filter_button()
+            else:
+                box.pack_forget()
+        except tk.TclError:
+            pass
+
+    def _reset_hanime_filter_state(self):
+        self._hanime_filter_state = {
+            'query': '', 'genre': '', 'sort': '', 'date': '',
+            'duration': '', 'tags': (),
+        }
+        self._refresh_hanime_filter_button()
+
+    def _apply_hanime_filter_state(self):
+        state = self._hanime_filter_state
+        self._current_base_url = Hanime1Browser.filter_url(
+            query=state.get('query', ''),
+            genre=state.get('genre', ''),
+            sort=state.get('sort', ''),
+            date=state.get('date', ''),
+            duration=state.get('duration', ''),
+            tags=state.get('tags', ()),
+        )
+        self._page = 1
+        self._last_loaded_page = 1
+        self._has_next = True
+        self._browse_blocked = False
+        self._browse_empty_message = ''
+        self._selected_urls.clear()
+        self._selected_source_subtitle_evidence.clear()
+        self._update_selection_count()
+        self._search_var.set(state.get('query', ''))
+        self._cat_var.set(T('hanime_filter_result'))
+        self._refresh_hanime_filter_button()
+        self._load_page()
+
+    def _open_hanime_filters(self):
+        if self._site_key != 'Hanime1':
+            return
+        existing = self._hanime_filter_popup
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.focus_force()
+                return
+        except tk.TclError:
+            pass
+
+        catalog = Hanime1Browser.filter_catalog()
+        popup = ctk.CTkToplevel(self)
+        self._hanime_filter_popup = popup
+        popup.title(T('hanime_filter_title'))
+        popup.geometry('900x720')
+        popup.minsize(760, 560)
+        popup.transient(self)
+        popup.configure(fg_color=BG_DARK)
+        popup.grid_columnconfigure(0, weight=1)
+        popup.grid_rowconfigure(2, weight=1)
+
+        header = ctk.CTkFrame(popup, fg_color=BG_CARD, corner_radius=0)
+        header.grid(row=0, column=0, sticky='ew')
+        ctk.CTkLabel(
+            header, text=T('hanime_filter_title'), text_color=TEXT_PRI,
+            font=(ui_font(), 18, 'bold')).pack(
+                anchor='w', padx=22, pady=(18, 4))
+        ctk.CTkLabel(
+            header, text=T('hanime_filter_desc'), text_color=TEXT_DIM,
+            font=(ui_font(), 10), justify='left', wraplength=840).pack(
+                anchor='w', padx=22, pady=(0, 16))
+
+        fields = ctk.CTkFrame(
+            popup, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+            border_width=1, border_color=BORDER_CARD)
+        fields.grid(row=1, column=0, padx=18, pady=(16, 6), sticky='ew')
+        for column in (1, 3):
+            fields.grid_columnconfigure(column, weight=1)
+
+        any_value = T('hanime_filter_any')
+        state = self._hanime_filter_state
+        query_var = tk.StringVar(
+            value=state.get('query') or self._search_var.get().strip())
+        genre_var = tk.StringVar(value=state.get('genre') or any_value)
+        sort_var = tk.StringVar(value=state.get('sort') or any_value)
+        date_var = tk.StringVar(value=state.get('date') or any_value)
+        duration_var = tk.StringVar(value=state.get('duration') or any_value)
+
+        def add_entry(row, column, label_key, variable):
+            ctk.CTkLabel(
+                fields, text=T(label_key), text_color=TEXT_SEC,
+                font=(ui_font(), 10, 'bold'), anchor='w').grid(
+                    row=row, column=column, padx=(14, 8), pady=7,
+                    sticky='w')
+            entry = ctk.CTkEntry(
+                fields, textvariable=variable, height=34,
+                corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+                border_color=BORDER, border_width=1,
+                text_color=TEXT_PRI, font=(ui_font(), 10))
+            entry.grid(
+                row=row, column=column + 1, padx=(0, 14), pady=7,
+                sticky='ew')
+            return entry
+
+        def add_menu(row, column, label_key, variable, values):
+            ctk.CTkLabel(
+                fields, text=T(label_key), text_color=TEXT_SEC,
+                font=(ui_font(), 10, 'bold'), anchor='w').grid(
+                    row=row, column=column, padx=(14, 8), pady=7,
+                    sticky='w')
+            menu = ctk.CTkOptionMenu(
+                fields, variable=variable, values=[any_value, *values],
+                height=34, corner_radius=CONTROL_RADIUS,
+                fg_color=BG_INPUT, button_color=BORDER_HOVER,
+                button_hover_color=ACCENT, text_color=TEXT_PRI,
+                dropdown_fg_color=BG_CARD,
+                dropdown_hover_color=BG_CARD_HOVER,
+                dropdown_text_color=TEXT_PRI,
+                font=(ui_font(), 9), dropdown_font=(ui_font(), 9))
+            menu.grid(
+                row=row, column=column + 1, padx=(0, 14), pady=7,
+                sticky='ew')
+            return menu
+
+        query_entry = add_entry(
+            0, 0, 'hanime_filter_query', query_var)
+        add_menu(0, 2, 'hanime_filter_genre', genre_var,
+                 list(catalog['genres']))
+        add_menu(1, 0, 'hanime_filter_sort', sort_var,
+                 list(catalog['sorts']))
+        add_menu(1, 2, 'hanime_filter_date', date_var,
+                 list(catalog['dates']))
+        add_menu(2, 0, 'hanime_filter_duration', duration_var,
+                 list(catalog['durations']))
+
+        tags_card = ctk.CTkFrame(
+            popup, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+            border_width=1, border_color=BORDER_CARD)
+        tags_card.grid(row=2, column=0, padx=18, pady=6, sticky='nsew')
+        tags_card.grid_columnconfigure(0, weight=1)
+        tags_card.grid_rowconfigure(1, weight=1)
+
+        tags_header = ctk.CTkFrame(tags_card, fg_color='transparent')
+        tags_header.grid(row=0, column=0, padx=12, pady=(10, 6), sticky='ew')
+        ctk.CTkLabel(
+            tags_header, text=T('hanime_filter_tags'), text_color=TEXT_PRI,
+            font=(ui_font(), 12, 'bold')).pack(side='left')
+        selected_count = ctk.CTkLabel(
+            tags_header, text='', text_color=ACCENT,
+            font=(ui_font(), 9, 'bold'))
+        selected_count.pack(side='left', padx=(10, 0))
+        tag_search_var = tk.StringVar()
+        ctk.CTkEntry(
+            tags_header, textvariable=tag_search_var,
+            placeholder_text=T('hanime_filter_tag_search'), width=260,
+            height=32, corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            border_color=BORDER, border_width=1, text_color=TEXT_PRI,
+            font=(ui_font(), 10)).pack(side='right')
+
+        tag_scroll = ctk.CTkScrollableFrame(
+            tags_card, fg_color='transparent', corner_radius=0,
+            scrollbar_button_color=BORDER,
+            scrollbar_button_hover_color=BORDER_HOVER)
+        tag_scroll.grid(row=1, column=0, padx=8, pady=(0, 8), sticky='nsew')
+
+        selected_tags = set(state.get('tags') or ())
+        tag_vars = {
+            tag: tk.BooleanVar(value=tag in selected_tags)
+            for tag in catalog['tags']
+        }
+        group_key = {
+            'features': 'st_hanime_tags_features',
+            'relationships': 'st_hanime_tags_relationships',
+            'roles': 'st_hanime_tags_roles',
+            'characters': 'st_hanime_tags_characters',
+            'appearance': 'st_hanime_tags_appearance',
+            'clothing': 'st_hanime_tags_clothing',
+            'locations': 'st_hanime_tags_locations',
+            'themes': 'st_hanime_tags_themes',
+            'acts': 'st_hanime_tags_acts',
+        }
+        grouped_names = {
+            tag for _group, tags in HANIME1_FILTER_TAG_GROUPS for tag in tags
+        }
+        tag_groups = list(HANIME1_FILTER_TAG_GROUPS)
+        extra_tags = tuple(
+            tag for tag in catalog['tags'] if tag not in grouped_names)
+        if extra_tags:
+            tag_groups.append(('other', extra_tags))
+        render_after = [None]
+
+        def update_selected_count():
+            count = sum(var.get() for var in tag_vars.values())
+            selected_count.configure(
+                text=T('hanime_filter_selected_tags', count=count))
+
+        def render_tags(*_args):
+            render_after[0] = None
+            needle = tag_search_var.get().strip().casefold()
+            for child in tag_scroll.winfo_children():
+                child.destroy()
+            for group_id, tags in tag_groups:
+                visible = [
+                    tag for tag in tags
+                    if tag in tag_vars and
+                    (not needle or needle in tag.casefold())
+                ]
+                if not visible:
+                    continue
+                group = ctk.CTkFrame(
+                    tag_scroll, fg_color=BG_SECTION, corner_radius=8,
+                    border_width=1, border_color=BORDER_CARD)
+                group.pack(fill='x', padx=3, pady=4)
+                ctk.CTkLabel(
+                    group,
+                    text=(T(group_key[group_id]) if group_id in group_key
+                          else T('hanime_filter_other_tags')),
+                    text_color=TEXT_SEC,
+                    font=(ui_font(), 10, 'bold')).pack(
+                        anchor='w', padx=10, pady=(8, 4))
+                grid = ctk.CTkFrame(group, fg_color='transparent')
+                grid.pack(fill='x', padx=8, pady=(0, 8))
+                for column in range(3):
+                    grid.grid_columnconfigure(column, weight=1)
+                for index, tag in enumerate(visible):
+                    ctk.CTkCheckBox(
+                        grid, text=tag, variable=tag_vars[tag],
+                        height=26, checkbox_width=17, checkbox_height=17,
+                        corner_radius=4, border_width=1,
+                        fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                        border_color=BORDER_HOVER, checkmark_color=WHITE,
+                        text_color=TEXT_SEC, font=(ui_font(), 9),
+                        command=update_selected_count).grid(
+                            row=index // 3, column=index % 3, sticky='w',
+                            padx=6, pady=2)
+
+        def schedule_render(*_args):
+            if render_after[0] is not None:
+                try:
+                    popup.after_cancel(render_after[0])
+                except tk.TclError:
+                    pass
+            render_after[0] = popup.after(120, render_tags)
+
+        tag_search_var.trace_add('write', schedule_render)
+        render_tags()
+        update_selected_count()
+
+        footer = ctk.CTkFrame(popup, fg_color=BG_CARD, corner_radius=0)
+        footer.grid(row=3, column=0, sticky='ew')
+
+        def close_popup():
+            try:
+                popup.destroy()
+            except tk.TclError:
+                pass
+            self._hanime_filter_popup = None
+
+        def clear_form():
+            query_var.set('')
+            genre_var.set(any_value)
+            sort_var.set(any_value)
+            date_var.set(any_value)
+            duration_var.set(any_value)
+            tag_search_var.set('')
+            for variable in tag_vars.values():
+                variable.set(False)
+            update_selected_count()
+
+        def selected_value(variable):
+            value = variable.get().strip()
+            return '' if value == any_value else value
+
+        def apply_filter():
+            self._hanime_filter_state = {
+                'query': query_var.get().strip(),
+                'genre': selected_value(genre_var),
+                'sort': selected_value(sort_var),
+                'date': selected_value(date_var),
+                'duration': selected_value(duration_var),
+                'tags': tuple(
+                    tag for tag, variable in tag_vars.items()
+                    if variable.get()),
+            }
+            close_popup()
+            self._apply_hanime_filter_state()
+
+        ctk.CTkButton(
+            footer, text=T('hanime_filter_apply'), width=116, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
+            hover_color=ACCENT_HOVER, text_color=WHITE,
+            font=(ui_font(), 10, 'bold'), command=apply_filter).pack(
+                side='right', padx=(8, 18), pady=12)
+        ctk.CTkButton(
+            footer, text=T('hanime_filter_reset'), width=92, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+            font=(ui_font(), 10), command=clear_form).pack(
+                side='right', pady=12)
+        ctk.CTkButton(
+            footer, text=T('st_calendar_cancel'), width=92, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
+            font=(ui_font(), 10), command=close_popup).pack(
+                side='right', padx=(0, 8), pady=12)
+
+        popup.protocol('WM_DELETE_WINDOW', close_popup)
+        query_entry.focus_set()
+        popup.update_idletasks()
+        x = self.winfo_rootx() + max(
+            0, (self.winfo_width() - popup.winfo_width()) // 2)
+        y = self.winfo_rooty() + max(
+            0, (self.winfo_height() - popup.winfo_height()) // 3)
+        popup.geometry(f'+{x}+{y}')
+
     def _on_site_change(self, val):
         self._site_key = val
+        self._reset_hanime_filter_state()
+        self._sync_hanime_filter_button_visibility()
         self._categories.clear()
         self._selected_urls.clear()
         self._selected_source_subtitle_evidence.clear()
@@ -2843,6 +3213,8 @@ class ModernApp(ctk.CTk):
                     if c['name'] == val), -1)
         if idx < 0:
             return
+        if self._site_key == 'Hanime1':
+            self._reset_hanime_filter_state()
         self._current_base_url = self._categories[idx]['url']
         self._page = 1
         self._last_loaded_page = 1
@@ -2865,7 +3237,9 @@ class ModernApp(ctk.CTk):
         elif self._site_key == 'SupJav':
             self._current_base_url = SupJavBrowser.search_url(q, lang=T('supjav_lang'))
         elif self._site_key == 'Hanime1':
-            self._current_base_url = Hanime1Browser.search_url(q)
+            self._hanime_filter_state['query'] = q
+            self._apply_hanime_filter_state()
+            return
         else:
             lang = T('missav_lang')
             eq = quote(q, safe='')

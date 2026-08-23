@@ -54,3 +54,47 @@ def test_old_missav_preference_is_migrated_to_global_setting(
 
     assert cfg['version_preference'] == 'uncensored'
     assert 'missav_version_preference' not in cfg
+
+
+def test_site_settings_default_to_global_values_and_allow_partial_overrides():
+    cfg = jable_smalltool._normalize_loaded_config({
+        'output_folder': 'D:/UAV/default',
+        'baseline_date': '2026-08-01',
+        'site_settings': {
+            'JableTV': {'output_folder': 'D:/UAV/jable'},
+            'MissAV': {'baseline_date': '2026-07-01'},
+            'Unknown': {'output_folder': 'D:/UAV/unknown'},
+            'SupJav': {'baseline_date': 'not-a-date'},
+        },
+    })
+
+    assert cfg['site_settings'] == {
+        'JableTV': {'output_folder': 'D:/UAV/jable'},
+        'MissAV': {'baseline_date': '2026-07-01'},
+    }
+    assert jable_smalltool._resolve_site_settings(cfg, 'JableTV') == {
+        'output_folder': 'D:/UAV/jable',
+        'baseline_date': '2026-08-01',
+    }
+    assert jable_smalltool._resolve_site_settings(cfg, 'MissAV') == {
+        'output_folder': 'D:/UAV/default',
+        'baseline_date': '2026-07-01',
+    }
+    assert jable_smalltool._resolve_site_settings(cfg, 'Hanime1') == {
+        'output_folder': 'D:/UAV/default',
+        'baseline_date': '2026-08-01',
+    }
+
+
+def test_legacy_config_without_site_settings_keeps_identical_site_defaults():
+    cfg = jable_smalltool._normalize_loaded_config({
+        'output_folder': 'D:/UAV/shared',
+        'baseline_date': '2026-08-03',
+    })
+
+    assert cfg['site_settings'] == {}
+    for site_name in jable_smalltool.SITES:
+        assert jable_smalltool._resolve_site_settings(cfg, site_name) == {
+            'output_folder': 'D:/UAV/shared',
+            'baseline_date': '2026-08-03',
+        }

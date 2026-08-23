@@ -77,6 +77,58 @@ def test_exact_missav_monitoring_run_reports_scan_and_downloads(monkeypatch,
     assert any('First run' in line and '2026-04-11' in line for line in logs)
 
 
+def test_worker_uses_independent_dates_and_output_folders_per_site(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+
+    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker._fetch_page_for_site = lambda site, _url: [{
+        'url': (
+            'https://jable.tv/videos/jable-sample/' if site == 'JableTV'
+            else 'https://missav.ai/missav-sample'),
+        'title': f'{site} sample',
+    }]
+    worker._fetch_video_date = lambda _url: (
+        datetime(2026, 7, 15, tzinfo=timezone.utc), '2026-07-15')
+    worker._fetch_missav_video_date = lambda _url: (
+        datetime(2026, 8, 15, tzinfo=timezone.utc), '2026-08-15')
+    downloaded = []
+    worker._download_one = lambda video, dest: downloaded.append(
+        (video['_site'], dest))
+
+    jable_target = find_target('JableTV', legacy_name='最近更新')
+    missav_target = find_target('MissAV', legacy_name='最近更新')
+    cfg = {
+        'output_folder': str(tmp_path / 'shared'),
+        'baseline_date': '2026-08-01',
+        'site_settings': {
+            'JableTV': {
+                'output_folder': str(tmp_path / 'jable'),
+                'baseline_date': '2026-07-01',
+            },
+            'MissAV': {
+                'output_folder': str(tmp_path / 'missav'),
+            },
+        },
+        'first_run_done': False,
+        'selected_targets': [
+            {'site': 'JableTV', 'id': jable_target['id'],
+             'category': jable_target['name']},
+            {'site': 'MissAV', 'id': missav_target['id'],
+             'category': missav_target['name']},
+        ],
+    }
+
+    assert worker._scan_and_download(cfg) is True
+    assert downloaded == [
+        ('JableTV', str(tmp_path / 'jable')),
+        ('MissAV', str(tmp_path / 'missav')),
+    ]
+
+
 def test_missav_same_code_uses_selected_version_regardless_of_order():
     standard = {
         '_site': 'MissAV',

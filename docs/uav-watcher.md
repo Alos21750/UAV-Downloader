@@ -20,18 +20,22 @@ The current registry exposes grouped targets for all four supported sites:
 | JableTV | 129 | new releases, rankings, categories, tags |
 | MissAV | 102 | feeds, categories, tags, makers |
 | SupJav | 10 | feeds, rankings, primary categories |
-| Hanime1 | 24 | release/upload/ranking feeds, genres, feature tags |
+| Hanime1 | 272 | feeds, 9 genres, 6 date ranges, 8 durations, all 240 tags |
 
 ## Set it up once
 
-1. Choose a destination directory.
-2. Set the baseline date, quality, worker limit, version preference, subtitle
-   mode, and optional proxy.
-3. Search or browse each site tab and select targets. Whole groups can be
+1. Choose the shared destination directory.
+2. Set the shared baseline date, or open Per-site monitoring settings to give
+   any site its own date, destination, or both. Sites without an override keep
+   following the shared values. Existing configurations behave exactly as
+   before.
+3. Set quality, worker limit, version preference, subtitle mode, and optional
+   proxy.
+4. Search or browse each site tab and select targets. Whole groups can be
    selected together.
-4. Choose an interval from 1–168 hours, or one daily time in the computer's
+5. Choose an interval from 1–168 hours, or one daily time in the computer's
    local timezone.
-5. Start monitoring.
+6. Start monitoring.
 
 Check Now performs one immediate scan without creating a duplicate schedule.
 The activity panel can remain collapsed while idle and opened only when a log

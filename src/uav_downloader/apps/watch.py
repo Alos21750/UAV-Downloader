@@ -578,6 +578,9 @@ def _default_config() -> dict:
     return {
         'output_folder': _default_output_folder(),
         'baseline_date': DEFAULT_BASELINE_DATE,
+        # Optional per-site overrides.  Missing fields inherit the two global
+        # values above so existing configurations keep their exact behaviour.
+        'site_settings': {},
         'version_preference': DEFAULT_VERSION_PREFERENCE,
         'subtitle_mode': 'none',
         'scan_schedule': _normalize_scan_schedule(None),
@@ -587,9 +590,56 @@ def _default_config() -> dict:
     }
 
 
+def _valid_baseline_date(value) -> bool:
+    try:
+        datetime.strptime(str(value or '').strip(), '%Y-%m-%d')
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _normalize_site_settings(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    normalized = {}
+    for site_name, raw in value.items():
+        if site_name not in SITES or not isinstance(raw, dict):
+            continue
+        item = {}
+        folder = str(raw.get('output_folder') or '').strip()
+        if folder:
+            item['output_folder'] = folder
+        baseline = str(raw.get('baseline_date') or '').strip()
+        if _valid_baseline_date(baseline):
+            item['baseline_date'] = baseline
+        if item:
+            normalized[site_name] = item
+    return normalized
+
+
+def _resolve_site_settings(cfg: dict, site_name: str) -> dict:
+    global_folder = (
+        str(cfg.get('output_folder') or '').strip() or
+        _default_output_folder()
+    )
+    global_date = str(cfg.get('baseline_date') or '').strip()
+    if not _valid_baseline_date(global_date):
+        global_date = DEFAULT_BASELINE_DATE
+    site_settings = _normalize_site_settings(cfg.get('site_settings'))
+    override = site_settings.get(site_name, {})
+    return {
+        'output_folder': override.get('output_folder', global_folder),
+        'baseline_date': override.get('baseline_date', global_date),
+    }
+
+
 def _normalize_loaded_config(cfg: dict) -> dict:
     if not str(cfg.get('output_folder') or '').strip():
         cfg['output_folder'] = _default_output_folder()
+    if not _valid_baseline_date(cfg.get('baseline_date')):
+        cfg['baseline_date'] = DEFAULT_BASELINE_DATE
+    cfg['site_settings'] = _normalize_site_settings(
+        cfg.get('site_settings'))
     cfg['version_preference'] = _normalize_version_pref(cfg)
     cfg['subtitle_mode'] = normalize_subtitle_mode(
         cfg.get('subtitle_mode'))
@@ -1121,6 +1171,18 @@ class SmallToolWorker:
         except Exception as e:
             return (None, f'ERR:{type(e).__name__}')
 
+    def _fetch_hanime1_video_date(self, vurl: str) -> tuple[Optional[datetime], str]:
+        """Confirm a Hanime1 date when a compact genre card omits it."""
+        try:
+            date_text = SITES['Hanime1']['browser'].fetch_video_date(vurl)
+            if not date_text:
+                return (None, '')
+            parsed = datetime.strptime(date_text, '%Y-%m-%d').replace(
+                tzinfo=timezone.utc)
+            return (parsed, date_text)
+        except Exception as exc:
+            return (None, f'ERR:{type(exc).__name__}')
+
     @staticmethod
     def _parse_supjav_listing_date(value: str) -> Optional[datetime]:
         try:
@@ -1178,31 +1240,41 @@ class SmallToolWorker:
     def _scan_and_download_locked(self, cfg: dict):
         dest = str(cfg.get('output_folder') or '').strip() or _default_output_folder()
         cfg['output_folder'] = dest
+        if not _valid_baseline_date(cfg.get('baseline_date')):
+            cfg['baseline_date'] = DEFAULT_BASELINE_DATE
+        cfg['site_settings'] = _normalize_site_settings(
+            cfg.get('site_settings'))
         version_preference = _normalize_version_pref(cfg)
         cfg['version_preference'] = version_preference
         subtitle_mode = normalize_subtitle_mode(cfg.get('subtitle_mode'))
         cfg['subtitle_mode'] = subtitle_mode
         self._subtitle_mode = subtitle_mode
         cfg.pop('missav_version_preference', None)
-        os.makedirs(dest, exist_ok=True)
-
         targets = cfg.get('selected_targets', [])
         if not targets:
             self._log(f'[WAIT] {T("st_no_targets_selected")}')
             return True
 
-        baseline_str = cfg.get('baseline_date', DEFAULT_BASELINE_DATE)
-        try:
-            baseline_dt = datetime.strptime(baseline_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
-        except ValueError:
-            baseline_dt = DEFAULT_BASELINE_DT
+        site_runtime = {
+            site_name: _resolve_site_settings(cfg, site_name)
+            for site_name in {
+                target.get('site') for target in targets
+                if target.get('site') in SITES
+            }
+        }
+        for settings in site_runtime.values():
+            os.makedirs(settings['output_folder'], exist_ok=True)
 
         first_run = not cfg.get('first_run_done', False)
         is_jable_site = any(t['site'] == 'JableTV' for t in targets)
 
         self._set_status('st_scanning', ACCENT)
+        date_summary = ', '.join(
+            f'{site_name} {settings["baseline_date"]}'
+            for site_name, settings in site_runtime.items()
+        )
         self._log(f'{"First run" if first_run else "Daily check"} — '
-                  f'{len(targets)} target(s), baseline {baseline_str}')
+                  f'{len(targets)} target(s), baseline {date_summary}')
 
         all_new_videos = []
         scan_blocked = False
@@ -1215,6 +1287,11 @@ class SmallToolWorker:
             if site_name not in SITES:
                 self._log(f'[WARN] site not found: {site_name}')
                 continue
+            settings = site_runtime[site_name]
+            baseline_str = settings['baseline_date']
+            baseline_dt = datetime.strptime(
+                baseline_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+            site_dest = settings['output_folder']
             cat = find_target(site_name, target.get('id'), target.get('category'))
             if not cat:
                 cat_name = target.get('category') or target.get('id') or '?'
@@ -1265,6 +1342,7 @@ class SmallToolWorker:
                     video['_site'] = site_name
                     video['_target_id'] = target_id
                     video['_category'] = cat_name
+                    video['_download_dest'] = site_dest
 
                 self._log(f'  Page {page}: {len(videos)} video(s)')
                 page_all_seen = True
@@ -1365,13 +1443,18 @@ class SmallToolWorker:
                         consecutive_skips = 0
                         self._log(f'    [KEEP] {vurl.rstrip("/").split("/")[-1]} — {rel_text}')
                     else:
-                        # SupJav exposes an absolute date; Hanime1 exposes a
-                        # relative date directly on each listing card.
+                        # SupJav exposes an absolute listing date.  Most
+                        # Hanime1 cards expose a relative date, while the
+                        # compact 裏番/泡麵番 grids require detail confirmation.
                         rel_text = v.get('date', '')
                         video_dt = (
                             self._parse_relative_date(rel_text)
                             if site_name == 'Hanime1'
                             else self._parse_supjav_listing_date(rel_text))
+                        if site_name == 'Hanime1' and video_dt is None:
+                            video_dt, rel_text = self._fetch_hanime1_video_date(
+                                vurl)
+                            time.sleep(PER_VIDEO_FETCH_DELAY_SEC)
                         if video_dt is None:
                             self._log(f'    [SKIP] no confirmed date ({rel_text!r}): {vurl}')
                             consecutive_skips += 1
@@ -1454,7 +1537,8 @@ class SmallToolWorker:
         for v in all_new_videos:
             if self._stop.is_set():
                 return False
-            result = self._download_one(v, dest)
+            result = self._download_one(
+                v, str(v.get('_download_dest') or dest))
             if result == 'blocked':
                 download_blocked = True
             elif result == 'subtitle_failed':
@@ -1884,6 +1968,11 @@ class SmallToolApp(ctk.CTk):
         return {
             'folder': self._folder_var.get() if hasattr(self, '_folder_var') else self._cfg.get('output_folder', ''),
             'baseline_date': self._date_var.get() if hasattr(self, '_date_var') else self._cfg.get('baseline_date', DEFAULT_BASELINE_DATE),
+            'site_settings': {
+                site: dict(values)
+                for site, values in _normalize_site_settings(
+                    self._cfg.get('site_settings')).items()
+            },
             'selected_targets': self._get_selected_targets() if self._check_vars else self._cfg.get('selected_targets', []),
             'resolution': self._cfg.get('resolution', 'highest'),
             'version_preference': self._cfg.get(
@@ -1904,6 +1993,8 @@ class SmallToolApp(ctk.CTk):
     def _restore_ui_state(self, snapshot: dict):
         self._cfg['output_folder'] = snapshot['folder']
         self._cfg['baseline_date'] = snapshot['baseline_date']
+        self._cfg['site_settings'] = _normalize_site_settings(
+            snapshot.get('site_settings'))
         self._cfg['resolution'] = snapshot['resolution']
         self._cfg['version_preference'] = snapshot['version_preference']
         self._cfg['subtitle_mode'] = snapshot['subtitle_mode']
@@ -1934,6 +2025,7 @@ class SmallToolApp(ctk.CTk):
         self._set_categories_collapsed(snapshot['categories_collapsed'])
         self._set_activity_visible(snapshot['activity_visible'])
         self._set_settings_expanded(snapshot['settings_expanded'])
+        self._refresh_site_settings_summary()
         self._refresh_schedule_summary()
 
     def _apply_language(self, code: str):
@@ -2340,6 +2432,22 @@ class SmallToolApp(ctk.CTk):
             date_group, text=T('st_date_hint'), text_color=TEXT_DIM,
             font=(font_family, 9), wraplength=440, justify='left').pack(
                 anchor='w', pady=(4, 0))
+
+        site_settings_row = ctk.CTkFrame(date_group, fg_color='transparent')
+        site_settings_row.pack(fill='x', pady=(8, 0))
+        ctk.CTkButton(
+            site_settings_row, text=T('st_site_settings_button'),
+            width=178, height=34, corner_radius=CONTROL_RADIUS,
+            fg_color='transparent', border_width=1,
+            border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI, font=(font_family, 9, 'bold'),
+            command=self._open_site_settings).pack(side='left')
+        self._site_settings_summary_lbl = ctk.CTkLabel(
+            site_settings_row, text='', text_color=TEXT_DIM,
+            font=(font_family, 9), anchor='w')
+        self._site_settings_summary_lbl.pack(
+            side='left', padx=(10, 0), fill='x', expand=True)
+        self._refresh_site_settings_summary()
 
         res_group = ctk.CTkFrame(options, fg_color='transparent')
         res_group.pack(fill='x', pady=(12, 0))
@@ -3134,7 +3242,7 @@ class SmallToolApp(ctk.CTk):
             self._date_var.set(selected.isoformat())
             return
 
-    def _open_calendar(self):
+    def _open_calendar(self, date_var=None, owner=None):
         existing = getattr(self, '_calendar_popup', None)
         try:
             if existing is not None and existing.winfo_exists():
@@ -3144,9 +3252,11 @@ class SmallToolApp(ctk.CTk):
             pass
 
         today = datetime.now().astimezone().date()
+        target_var = date_var or self._date_var
+        popup_owner = owner or self
         try:
             selected = datetime.strptime(
-                self._date_var.get().strip(), '%Y-%m-%d').date()
+                target_var.get().strip(), '%Y-%m-%d').date()
         except ValueError:
             selected = today
 
@@ -3155,7 +3265,7 @@ class SmallToolApp(ctk.CTk):
         popup.title(T('st_calendar_title'))
         popup.geometry('364x448')
         popup.resizable(False, False)
-        popup.transient(self)
+        popup.transient(popup_owner)
         popup.configure(fg_color=BG_DARK)
         popup.grid_columnconfigure(0, weight=1)
         popup.grid_rowconfigure(1, weight=1)
@@ -3174,7 +3284,7 @@ class SmallToolApp(ctk.CTk):
             self._calendar_popup = None
 
         def choose_day(day_value: date):
-            self._date_var.set(day_value.isoformat())
+            target_var.set(day_value.isoformat())
             close_popup()
 
         header = ctk.CTkFrame(popup, fg_color=BG_CARD, corner_radius=0)
@@ -3267,10 +3377,255 @@ class SmallToolApp(ctk.CTk):
         popup.protocol('WM_DELETE_WINDOW', close_popup)
         render_month()
         popup.update_idletasks()
-        x = self.winfo_rootx() + max(0, (self.winfo_width() - popup.winfo_width()) // 2)
-        y = self.winfo_rooty() + max(0, (self.winfo_height() - popup.winfo_height()) // 3)
+        x = popup_owner.winfo_rootx() + max(
+            0, (popup_owner.winfo_width() - popup.winfo_width()) // 2)
+        y = popup_owner.winfo_rooty() + max(
+            0, (popup_owner.winfo_height() - popup.winfo_height()) // 3)
         popup.geometry(f'+{x}+{y}')
         popup.after(40, popup.grab_set)
+
+    def _refresh_site_settings_summary(self):
+        label = getattr(self, '_site_settings_summary_lbl', None)
+        if label is None:
+            return
+        count = len(_normalize_site_settings(self._cfg.get('site_settings')))
+        try:
+            label.configure(text=(
+                T('st_site_settings_default') if count == 0 else
+                T('st_site_settings_custom_count', count=count)
+            ))
+        except tk.TclError:
+            pass
+
+    def _open_site_settings(self):
+        existing = getattr(self, '_site_settings_popup', None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.focus_force()
+                return
+        except tk.TclError:
+            pass
+
+        popup = ctk.CTkToplevel(self)
+        self._site_settings_popup = popup
+        popup.title(T('st_site_settings_title'))
+        popup.geometry('820x640')
+        popup.minsize(700, 500)
+        popup.transient(self)
+        popup.configure(fg_color=BG_DARK)
+        popup.grid_columnconfigure(0, weight=1)
+        popup.grid_rowconfigure(1, weight=1)
+
+        header = ctk.CTkFrame(
+            popup, fg_color=BG_CARD, corner_radius=0,
+            border_width=0)
+        header.grid(row=0, column=0, sticky='ew')
+        ctk.CTkLabel(
+            header, text=T('st_site_settings_title'), text_color=TEXT_PRI,
+            font=(ui_font(), 17, 'bold')).pack(
+                anchor='w', padx=22, pady=(18, 4))
+        ctk.CTkLabel(
+            header, text=T('st_site_settings_desc'), text_color=TEXT_DIM,
+            font=(ui_font(), 10), justify='left', wraplength=760).pack(
+                anchor='w', padx=22, pady=(0, 16))
+
+        content = ctk.CTkScrollableFrame(
+            popup, fg_color='transparent', corner_radius=0,
+            scrollbar_button_color=BORDER,
+            scrollbar_button_hover_color=BORDER_HOVER)
+        content.grid(row=1, column=0, sticky='nsew', padx=14, pady=14)
+
+        default_folder = (
+            self._folder_var.get().strip() or _default_output_folder())
+        default_date = self._date_var.get().strip() or DEFAULT_BASELINE_DATE
+        current = _normalize_site_settings(self._cfg.get('site_settings'))
+        rows = {}
+
+        for site_name in SITES:
+            override = current.get(site_name, {})
+            card = ctk.CTkFrame(
+                content, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+                border_width=1, border_color=BORDER_CARD)
+            card.pack(fill='x', padx=4, pady=6)
+            card.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(
+                card, text=site_name, text_color=ACCENT,
+                font=(ui_font(), 13, 'bold')).grid(
+                    row=0, column=0, columnspan=4, padx=14,
+                    pady=(12, 6), sticky='w')
+
+            folder_default = tk.BooleanVar(
+                value='output_folder' not in override)
+            folder_var = tk.StringVar(
+                value=override.get('output_folder', default_folder))
+            folder_check = ctk.CTkCheckBox(
+                card, text=T('st_site_use_default_folder'),
+                variable=folder_default, width=176, height=30,
+                checkbox_width=18, checkbox_height=18,
+                fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                border_color=BORDER_HOVER, checkmark_color=WHITE,
+                text_color=TEXT_SEC, font=(ui_font(), 9))
+            folder_check.grid(
+                row=1, column=0, padx=(14, 8), pady=5, sticky='w')
+            folder_entry = ctk.CTkEntry(
+                card, textvariable=folder_var, height=34,
+                corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+                border_color=BORDER, border_width=1,
+                text_color=TEXT_PRI, font=(ui_font(), 9))
+            folder_entry.grid(
+                row=1, column=1, columnspan=2, padx=8, pady=5,
+                sticky='ew')
+            folder_button = ctk.CTkButton(
+                card, text=T('st_browse'), width=76, height=34,
+                corner_radius=CONTROL_RADIUS, fg_color='transparent',
+                border_width=1, border_color=BORDER_HOVER,
+                hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+                font=(ui_font(), 9))
+            folder_button.grid(
+                row=1, column=3, padx=(8, 14), pady=5)
+
+            date_default = tk.BooleanVar(
+                value='baseline_date' not in override)
+            date_var = tk.StringVar(
+                value=override.get('baseline_date', default_date))
+            date_check = ctk.CTkCheckBox(
+                card, text=T('st_site_use_default_date'),
+                variable=date_default, width=176, height=30,
+                checkbox_width=18, checkbox_height=18,
+                fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                border_color=BORDER_HOVER, checkmark_color=WHITE,
+                text_color=TEXT_SEC, font=(ui_font(), 9))
+            date_check.grid(
+                row=2, column=0, padx=(14, 8), pady=(5, 12), sticky='w')
+            date_entry = ctk.CTkEntry(
+                card, textvariable=date_var, width=150, height=34,
+                corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+                border_color=BORDER, border_width=1,
+                text_color=TEXT_PRI, font=('Consolas', 10))
+            date_entry.grid(
+                row=2, column=1, padx=8, pady=(5, 12), sticky='w')
+            date_button = ctk.CTkButton(
+                card, text=T('st_calendar'), width=84, height=34,
+                corner_radius=CONTROL_RADIUS, fg_color='transparent',
+                border_width=1, border_color=BORDER_HOVER,
+                hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+                font=(ui_font(), 9))
+            date_button.grid(
+                row=2, column=2, padx=8, pady=(5, 12), sticky='w')
+
+            row = {
+                'folder_default': folder_default,
+                'folder': folder_var,
+                'folder_entry': folder_entry,
+                'folder_button': folder_button,
+                'date_default': date_default,
+                'date': date_var,
+                'date_entry': date_entry,
+                'date_button': date_button,
+            }
+            rows[site_name] = row
+
+            def sync_row(name=site_name):
+                values = rows[name]
+                folder_inherits = values['folder_default'].get()
+                date_inherits = values['date_default'].get()
+                if folder_inherits:
+                    values['folder'].set(default_folder)
+                if date_inherits:
+                    values['date'].set(default_date)
+                values['folder_entry'].configure(
+                    state='disabled' if folder_inherits else 'normal')
+                values['folder_button'].configure(
+                    state='disabled' if folder_inherits else 'normal')
+                values['date_entry'].configure(
+                    state='disabled' if date_inherits else 'normal')
+                values['date_button'].configure(
+                    state='disabled' if date_inherits else 'normal')
+
+            def choose_folder(name=site_name):
+                selected = filedialog.askdirectory(
+                    parent=popup, title=T('st_choose_folder'),
+                    initialdir=rows[name]['folder'].get() or default_folder)
+                if selected:
+                    rows[name]['folder_default'].set(False)
+                    rows[name]['folder'].set(selected)
+                    sync_row(name)
+
+            def choose_date(name=site_name):
+                rows[name]['date_default'].set(False)
+                sync_row(name)
+                self._open_calendar(rows[name]['date'], popup)
+
+            folder_check.configure(command=sync_row)
+            date_check.configure(command=sync_row)
+            folder_button.configure(command=choose_folder)
+            date_button.configure(command=choose_date)
+            sync_row()
+
+        footer = ctk.CTkFrame(popup, fg_color=BG_CARD, corner_radius=0)
+        footer.grid(row=2, column=0, sticky='ew')
+        status_label = ctk.CTkLabel(
+            footer, text='', text_color=ERROR_C,
+            font=(ui_font(), 9), anchor='w')
+        status_label.pack(side='left', padx=18, fill='x', expand=True)
+
+        def close_popup():
+            try:
+                popup.destroy()
+            except tk.TclError:
+                pass
+            self._site_settings_popup = None
+
+        def save_settings():
+            saved = {}
+            for site_name, values in rows.items():
+                item = {}
+                if not values['folder_default'].get():
+                    folder = values['folder'].get().strip()
+                    if not folder:
+                        status_label.configure(
+                            text=T('st_site_folder_required', site=site_name))
+                        return
+                    item['output_folder'] = folder
+                if not values['date_default'].get():
+                    baseline = values['date'].get().strip()
+                    if not _valid_baseline_date(baseline):
+                        status_label.configure(
+                            text=T('st_site_date_invalid', site=site_name))
+                        return
+                    item['baseline_date'] = baseline
+                if item:
+                    saved[site_name] = item
+            self._cfg['site_settings'] = saved
+            update_config({
+                'output_folder': default_folder,
+                'baseline_date': default_date,
+                'site_settings': saved,
+            })
+            self._refresh_site_settings_summary()
+            close_popup()
+
+        ctk.CTkButton(
+            footer, text=T('st_site_settings_save'), width=116, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
+            hover_color=ACCENT_HOVER, text_color=WHITE,
+            font=(ui_font(), 10, 'bold'), command=save_settings).pack(
+                side='right', padx=(8, 18), pady=12)
+        ctk.CTkButton(
+            footer, text=T('st_calendar_cancel'), width=92, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
+            font=(ui_font(), 10), command=close_popup).pack(
+                side='right', pady=12)
+
+        popup.protocol('WM_DELETE_WINDOW', close_popup)
+        popup.update_idletasks()
+        x = self.winfo_rootx() + max(
+            0, (self.winfo_width() - popup.winfo_width()) // 2)
+        y = self.winfo_rooty() + max(
+            0, (self.winfo_height() - popup.winfo_height()) // 3)
+        popup.geometry(f'+{x}+{y}')
 
     def _restore_target_checks(self, targets):
         for saved in targets:
@@ -3300,9 +3655,15 @@ class SmallToolApp(ctk.CTk):
                 return False
         self._cfg['selected_targets'] = self._get_selected_targets()
         self._cfg['baseline_date'] = date_str
+        self._cfg['output_folder'] = (
+            self._folder_var.get().strip() or _default_output_folder())
+        self._cfg['site_settings'] = _normalize_site_settings(
+            self._cfg.get('site_settings'))
         update_config({
             'selected_targets': self._cfg['selected_targets'],
             'baseline_date': date_str,
+            'output_folder': self._cfg['output_folder'],
+            'site_settings': self._cfg['site_settings'],
         })
         return True
 
@@ -3330,6 +3691,23 @@ class SmallToolApp(ctk.CTk):
             return None
         self._cfg['output_folder'] = folder
         return folder
+
+    def _prepare_site_output_folders(self, targets: list[dict]) -> bool:
+        selected_sites = {
+            target.get('site') for target in targets
+            if target.get('site') in SITES
+        }
+        for site_name in selected_sites:
+            folder = _resolve_site_settings(
+                self._cfg, site_name)['output_folder']
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except OSError as exc:
+                messagebox.showerror(
+                    T('st_folder_error'),
+                    T('st_folder_error_msg', path=folder, error=str(exc)))
+                return False
+        return True
 
     def _refresh_proxy_status(self, saved=False):
         mode = config.get_proxy_mode()
@@ -3434,6 +3812,8 @@ class SmallToolApp(ctk.CTk):
         if not targets:
             messagebox.showwarning(T('st_no_cat'), T('st_no_cat_msg'))
             return
+        if not self._prepare_site_output_folders(targets):
+            return
 
         date_str = self._validate_baseline_date()
         if not date_str:
@@ -3498,6 +3878,8 @@ class SmallToolApp(ctk.CTk):
         targets = self._get_selected_targets()
         if not targets:
             messagebox.showwarning(T('st_no_cat'), T('st_no_cat_msg'))
+            return
+        if not self._prepare_site_output_folders(targets):
             return
         date_str = self._validate_baseline_date()
         if not date_str:
@@ -3690,12 +4072,15 @@ class SmallToolApp(ctk.CTk):
     def _on_close(self):
         self._is_closing = True
         self._build_gen += 1
-        popup = getattr(self, '_schedule_popup', None)
-        try:
-            if popup is not None and popup.winfo_exists():
-                popup.destroy()
-        except tk.TclError:
-            pass
+        for popup_name in (
+                '_schedule_popup', '_site_settings_popup',
+                '_calendar_popup'):
+            popup = getattr(self, popup_name, None)
+            try:
+                if popup is not None and popup.winfo_exists():
+                    popup.destroy()
+            except tk.TclError:
+                pass
         self._worker.stop()
         self._worker.cancel_active_download()
         try:
@@ -3712,6 +4097,8 @@ class SmallToolApp(ctk.CTk):
                     self._cfg.get('subtitle_mode')),
                 'scan_schedule': _normalize_scan_schedule(
                     self._cfg.get('scan_schedule')),
+                'site_settings': _normalize_site_settings(
+                    self._cfg.get('site_settings')),
             }
             if hasattr(self, '_date_var'):
                 candidate = self._date_var.get().strip()

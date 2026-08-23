@@ -59,7 +59,7 @@ SmartScreen reputation warnings and Defender Antivirus quarantine are different 
 
 ## UAV Browser: browse, pick, download
 
-1. Open Browse, choose JableTV, MissAV, SupJav, or Hanime1, then select a category or search.
+1. Open Browse, choose JableTV, MissAV, SupJav, or Hanime1, then select a category or search. Hanime1 also has a full filter that combines genre, sort, date, duration, and 240 tags.
 2. Select multiple cards and add them to the queue, or download the selection immediately.
 3. You can also paste URLs on the Download tab or import a `.txt` / `.csv` list.
 4. Use Settings for the destination, quality, concurrent videos, per-video workers, speed limit, AI subtitles, and proxy.
@@ -82,7 +82,7 @@ SmartScreen reputation warnings and Defender Antivirus quarantine are different 
 </p>
 
 1. Choose a destination. If left unset, UAV Watcher creates `tmp` beside the executable.
-2. Select Show settings to change the baseline date, quality, per-video workers, version priority, AI subtitles, and proxy. Collapse settings afterward to give categories the full window.
+2. Select Show settings to change the shared baseline date and folder, or assign a separate date and destination to each site. Quality, per-video workers, version priority, AI subtitles, and proxy remain configurable there too.
 3. Search and select categories on any of the four site tabs; group-wide selection is available.
 4. Select Schedule to check every 1–168 hours or once a day at a specified computer-local time.
 5. Press Start Monitoring. Categories remain visible; progress appears only while work is active, and Show activity opens the log area when needed.
@@ -92,7 +92,7 @@ SmartScreen reputation warnings and Defender Antivirus quarantine are different 
 | JableTV | 129 | Feeds/rankings, primary categories, and tag groups |
 | MissAV | 102 | Feeds/rankings, categories/tags, and makers |
 | SupJav | 10 | Feeds/rankings and primary categories |
-| Hanime1 | 24 | Release/upload/ranking feeds, 9 video genres, and feature tags such as Chinese subtitles |
+| Hanime1 | 272 | Release/upload/ranking feeds, 9 genres including Ura and short anime, 6 date ranges, 8 durations, and all 240 tags |
 
 UAV Watcher can check every 1–168 hours or once a day at a specified time using this computer's local time; existing settings continue to default to every 24 hours. Check Now runs one immediate check without creating another recurring schedule. When the same recognized title code appears across categories or sites, the candidate matching your selected version priority is kept. If a code cannot be identified reliably, only an identical URL is deduplicated—UAV Watcher does not guess.
 
@@ -123,7 +123,7 @@ State is stored in `.uav-watcher` beside the executable when writable, otherwise
 
 Sites and CDNs can change without notice. If one stops working, update first, then open an Issue with reproducible details.
 
-Hanime1 support covers official `watch?v=` URLs, search, pagination, sorting, genres, and common tags. The downloader resolves fresh signed MP4 URLs, applies the selected quality preference, and provides up to four ranged connections, resume, and a serial fallback.
+Hanime1 support covers official `watch?v=` URLs, search, pagination, and combinable sort, genre, published-date, duration, and complete 240-tag filters. Compact Ura Anime and short-anime grids are parsed too. The downloader resolves fresh signed MP4 URLs, applies the selected quality preference, and provides up to four ranged connections, resume, and a serial fallback.
 
 ## Run from source
 

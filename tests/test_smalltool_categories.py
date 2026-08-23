@@ -37,8 +37,13 @@ def test_smalltool_registry_has_complete_grouped_targets():
     assert [len(g['targets']) for g in SITES['MissAV']['groups']] == [7, 22, 37, 36]
     assert len(list(iter_targets('SupJav'))) == 10
     assert [len(g['targets']) for g in SITES['SupJav']['groups']] == [4, 6]
-    assert len(list(iter_targets('Hanime1'))) == 24
-    assert [len(g['targets']) for g in SITES['Hanime1']['groups']] == [9, 9, 6]
+    assert len(list(iter_targets('Hanime1'))) == 272
+    assert [len(g['targets']) for g in SITES['Hanime1']['groups']] == [
+        9, 9, 6, 8, 9, 14, 19, 23, 21, 27, 25, 46, 56]
+
+    hanime_names = {target['name'] for target in iter_targets('Hanime1')}
+    assert {'裏番', '泡麵番', '過去 24 小時', '0 - 10 分鐘',
+            '同人作品', 'NTR', 'BDSM', 'POV'} <= hanime_names
 
 
 def test_target_ids_are_unique_and_legacy_names_still_resolve():

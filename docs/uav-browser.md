@@ -8,6 +8,9 @@ queue individual videos from JableTV, MissAV, SupJav, and Hanime1.
 
 1. Open the Browse tab and select a supported site.
 2. Choose a category or enter a search query.
+   On Hanime1, Full filters can combine keywords, 9 genres, 9 sort modes,
+   6 published-date ranges, 8 duration ranges, and multiple selections from
+   the complete 240-tag catalog.
 3. Select one or more video cards.
 4. Add the selection to the persistent queue or download it immediately.
 5. Follow progress on the Download tab while continuing to browse.
@@ -29,6 +32,9 @@ items can be retried independently.
 
 Download work and subtitle generation use separate queues. A long subtitle job
 therefore does not occupy a video download slot.
+
+Hanime1's Ura Anime and short-anime category pages use a compact card layout.
+UAV Browser supports that layout as well as the standard search/result cards.
 
 ## Install and run
 
