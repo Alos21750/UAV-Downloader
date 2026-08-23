@@ -48,7 +48,7 @@
 If you are unsure, start with **UAV Browser**. Both Windows executables are portable, need no Python installation, and include ffmpeg in the release build.
 
 > [!NOTE]
-> New users only need the `UAV_*` assets. The `ALOS_*` and `Jable*` files in a release are byte-identical compatibility aliases for older updaters—not different applications—and do not need to be downloaded again.
+> Releases publish only the canonical `UAV_*` assets. Legacy ALOS and Jable filenames are no longer published; users of older versions should download the corresponding UAV file directly.
 
 Learn more: [UAV Browser](./docs/uav-browser.md) · [UAV Watcher unattended automation](./docs/uav-watcher.md) · [AI subtitles](./docs/ai-subtitles.md) · [Docker / CLI](./docs/docker-cli.md) · [migrate to UAV](./docs/migration-to-uav.md)
 
@@ -58,7 +58,7 @@ Learn more: [UAV Browser](./docs/uav-browser.md) · [UAV Watcher unattended auto
 2. Put the file in a writable folder and double-click it.
 3. Pick a language on first launch. You can later switch among English, 繁體中文, 简体中文, 日本語, plus light and dark themes.
 
-SmartScreen reputation warnings and Defender Antivirus quarantine are different events. Read [Windows download and security verification](./WINDOWS_SECURITY.md) first: verify `SHA256SUMS.txt` and GitHub provenance, and do not weaken protection when Defender reports a threat name.
+SmartScreen reputation warnings and Defender Antivirus quarantine are different events. Read [Windows download and security verification](./WINDOWS_SECURITY.md) first: verify `UAV_SHA256SUMS.txt` and GitHub provenance, and do not weaken protection when Defender reports a threat name.
 
 ## UAV Browser: browse, pick, download
 

@@ -58,6 +58,6 @@ and responsibility.
 ## Supply-chain verification
 
 Release model packs are built from pinned inputs, gated by exact size and
-SHA-256 values, included in `SHA256SUMS.txt`, and covered by GitHub artifact
+SHA-256 values, included in `UAV_SHA256SUMS.txt`, and covered by GitHub artifact
 attestations. License details are recorded in
 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).

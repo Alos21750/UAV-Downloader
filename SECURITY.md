@@ -20,7 +20,7 @@ content.
 ## Release verification
 
 Official Windows assets are published through GitHub Releases with
-`SHA256SUMS.txt` and GitHub artifact attestations. See
+`UAV_SHA256SUMS.txt` and GitHub artifact attestations. See
 [`WINDOWS_SECURITY.md`](./WINDOWS_SECURITY.md) before running a downloaded
 binary. A SmartScreen reputation warning is not the same event as a Defender
 Antivirus detection; never disable protection or add a broad exclusion merely

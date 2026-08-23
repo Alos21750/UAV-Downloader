@@ -11,11 +11,11 @@
 - `UAV_Watcher_portable.zip`：不使用 one-file 臨時自解壓流程的 UAV Watcher 備用版本
 - `UAV_reazonspeech_asr_v1.zip`：預設「自動」字幕辨識首次使用時下載的 CPU 模型包
 - `UAV_local_translation_v1.zip`：首次產生英文或繁中字幕時下載的本機翻譯模型包
-- `SHA256SUMS.txt`
+- `UAV_SHA256SUMS.txt`
 
-同一 Release 也會保留 ALOS v3.0 與 Jable v2 檔名，供已安裝的舊更新器相容使用。這些別名是 canonical 資產的位元完全相同副本，也各自列入 checksum 與 attestation；新下載請優先使用上列 UAV 檔名。
+Release 僅發布上列 `UAV_*` 正式資產，不再附帶 ALOS／Jable 舊檔名別名。
 
-先用 `SHA256SUMS.txt` 核對檔案雜湊：
+先用 `UAV_SHA256SUMS.txt` 核對檔案雜湊：
 
 ```powershell
 Get-FileHash .\UAV_Watcher.exe -Algorithm SHA256
@@ -53,7 +53,7 @@ gh attestation verify .\UAV_local_translation_v1.zip `
 1. 更新 Windows Security 的 security intelligence。
 2. 在 Protection History 記下完整 threat name、偵測時間與處置。
 3. 記下 Windows 版本、Defender platform／security intelligence version，以及被偵測檔案的 SHA-256。
-4. 確認下載網址屬於本專案 Release，且 SHA-256 與該版 `SHA256SUMS.txt` 相同。
+4. 確認下載網址屬於本專案 Release，且 SHA-256 與該版 `UAV_SHA256SUMS.txt` 相同。
 5. 將上述資料附在 GitHub issue；維護者才能比對正確的檔案與偵測規則。
 6. 不要為了上傳而自行還原隔離檔。可使用 Windows Security 內建回報；維護者則應從官方 Release 取得位元完全相同的資產，以 software developer 身分提交至 [Microsoft Security Intelligence](https://www.microsoft.com/wdsi/filesubmission)，選擇 incorrectly detected 並保留 Submission ID。
 
@@ -76,11 +76,11 @@ Download only from this project's [GitHub Releases](https://github.com/Alos21750
 - `UAV_Watcher_portable.zip`, an onedir fallback without one-file temporary extraction
 - `UAV_reazonspeech_asr_v1.zip`, the CPU recognition pack downloaded on first use of the default Auto subtitle profile
 - `UAV_local_translation_v1.zip`, the local translation models downloaded when English or Traditional Chinese subtitles are first requested
-- `SHA256SUMS.txt`
+- `UAV_SHA256SUMS.txt`
 
-The same release retains ALOS v3.0 and Jable v2 filenames as compatibility aliases for installed update clients. Every alias is a byte-identical copy of its canonical asset and is listed separately in the checksums and attestations. New downloads should use the UAV names above.
+Releases publish only the canonical `UAV_*` assets listed above; legacy ALOS and Jable filename aliases are no longer included.
 
-Compare the downloaded file with `SHA256SUMS.txt`:
+Compare the downloaded file with `UAV_SHA256SUMS.txt`:
 
 ```powershell
 Get-FileHash .\UAV_Watcher.exe -Algorithm SHA256
@@ -118,7 +118,7 @@ Do not weaken system-wide protection or create a broad exclusion just to run thi
 1. Update Windows Security intelligence.
 2. Record the complete threat name, detection time, and action from Protection History.
 3. Record the Windows version, Defender platform and security intelligence versions, and the file's SHA-256.
-4. Confirm that the URL is an official project release and that the SHA-256 matches that release's `SHA256SUMS.txt`.
+4. Confirm that the URL is an official project release and that the SHA-256 matches that release's `UAV_SHA256SUMS.txt`.
 5. Add those exact details to the GitHub issue so the maintainer can identify the affected sample and rule.
 6. Do not restore a quarantined file merely to upload it. Use Windows Security's built-in reporting path when available. The maintainer should obtain the byte-identical asset from the official release, submit it as a software developer through [Microsoft Security Intelligence](https://www.microsoft.com/wdsi/filesubmission), choose the incorrectly detected category, and retain the Submission ID.
 

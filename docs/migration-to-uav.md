@@ -41,11 +41,12 @@ Downloader` and `%APPDATA%\JableTV Downloader`.
 
 ## Release and updater compatibility
 
-Version 3.1 releases publish canonical UAV assets. They also publish exact
-ALOS v3.0 and Jable v2 executable/model aliases so installed update clients can
-keep resolving downloads. Each alias is a byte-for-byte copy of its canonical
-asset and is listed independently in `SHA256SUMS.txt` and release attestations.
-New installations should always choose the UAV filename.
+Version 3.1 releases publish only canonical `UAV_*` assets. ALOS v3.0 and Jable
+v2 executable/model aliases are no longer attached to new releases. Users of
+older versions should download the corresponding UAV executable directly; the
+non-destructive settings and history migration described above remains active.
+Canonical assets are listed in `UAV_SHA256SUMS.txt` and covered by release
+attestations.
 
 The former GHCR image names continue as compatibility channels. New
 deployments should use `ghcr.io/alos21750/uav-downloader` so configuration and

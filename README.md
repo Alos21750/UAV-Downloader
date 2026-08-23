@@ -48,7 +48,7 @@
 不確定時先下載 **UAV Browser**。兩個 Windows 執行檔都免安裝 Python，Release 版本已包含 ffmpeg。
 
 > [!NOTE]
-> 新使用者只需下載 `UAV_*` 檔案。Release 內的 `ALOS_*`／`Jable*` 是供舊版自動更新器繼續運作的相同位元組別名，不是另一套程式，也不需要重複下載。
+> Release 僅發布 `UAV_*` 正式資產；舊版 ALOS／Jable 檔名已停止發布。舊版使用者請直接下載對應的 UAV 檔案。
 
 深入了解：[UAV Browser](./docs/uav-browser.md) · [UAV Watcher 無人值守流程](./docs/uav-watcher.md) · [AI 字幕](./docs/ai-subtitles.md) · [Docker / CLI](./docs/docker-cli.md) · [升級至 UAV](./docs/migration-to-uav.md)
 
@@ -58,7 +58,7 @@
 2. 把檔案放在可寫入的資料夾，直接雙擊執行。
 3. 首次開啟選擇語言；之後可隨時切換繁體中文、简体中文、English、日本語與明／暗主題。
 
-SmartScreen 信譽提醒與 Defender Antivirus 隔離是不同事件。請先閱讀 [Windows 下載與安全驗證](./WINDOWS_SECURITY.md)：核對 `SHA256SUMS.txt` 與 GitHub provenance；若 Defender 顯示 threat name，請勿直接降低防護設定。
+SmartScreen 信譽提醒與 Defender Antivirus 隔離是不同事件。請先閱讀 [Windows 下載與安全驗證](./WINDOWS_SECURITY.md)：核對 `UAV_SHA256SUMS.txt` 與 GitHub provenance；若 Defender 顯示 threat name，請勿直接降低防護設定。
 
 ## UAV Browser：瀏覽、挑選、下載
 

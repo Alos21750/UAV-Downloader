@@ -7,8 +7,6 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / '.github' / 'workflows' / 'windows-build.yml'
 
 PACK_NAME = 'UAV_reazonspeech_asr_v1.zip'
-ALOS_PACK_NAME = 'ALOS_reazonspeech_asr_v1.zip'
-JABLE_PACK_NAME = 'Jable_reazonspeech_asr_v1.zip'
 PACK_SIZE = 186_186_197
 PACK_SHA256 = (
     'cf55e5485e14715beee6e0b12ca2b0998ad73ec755513e80138fa5161693c700'
@@ -63,7 +61,7 @@ def test_windows_ci_builds_only_the_pinned_reazonspeech_inputs():
     assert 'scripts/build_reazonspeech_asr_pack.py' in workflow
 
 
-def test_windows_ci_gates_attests_and_uploads_the_exact_pack():
+def test_windows_ci_gates_attests_and_uploads_only_uav_assets():
     workflow = WORKFLOW.read_text(encoding='utf-8')
 
     assert str(PACK_SIZE) in workflow
@@ -72,14 +70,23 @@ def test_windows_ci_gates_attests_and_uploads_the_exact_pack():
     assert workflow.count(PACK_NAME) >= 5
     assert f'"{PACK_NAME}"' in workflow
     assert f'dist/{PACK_NAME}' in workflow
-    for alias in (ALOS_PACK_NAME, JABLE_PACK_NAME):
-        assert f'"{alias}"' in workflow
-        assert f'dist/{alias}' in workflow
     assert workflow.count(TRANSLATION_PACK_NAME) >= 5
     assert str(TRANSLATION_PACK_SIZE) in workflow
     assert TRANSLATION_PACK_SHA256 in workflow
     assert 'actions/attest@v4' in workflow
     assert 'compression-level: 0' in workflow
+    assert 'UAV_SHA256SUMS.txt' in workflow
+    for legacy_asset in (
+        'ALOS_Browse.exe',
+        'ALOS_Watch.exe',
+        'ALOS_Watch_portable.zip',
+        'ALOS_reazonspeech_asr_v1.zip',
+        'JableTV_Modern.exe',
+        'Jable_smalltool.exe',
+        'Jable_smalltool_portable.zip',
+        'Jable_reazonspeech_asr_v1.zip',
+    ):
+        assert legacy_asset not in workflow
 
 
 def test_reazonspeech_notices_pin_sources_and_explain_mixed_licensing():

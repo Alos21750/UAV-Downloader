@@ -248,68 +248,19 @@ jobs:
             -DestinationPath "dist\UAV_Watcher_portable.zip" `
             -CompressionLevel Optimal
 
-          # v2 and v3.0 clients resolve these exact names. Each compatibility
-          # asset is a byte-for-byte alias of its canonical UAV counterpart.
-          Copy-Item -LiteralPath "dist\UAV_Browser.exe" `
-            -Destination "dist\ALOS_Browse.exe"
-          Copy-Item -LiteralPath "dist\UAV_Watcher.exe" `
-            -Destination "dist\ALOS_Watch.exe"
-          Copy-Item -LiteralPath "dist\UAV_Watcher_portable.zip" `
-            -Destination "dist\ALOS_Watch_portable.zip"
-          Copy-Item -LiteralPath "dist\UAV_reazonspeech_asr_v1.zip" `
-            -Destination "dist\ALOS_reazonspeech_asr_v1.zip"
-          Copy-Item -LiteralPath "dist\UAV_Browser.exe" `
-            -Destination "dist\JableTV_Modern.exe"
-          Copy-Item -LiteralPath "dist\UAV_Watcher.exe" `
-            -Destination "dist\Jable_smalltool.exe"
-          Copy-Item -LiteralPath "dist\UAV_Watcher_portable.zip" `
-            -Destination "dist\Jable_smalltool_portable.zip"
-          Copy-Item -LiteralPath "dist\UAV_reazonspeech_asr_v1.zip" `
-            -Destination "dist\Jable_reazonspeech_asr_v1.zip"
-
-          $aliasPairs = @(
-            @("UAV_Browser.exe", "ALOS_Browse.exe"),
-            @("UAV_Watcher.exe", "ALOS_Watch.exe"),
-            @("UAV_Watcher_portable.zip", "ALOS_Watch_portable.zip"),
-            @("UAV_reazonspeech_asr_v1.zip", "ALOS_reazonspeech_asr_v1.zip"),
-            @("UAV_Browser.exe", "JableTV_Modern.exe"),
-            @("UAV_Watcher.exe", "Jable_smalltool.exe"),
-            @("UAV_Watcher_portable.zip", "Jable_smalltool_portable.zip"),
-            @("UAV_reazonspeech_asr_v1.zip", "Jable_reazonspeech_asr_v1.zip")
-          )
-          foreach ($pair in $aliasPairs) {
-            $canonicalHash = (
-              Get-FileHash -Algorithm SHA256 -LiteralPath "dist\$($pair[0])"
-            ).Hash
-            $aliasHash = (
-              Get-FileHash -Algorithm SHA256 -LiteralPath "dist\$($pair[1])"
-            ).Hash
-            if ($canonicalHash -ne $aliasHash) {
-              throw "Compatibility alias is not byte-identical: $($pair[1])"
-            }
-          }
-
           $assetNames = @(
             "UAV_Browser.exe",
             "UAV_Watcher.exe",
             "UAV_Watcher_portable.zip",
             "UAV_reazonspeech_asr_v1.zip",
-            "UAV_local_translation_v1.zip",
-            "ALOS_Browse.exe",
-            "ALOS_Watch.exe",
-            "ALOS_Watch_portable.zip",
-            "ALOS_reazonspeech_asr_v1.zip",
-            "JableTV_Modern.exe",
-            "Jable_smalltool.exe",
-            "Jable_smalltool_portable.zip",
-            "Jable_reazonspeech_asr_v1.zip"
+            "UAV_local_translation_v1.zip"
           )
           $checksums = foreach ($name in $assetNames) {
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "dist\$name").Hash
             "$($hash.ToLowerInvariant())  $name"
           }
           [System.IO.File]::WriteAllLines(
-            (Join-Path (Resolve-Path "dist") "SHA256SUMS.txt"),
+            (Join-Path (Resolve-Path "dist") "UAV_SHA256SUMS.txt"),
             $checksums,
             [System.Text.UTF8Encoding]::new($false)
           )
@@ -321,11 +272,7 @@ jobs:
           $files = @(
             "dist\UAV_Browser.exe",
             "dist\UAV_Watcher.exe",
-            "dist\UAV_Watcher_portable\UAV_Watcher.exe",
-            "dist\ALOS_Browse.exe",
-            "dist\ALOS_Watch.exe",
-            "dist\JableTV_Modern.exe",
-            "dist\Jable_smalltool.exe"
+            "dist\UAV_Watcher_portable\UAV_Watcher.exe"
           )
           foreach ($file in $files) {
             if (!(Test-Path -LiteralPath $file)) { throw "Missing $file" }
@@ -337,11 +284,7 @@ jobs:
             "dist\UAV_Watcher_portable.zip",
             "dist\UAV_reazonspeech_asr_v1.zip",
             "dist\UAV_local_translation_v1.zip",
-            "dist\ALOS_Watch_portable.zip",
-            "dist\ALOS_reazonspeech_asr_v1.zip",
-            "dist\Jable_smalltool_portable.zip",
-            "dist\Jable_reazonspeech_asr_v1.zip",
-            "dist\SHA256SUMS.txt"
+            "dist\UAV_SHA256SUMS.txt"
           )) {
             if (!(Test-Path -LiteralPath $file)) { throw "Missing $file" }
           }
@@ -355,15 +298,7 @@ jobs:
             dist/UAV_Watcher_portable.zip
             dist/UAV_reazonspeech_asr_v1.zip
             dist/UAV_local_translation_v1.zip
-            dist/ALOS_Browse.exe
-            dist/ALOS_Watch.exe
-            dist/ALOS_Watch_portable.zip
-            dist/ALOS_reazonspeech_asr_v1.zip
-            dist/JableTV_Modern.exe
-            dist/Jable_smalltool.exe
-            dist/Jable_smalltool_portable.zip
-            dist/Jable_reazonspeech_asr_v1.zip
-            dist/SHA256SUMS.txt
+            dist/UAV_SHA256SUMS.txt
 
       - name: Upload Windows executables
         uses: actions/upload-artifact@v4
@@ -375,15 +310,7 @@ jobs:
             dist/UAV_Watcher_portable.zip
             dist/UAV_reazonspeech_asr_v1.zip
             dist/UAV_local_translation_v1.zip
-            dist/ALOS_Browse.exe
-            dist/ALOS_Watch.exe
-            dist/ALOS_Watch_portable.zip
-            dist/ALOS_reazonspeech_asr_v1.zip
-            dist/JableTV_Modern.exe
-            dist/Jable_smalltool.exe
-            dist/Jable_smalltool_portable.zip
-            dist/Jable_reazonspeech_asr_v1.zip
-            dist/SHA256SUMS.txt
+            dist/UAV_SHA256SUMS.txt
           if-no-files-found: error
           compression-level: 0
           retention-days: 7

@@ -145,13 +145,12 @@ def test_windows_distribution_is_hardened_and_verifiable():
     # Checksums and provenance help users verify origin.  They do not replace
     # Authenticode and must remain separate from malware-detection claims.
     assert 'UAV_Watcher_portable.zip' in workflow
-    assert 'Jable_smalltool_portable.zip' in workflow
-    assert 'SHA256SUMS.txt' in workflow
+    assert 'UAV_SHA256SUMS.txt' in workflow
     assert '-Path "dist\\UAV_Watcher_portable"' in workflow
     assert '-Path "dist\\UAV_Watcher_portable\\*"' not in workflow
     assert 'actions/attest@v4' in workflow
     assert 'attestations: write' in workflow
-    assert 'Compatibility alias is not byte-identical' in workflow
+    assert 'Compatibility alias is not byte-identical' not in workflow
     for documentation in (
         '"README.md"',
         '"README.en.md"',
@@ -203,7 +202,7 @@ def test_windows_security_guidance_does_not_ask_for_defender_bypass():
     combined = '\n'.join((traditional, english, security))
 
     assert 'UAV_Watcher_portable.zip' in combined
-    assert 'SHA256SUMS.txt' in security
+    assert 'UAV_SHA256SUMS.txt' in security
     assert 'Get-FileHash' in security
     assert 'gh attestation verify' in security
     assert (

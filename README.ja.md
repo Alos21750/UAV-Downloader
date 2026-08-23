@@ -48,7 +48,7 @@
 迷った場合は **UAV Browser** から始めてください。どちらの Windows 実行ファイルも Python のインストールは不要で、Release 版には ffmpeg が含まれています。
 
 > [!NOTE]
-> 新規ユーザーが必要なのは `UAV_*` ファイルだけです。Release 内の `ALOS_*`／`Jable*` は旧アップデーター互換用のバイト単位で同一な別名であり、別のアプリではないため重複してダウンロードする必要はありません。
+> Release では正式な `UAV_*` アセットのみを公開します。旧 ALOS／Jable ファイル名の公開は終了したため、旧版ユーザーも対応する UAV ファイルを直接ダウンロードしてください。
 
 詳細：[UAV Browser](./docs/uav-browser.md) · [UAV Watcher の無人自動運転](./docs/uav-watcher.md) · [AI 字幕](./docs/ai-subtitles.md) · [Docker / CLI](./docs/docker-cli.md) · [UAV への移行](./docs/migration-to-uav.md)
 
@@ -58,7 +58,7 @@
 2. 書き込み可能なフォルダーへ置き、ダブルクリックして実行します。
 3. 初回起動時に言語を選択します。以後は日本語、English、繁體中文、简体中文、およびライト／ダークテーマをいつでも切り替えられます。
 
-SmartScreen の評価警告と Defender Antivirus の隔離は別の事象です。まず [Windows のダウンロードとセキュリティ検証](./WINDOWS_SECURITY.md)を読み、`SHA256SUMS.txt` と GitHub provenance を確認してください。Defender が脅威名を表示した場合、保護設定を安易に弱めないでください。
+SmartScreen の評価警告と Defender Antivirus の隔離は別の事象です。まず [Windows のダウンロードとセキュリティ検証](./WINDOWS_SECURITY.md)を読み、`UAV_SHA256SUMS.txt` と GitHub provenance を確認してください。Defender が脅威名を表示した場合、保護設定を安易に弱めないでください。
 
 ## UAV Browser：閲覧・選択・ダウンロード
 
