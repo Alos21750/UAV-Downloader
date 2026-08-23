@@ -37,6 +37,20 @@ class MirrorsBlockedError(Exception):
     pass
 
 
+class DownloadIncompleteError(Exception):
+    """A resumable segment download stopped with a few chunks outstanding."""
+
+    def __init__(self, remaining_segments):
+        try:
+            remaining = max(1, int(remaining_segments))
+        except (TypeError, ValueError):
+            remaining = 1
+        self.remaining_segments = remaining
+        super().__init__(
+            f"download incomplete ({remaining} segment(s) still unavailable; "
+            "Retry resumes existing segments)")
+
+
 request_headers = {'browser': 'firefox', 'platform': platform.system().lower()}
 default_max_workers = config.DEFAULT_MAX_WORKERS_PER_VIDEO
 
@@ -65,6 +79,20 @@ def _sanitize_filename(value):
     if stem in _WINDOWS_RESERVED_NAMES:
         name = '_' + name
     return name
+
+
+def _apply_filename_mode(value, mode):
+    """Apply the opt-in title policy after portable-character sanitizing.
+
+    ``code-only`` deliberately follows the reporter's cross-studio rule: keep
+    everything before the first Unicode whitespace instead of guessing every
+    possible JAV-code shape with a regex.  A title with no whitespace remains
+    unchanged.
+    """
+    name = str(value or '').strip()
+    if config.normalize_filename_mode(mode) != 'code-only' or not name:
+        return name
+    return name.split(maxsplit=1)[0]
 
 
 def _utf16_units(value):
@@ -454,6 +482,10 @@ def _http_get(url, headers=None, timeout=20):
 class M3U8Crawler:
     """A base class for all m3u8 crawl website tools."""
     skip_pattern = False
+    segment_worker_cap = None
+    segment_retry_rounds = 6
+    segment_retry_base_delay = 1.5
+    segment_retry_max_delay = 6.0
 
     @classmethod
     def validate_url(cls, url):
@@ -483,7 +515,23 @@ class M3U8Crawler:
         self._m3u8url = None
         if max_workers is None:
             max_workers = config.get_max_workers_per_video()
-        self._max_workers = config.normalize_max_workers_per_video(max_workers)
+        normalized_workers = config.normalize_max_workers_per_video(max_workers)
+        worker_cap = getattr(self, 'segment_worker_cap', None)
+        if worker_cap is not None:
+            try:
+                normalized_workers = min(
+                    normalized_workers, max(1, int(worker_cap)))
+            except (TypeError, ValueError):
+                pass
+        self._max_workers = normalized_workers
+        self._segment_retry_rounds = max(
+            1, int(getattr(self, 'segment_retry_rounds', 6)))
+        self._segment_retry_base_delay = max(
+            0.0, float(getattr(self, 'segment_retry_base_delay', 1.5)))
+        self._segment_retry_max_delay = max(
+            self._segment_retry_base_delay,
+            float(getattr(self, 'segment_retry_max_delay', 6.0)))
+        self._filename_mode = config.get_filename_mode()
         self._progress_callback = None   # (downloaded, total, speed_bps) -> None
         self._speed_lock = threading.Lock()
         self._bytes_downloaded = 0
@@ -505,6 +553,8 @@ class M3U8Crawler:
             if self.is_url_vaildate():
                 if self._targetName:
                     self._targetName = _sanitize_filename(self._targetName)
+                    self._targetName = _apply_filename_mode(
+                        self._targetName, self._filename_mode)
                     if len(self._dirName) > 80:
                         self._dirName = self._dirName[:80]
                         self._temp_folder = os.path.join(self._dest_folder, self._dirName)
@@ -870,7 +920,15 @@ class M3U8Crawler:
         self._job_total = len(self._pending_set)
         print(f'共 {total} 片段，已完成 {total - self._job_total}，剩餘 {self._job_total}...', flush=True)
 
-        max_rounds = 6
+        max_rounds = max(1, int(getattr(
+            self, '_segment_retry_rounds',
+            getattr(self, 'segment_retry_rounds', 6))))
+        retry_base_delay = max(0.0, float(getattr(
+            self, '_segment_retry_base_delay',
+            getattr(self, 'segment_retry_base_delay', 1.5))))
+        retry_max_delay = max(retry_base_delay, float(getattr(
+            self, '_segment_retry_max_delay',
+            getattr(self, 'segment_retry_max_delay', 6.0))))
         for round_num in range(1, max_rounds + 1):
             if not self._pending_set or self._cancel_job:
                 break
@@ -885,7 +943,11 @@ class M3U8Crawler:
             if round_num < max_rounds:
                 print(f'\n重試第 {round_num} 次，剩餘 {still_pending} 片段...', flush=True)
                 if not self._cancel_job:
-                    time.sleep(min(1.5 * round_num, 6))
+                    delay = min(
+                        retry_base_delay * round_num,
+                        retry_max_delay)
+                    if delay > 0:
+                        time.sleep(delay)
 
         self._t2_executor = None
         spent = time.time() - self._speed_start
@@ -944,7 +1006,8 @@ class M3U8Crawler:
                 if not merged and not self._cancel_job:
                     raise Exception("merge/publish failed")
             elif not self._cancel_job:
-                raise Exception("download incomplete")
+                pending = len(self._pending_set)
+                raise DownloadIncompleteError(pending)
         else:
             print("檔案已存在!!", flush=True)
 

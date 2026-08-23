@@ -23,8 +23,12 @@ items can be retried independently.
 
 - Concurrent video downloads: 1–32, with 2 as the default.
 - Segment workers per video: 1–16; individual sources may enforce a lower
-  limit.
+  limit. MissAV uses at most 4 per video and 8 across all active MissAV videos,
+  with additional tail retries for transient CDN failures.
 - Quality preference: highest, 1080p, 720p, 480p, 360p, or lowest.
+- Filename format: Code + full title (default), or Code only. Code only keeps
+  everything before the first Unicode whitespace and therefore also supports
+  names such as `FC2-PPV-1234567` without studio-specific regular expressions.
 - Optional download speed limit.
 - Custom HTTP, HTTPS, SOCKS4, or SOCKS5 proxy, or the enabled Windows manual
   proxy.
@@ -32,6 +36,10 @@ items can be retried independently.
 
 Download work and subtitle generation use separate queues. A long subtitle job
 therefore does not occupy a video download slot.
+
+Validated HLS segments are resumable. If a MissAV CDN request remains
+unavailable after the automatic retry window, Retry requests only the missing
+segments rather than restarting the complete video.
 
 Hanime1's Ura Anime and short-anime category pages use a compact card layout.
 UAV Browser supports that layout as well as the standard search/result cards.

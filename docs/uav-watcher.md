@@ -29,8 +29,9 @@ The current registry exposes grouped targets for all four supported sites:
    any site its own date, destination, or both. Sites without an override keep
    following the shared values. Existing configurations behave exactly as
    before.
-3. Set quality, worker limit, version preference, subtitle mode, and optional
-   proxy.
+3. Set quality, filename format, worker limit, version preference, subtitle
+   mode, and optional proxy. Filename format can keep the full title or only
+   the text before its first whitespace.
 4. Search or browse each site tab and select targets. Whole groups can be
    selected together.
 5. Choose an interval from 1–168 hours, or one daily time in the computer's
@@ -40,6 +41,11 @@ The current registry exposes grouped targets for all four supported sites:
 Check Now performs one immediate scan without creating a duplicate schedule.
 The activity panel can remain collapsed while idle and opened only when a log
 is needed.
+
+MissAV downloads use at most 4 segment requests per video and 8 across all
+active MissAV videos. If a transient CDN failure leaves a few segments missing,
+UAV Watcher keeps validated chunks, leaves the run pending, and resumes only
+the missing segments on the next check.
 
 ## Deduplication and state
 

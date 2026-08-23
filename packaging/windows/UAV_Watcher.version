@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(3, 1, 1, 0),
-    prodvers=(3, 1, 1, 0),
+    filevers=(3, 1, 2, 0),
+    prodvers=(3, 1, 2, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -15,11 +15,11 @@ VSVersionInfo(
       StringTable('040904B0', [
         StringStruct('CompanyName', 'ALOS (Alos21750)'),
         StringStruct('FileDescription', 'UAV Watcher - Unattended New Release Downloader'),
-        StringStruct('FileVersion', '3.1.1.0'),
+        StringStruct('FileVersion', '3.1.2.0'),
         StringStruct('InternalName', 'UAV_Watcher'),
         StringStruct('OriginalFilename', 'UAV_Watcher.exe'),
         StringStruct('ProductName', 'UAV Downloader'),
-        StringStruct('ProductVersion', '3.1.1.0')
+        StringStruct('ProductVersion', '3.1.2.0')
       ])
     ]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])

@@ -47,6 +47,9 @@
 
 If you are unsure, start with **UAV Browser**. Both Windows executables are portable, need no Python installation, and include ffmpeg in the release build.
 
+> [!NOTE]
+> New users only need the `UAV_*` assets. The `ALOS_*` and `Jable*` files in a release are byte-identical compatibility aliases for older updaters—not different applications—and do not need to be downloaded again.
+
 Learn more: [UAV Browser](./docs/uav-browser.md) · [UAV Watcher unattended automation](./docs/uav-watcher.md) · [AI subtitles](./docs/ai-subtitles.md) · [Docker / CLI](./docs/docker-cli.md) · [migrate to UAV](./docs/migration-to-uav.md)
 
 ## Windows: start in 30 seconds
@@ -62,14 +65,15 @@ SmartScreen reputation warnings and Defender Antivirus quarantine are different 
 1. Open Browse, choose JableTV, MissAV, SupJav, or Hanime1, then select a category or search. Hanime1 also has a full filter that combines genre, sort, date, duration, and 240 tags.
 2. Select multiple cards and add them to the queue, or download the selection immediately.
 3. You can also paste URLs on the Download tab or import a `.txt` / `.csv` list.
-4. Use Settings for the destination, quality, concurrent videos, per-video workers, speed limit, AI subtitles, and proxy.
+4. Use Settings for the destination, quality, filename format, concurrent videos, per-video workers, speed limit, AI subtitles, and proxy.
 
 | Capability | Current behavior |
 |---|---|
 | Download queue | Per-item state, progress, and speed; queue persistence; stop and immediately requeue an active item, or retry one failed item |
 | Concurrency | 2 video downloads by default, up to 32; AI subtitles run in a separate background queue without occupying download slots |
-| Per-video workers | An upper limit of 1–16 segment workers for each video, automatically derived from the CPU by default (up to 16). A source may use fewer; SupJav/Hanime1 direct downloads use at most 4. Lower this when using a proxy to reduce load |
+| Per-video workers | The setting accepts 1–16. MissAV is automatically limited to 4 per video and 8 total with longer tail retries; SupJav/Hanime1 direct downloads use at most 4. Lower this when using a proxy to reduce load |
 | Quality preference | Highest, 1080p, 720p, 480p, 360p, or Lowest; actual variants depend on the source |
+| Filename format | `Code + full title` by default, or `Code only`, which keeps everything before the first whitespace, such as `FC2-PPV-1234567` |
 | AI subtitles | Off, Japanese, English, Traditional Chinese, or all three; translation is local by default, with an optional user-configured LLM API; output is selectable sidecar SRT files |
 | URL input | Clipboard detection, manual paste, and text/CSV batch import |
 | Proxy | Custom HTTP, HTTPS, SOCKS4, or SOCKS5, or the enabled Windows manual ProxyServer; no change to the Windows global proxy |
@@ -82,7 +86,7 @@ SmartScreen reputation warnings and Defender Antivirus quarantine are different 
 </p>
 
 1. Choose a destination. If left unset, UAV Watcher creates `tmp` beside the executable.
-2. Select Show settings to change the shared baseline date and folder, or assign a separate date and destination to each site. Quality, per-video workers, version priority, AI subtitles, and proxy remain configurable there too.
+2. Select Show settings to change the shared baseline date and folder, or assign a separate date and destination to each site. Quality, filename format, per-video workers, version priority, AI subtitles, and proxy remain configurable there too.
 3. Search and select categories on any of the four site tabs; group-wide selection is available.
 4. Select Schedule to check every 1–168 hours or once a day at a specified computer-local time.
 5. Press Start Monitoring. Categories remain visible; progress appears only while work is active, and Show activity opens the log area when needed.
@@ -94,7 +98,7 @@ SmartScreen reputation warnings and Defender Antivirus quarantine are different 
 | SupJav | 10 | Feeds/rankings and primary categories |
 | Hanime1 | 272 | Release/upload/ranking feeds, 9 genres including Ura and short anime, 6 date ranges, 8 durations, and all 240 tags |
 
-UAV Watcher can check every 1–168 hours or once a day at a specified time using this computer's local time; existing settings continue to default to every 24 hours. Check Now runs one immediate check without creating another recurring schedule. When the same recognized title code appears across categories or sites, the candidate matching your selected version priority is kept. If a code cannot be identified reliably, only an identical URL is deduplicated—UAV Watcher does not guess.
+UAV Watcher can check every 1–168 hours or once a day at a specified time using this computer's local time; existing settings continue to default to every 24 hours. Check Now runs one immediate check without creating another recurring schedule. When the same recognized title code appears across categories or sites, the candidate matching your selected version priority is kept. If a code cannot be identified reliably, only an identical URL is deduplicated—UAV Watcher does not guess. If a MissAV download temporarily ends with only a few segments missing, validated chunks are retained and resumed on the next check.
 
 State is stored in `.uav-watcher` beside the executable when writable, otherwise in `%APPDATA%\UAV Downloader\watch`.
 

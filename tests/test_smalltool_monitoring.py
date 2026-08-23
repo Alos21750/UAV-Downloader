@@ -77,6 +77,35 @@ def test_exact_missav_monitoring_run_reports_scan_and_downloads(monkeypatch,
     assert any('First run' in line and '2026-04-11' in line for line in logs)
 
 
+def test_incomplete_download_keeps_first_run_pending_for_next_check(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+
+    logs = []
+    worker = jable_smalltool.SmallToolWorker(logs.append)
+    worker._fetch_page_for_site = lambda _site, _url: [{
+        'url': 'https://missav.ws/sample-001',
+        'title': 'SAMPLE-001 title',
+    }]
+    worker._fetch_missav_video_date = lambda _url: (
+        datetime(2026, 8, 23, tzinfo=timezone.utc), '2026-08-23')
+    worker._download_one = lambda _video, _dest: 'download_incomplete'
+    cfg = {
+        'output_folder': str(tmp_path),
+        'baseline_date': '2026-08-01',
+        'first_run_done': False,
+        'selected_targets': _exact_missav_targets()[:1],
+    }
+
+    assert worker._scan_and_download(cfg) is False
+    assert cfg['first_run_done'] is False
+    assert any('saved segments will resume' in line for line in logs)
+
+
 def test_worker_uses_independent_dates_and_output_folders_per_site(
         monkeypatch, tmp_path):
     monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})

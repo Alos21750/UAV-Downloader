@@ -1448,6 +1448,22 @@ class ModernApp(ctk.CTk):
             return f'{pref}p'
         return T('resolution_highest')
 
+    def _filename_mode_values(self):
+        return [T('filename_mode_full'), T('filename_mode_code')]
+
+    def _filename_mode_from_label(self, label):
+        if str(label or '') == T('filename_mode_code'):
+            return 'code-only'
+        return 'full-title'
+
+    def _filename_mode_label(self, mode=None):
+        if mode is None:
+            mode = config.get_filename_mode()
+        mode = config.normalize_filename_mode(mode)
+        if mode == 'code-only':
+            return T('filename_mode_code')
+        return T('filename_mode_full')
+
     def _subtitle_values(self):
         return [
             T('subtitle_none'), T('subtitle_ja'), T('subtitle_en'),
@@ -2167,6 +2183,30 @@ class ModernApp(ctk.CTk):
         ctk.CTkLabel(grp, text=T('resolution_desc'),
                      text_color=TEXT_DIM,
                      font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
+
+        # Shared output filename policy (Browser and Watcher).
+        row_filename = ctk.CTkFrame(grp, fg_color='transparent')
+        row_filename.pack(fill='x', padx=20, pady=(8, 2))
+        ctk.CTkLabel(
+            row_filename, text=T('filename_mode_setting'),
+            text_color=TEXT_PRI, font=(ui_font(), 12, 'bold'),
+            width=116, anchor='w').pack(side='left')
+        self._filename_mode_var = ctk.StringVar(
+            value=self._filename_mode_label())
+        ctk.CTkOptionMenu(
+            row_filename, values=self._filename_mode_values(),
+            variable=self._filename_mode_var,
+            command=self._on_filename_mode_change, width=230, height=34,
+            corner_radius=8, fg_color=BG_INPUT,
+            button_color=BORDER_HOVER, button_hover_color=ACCENT,
+            text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
+            dropdown_hover_color=BG_CARD_HOVER,
+            dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
+        ctk.CTkLabel(
+            grp, text=T('filename_mode_desc'), text_color=TEXT_DIM,
+            font=(ui_font(), 10), wraplength=SETTINGS_INLINE_HELP_WRAP,
+            justify='left', anchor='w').pack(
+                anchor='w', padx=(136, 20), pady=(0, 10))
 
         # Selectable sidecar subtitles generated after each completed video
         row_subtitle = ctk.CTkFrame(grp, fg_color='transparent')
@@ -3608,6 +3648,11 @@ class ModernApp(ctk.CTk):
         pref = self._resolution_pref_from_label(val)
         set_resolution_pref(pref)
         config.set_resolution_pref(pref)
+
+    def _on_filename_mode_change(self, val):
+        mode = config.set_filename_mode(
+            self._filename_mode_from_label(val))
+        self._filename_mode_var.set(self._filename_mode_label(mode))
 
     def _on_subtitle_change(self, val):
         config.set_subtitle_pref(self._subtitle_pref_from_label(val))

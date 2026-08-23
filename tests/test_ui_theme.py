@@ -55,7 +55,7 @@ def test_primary_text_contrast_is_accessible_in_both_themes():
 
 
 def test_current_version_and_global_smalltool_copy_are_complete():
-    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '3.1.1'
+    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '3.1.2'
     required = {
         'st_activity', 'st_progress_idle', 'st_footer_short',
         'st_categories_expand', 'st_categories_collapse',
@@ -76,9 +76,11 @@ def test_current_version_and_global_smalltool_copy_are_complete():
         'st_schedule_invalid_time', 'st_schedule_saved',
         'st_scan_queued', 'st_waiting_schedule', 'st_stopping',
         'retry_short', 'requeue_short',
+        'filename_mode_setting', 'filename_mode_full',
+        'filename_mode_code', 'filename_mode_desc',
     }
     for language, strings in locales.STRINGS.items():
-        assert strings['version_label'] == 'v3.1.1', language
+        assert strings['version_label'] == 'v3.1.2', language
         assert required <= strings.keys(), language
 
 
@@ -86,15 +88,15 @@ def test_windows_version_resources_match_app_version():
     root = Path(__file__).resolve().parents[1]
     workflow = (root / '.github' / 'workflows' / 'windows-build.yml').read_text(
         encoding='utf-8')
-    assert '$expected = "3.1.1.0"' in workflow
+    assert '$expected = "3.1.2.0"' in workflow
     packaging = root / 'packaging' / 'windows'
     generator = (packaging / 'gen_version.py').read_text(
         encoding='utf-8')
-    assert 'VERSION = (3, 1, 1, 0)' in generator
+    assert 'VERSION = (3, 1, 2, 0)' in generator
     for name in ('UAV_Browser.version', 'UAV_Watcher.version'):
         resource = (packaging / name).read_text(encoding='utf-8')
-        assert 'filevers=(3, 1, 1, 0)' in resource
-        assert "StringStruct('FileVersion', '3.1.1.0')" in resource
+        assert 'filevers=(3, 1, 2, 0)' in resource
+        assert "StringStruct('FileVersion', '3.1.2.0')" in resource
         assert "StringStruct('ProductName', 'UAV Downloader')" in resource
     for name in ('UAV_Browser.spec', 'UAV_Watcher.spec'):
         spec = (packaging / name).read_text(encoding='utf-8')
@@ -406,8 +408,8 @@ def test_both_apps_expose_and_persist_per_video_worker_limit(monkeypatch):
 
     assert gui_modern.SETTINGS_INLINE_HELP_WRAP <= 620
     assert modern_ui.count(
-        'wraplength=SETTINGS_INLINE_HELP_WRAP') == 3
-    assert modern_ui.count("justify='left', anchor='w'") >= 3
+        'wraplength=SETTINGS_INLINE_HELP_WRAP') == 4
+    assert modern_ui.count("justify='left', anchor='w'") >= 4
 
     class _Var:
         def __init__(self, value):
@@ -441,6 +443,46 @@ def test_both_apps_expose_and_persist_per_video_worker_limit(monkeypatch):
     assert saved == [99, 2]
     assert modern._workers_var.get() == '16'
     assert smalltool._workers_var.get() == '2'
+
+
+def test_both_apps_expose_and_persist_filename_mode(monkeypatch):
+    modern_ui = inspect.getsource(gui_modern.ModernApp._build_settings_tab)
+    watcher_ui = inspect.getsource(jable_smalltool.SmallToolApp._build_ui)
+    for source in (modern_ui, watcher_ui):
+        assert "T('filename_mode_setting')" in source
+        assert "T('filename_mode_desc')" in source
+        assert 'command=self._on_filename_mode_change' in source
+
+    class _Var:
+        def __init__(self, value=''):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    saved = []
+
+    def _save(value):
+        saved.append(value)
+        return gui_modern.config.normalize_filename_mode(value)
+
+    monkeypatch.setattr(gui_modern.config, 'set_filename_mode', _save)
+
+    modern = gui_modern.ModernApp.__new__(gui_modern.ModernApp)
+    modern._filename_mode_var = _Var()
+    modern._on_filename_mode_change(modern._filename_mode_values()[1])
+
+    watcher = jable_smalltool.SmallToolApp.__new__(
+        jable_smalltool.SmallToolApp)
+    watcher._filename_mode_var = _Var()
+    watcher._on_filename_mode_change(watcher._filename_mode_values()[1])
+
+    assert saved == ['code-only', 'code-only']
+    assert modern._filename_mode_var.get() == modern._filename_mode_values()[1]
+    assert watcher._filename_mode_var.get() == watcher._filename_mode_values()[1]
 
 
 def test_language_rebuild_commits_the_focused_worker_entry(monkeypatch):

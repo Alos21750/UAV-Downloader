@@ -158,6 +158,42 @@ class FakeDownloadJob:
         self._cancel_job = True
 
 
+def test_watcher_preserves_valid_segments_for_incomplete_retry(
+        monkeypatch, tmp_path):
+    temp_folder = tmp_path / 'missav-sample'
+    temp_folder.mkdir()
+    completed_segment = temp_folder / '00001.ts'
+    completed_segment.write_bytes(b'validated segment')
+
+    class IncompleteDownloadJob(FakeDownloadJob):
+        def __init__(self):
+            super().__init__(tmp_path / 'sample.mp4')
+            self._temp_folder = str(temp_folder)
+
+        def start_download(self):
+            raise jable_smalltool.DownloadIncompleteError(1)
+
+    job = IncompleteDownloadJob()
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(
+        jable_smalltool.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
+    logs = []
+    worker = jable_smalltool.SmallToolWorker(logs.append)
+    marked = []
+    worker._mark_seen = lambda *args, **kwargs: marked.append(args)
+
+    result = worker._download_one({
+        'url': 'https://missav.ws/sample-001',
+        'title': 'SAMPLE-001 title',
+        '_site': 'MissAV',
+    }, str(tmp_path))
+
+    assert result == 'download_incomplete'
+    assert completed_segment.read_bytes() == b'validated segment'
+    assert marked == []
+    assert any('[RETRY]' in line and '1 segment' in line for line in logs)
+
+
 def test_modern_manager_runs_selected_subtitle_mode(monkeypatch, tmp_path):
     video = tmp_path / 'sample.mp4'
     video.write_bytes(b'video')

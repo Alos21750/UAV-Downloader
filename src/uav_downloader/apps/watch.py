@@ -193,7 +193,11 @@ from uav_downloader import sites as M3U8Sites
 from uav_downloader.sites.jabletv import JableTVBrowser
 from uav_downloader.sites.missav import MissAVBrowser
 from uav_downloader.sites.supjav import SupJavBrowser
-from uav_downloader.sites.base import fetch_with_mirrors, MirrorsBlockedError
+from uav_downloader.sites.base import (
+    DownloadIncompleteError,
+    MirrorsBlockedError,
+    fetch_with_mirrors,
+)
 from uav_downloader.core import config
 from uav_downloader.i18n.locales import T, set_lang, get_lang, ui_font, LANGUAGES
 from uav_downloader.apps.watch_categories import (
@@ -1533,6 +1537,7 @@ class SmallToolWorker:
         self._set_status('st_downloading', ACCENT)
         self._log(f'Found {len(all_new_videos)} new video(s). Downloading...')
         download_blocked = False
+        download_incomplete = False
         subtitle_incomplete = False
         for v in all_new_videos:
             if self._stop.is_set():
@@ -1541,11 +1546,18 @@ class SmallToolWorker:
                 v, str(v.get('_download_dest') or dest))
             if result == 'blocked':
                 download_blocked = True
+            elif result == 'download_incomplete':
+                download_incomplete = True
             elif result == 'subtitle_failed':
                 subtitle_incomplete = True
 
         if download_blocked:
             self._log('[WARN] Download blocked — will retry before marking first run done.')
+            return False
+        if download_incomplete:
+            self._log(
+                '[WARN] Download incomplete — saved segments will resume on '
+                'the next check.')
             return False
         if subtitle_incomplete:
             self._log(f'[WARN] {T("subtitle_retry_pending")}')
@@ -1691,6 +1703,12 @@ class SmallToolWorker:
                     return 'subtitle_failed'
             self._log(f'  [OK] {title}')
             self._mark_seen(vurl, title, video=video)
+        except DownloadIncompleteError as e:
+            # Each crawler stores validated segments in a URL-specific temp
+            # folder.  Preserve those files so the next unattended check only
+            # requests the missing tail instead of restarting a large video.
+            self._log(f'  [RETRY] {e}')
+            return 'download_incomplete'
         except MirrorsBlockedError as e:
             self._log(f'  [BLOCKED] {e}')
             if site_obj:
@@ -2071,6 +2089,22 @@ class SmallToolApp(ctk.CTk):
         if label in {'1080p', '720p', '480p', '360p'}:
             return label[:-1]
         return 'highest'
+
+    def _filename_mode_values(self) -> list[str]:
+        return [T('filename_mode_full'), T('filename_mode_code')]
+
+    def _filename_mode_from_label(self, label: str) -> str:
+        if str(label or '') == T('filename_mode_code'):
+            return 'code-only'
+        return 'full-title'
+
+    def _filename_mode_label(self, mode=None) -> str:
+        if mode is None:
+            mode = config.get_filename_mode()
+        mode = config.normalize_filename_mode(mode)
+        if mode == 'code-only':
+            return T('filename_mode_code')
+        return T('filename_mode_full')
 
     def _version_label(self) -> str:
         pref = self._cfg.get('version_preference', DEFAULT_VERSION_PREFERENCE)
@@ -2467,6 +2501,30 @@ class SmallToolApp(ctk.CTk):
             dropdown_hover_color=BG_CARD_HOVER,
             dropdown_text_color=TEXT_PRI,
             font=(font_family, 10), dropdown_font=(font_family, 10)).pack(side='left')
+
+        filename_row = ctk.CTkFrame(res_group, fg_color='transparent')
+        filename_row.pack(fill='x', pady=(6, 0))
+        ctk.CTkLabel(
+            filename_row, text=T('filename_mode_setting'),
+            text_color=TEXT_SEC, font=(font_family, 10, 'bold'),
+            width=108, anchor='e').pack(side='left', padx=(0, 8))
+        self._filename_mode_var = tk.StringVar(
+            value=self._filename_mode_label())
+        ctk.CTkOptionMenu(
+            filename_row, variable=self._filename_mode_var,
+            values=self._filename_mode_values(),
+            command=self._on_filename_mode_change, width=178, height=34,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            button_color=BORDER_HOVER, button_hover_color=ACCENT,
+            text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
+            dropdown_hover_color=BG_CARD_HOVER,
+            dropdown_text_color=TEXT_PRI,
+            font=(font_family, 10), dropdown_font=(font_family, 10)).pack(
+                side='left')
+        ctk.CTkLabel(
+            res_group, text=T('filename_mode_desc'), text_color=TEXT_DIM,
+            font=(font_family, 8), wraplength=286,
+            justify='right').pack(anchor='e', pady=(3, 0))
 
         workers_row = ctk.CTkFrame(res_group, fg_color='transparent')
         workers_row.pack(fill='x', pady=(6, 0))
@@ -3764,6 +3822,11 @@ class SmallToolApp(ctk.CTk):
         set_resolution_pref(pref)
         self._cfg['resolution'] = pref
         update_config({'resolution': pref})
+
+    def _on_filename_mode_change(self, val):
+        mode = config.set_filename_mode(
+            self._filename_mode_from_label(val))
+        self._filename_mode_var.set(self._filename_mode_label(mode))
 
     def _commit_workers_preference(self):
         current = config.get_max_workers_per_video()
