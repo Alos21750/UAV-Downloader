@@ -898,7 +898,14 @@ class SmallToolWorker:
             # Always load immediately before the scan. Preferences may have
             # changed while the monitor was waiting.
             cfg = load_config()
-            scan_ok = self._scan_and_download(cfg)
+            self._thread_local.config_loader = load_config
+            try:
+                # Keep the historical one-argument call contract so existing
+                # integrations that replace this private scan hook continue to
+                # work. The real implementation reads the thread-local loader.
+                scan_ok = self._scan_and_download(cfg)
+            finally:
+                self._thread_local.config_loader = None
             if scan_ok and not self._stop.is_set():
                 self._record_scan_success(cfg)
             return scan_ok
@@ -1231,17 +1238,21 @@ class SmallToolWorker:
             return f'{base_url}?from={page}'
         return SITES[site_name]['browser'].page_url(base_url, page)
 
-    def _scan_and_download(self, cfg: dict):
+    def _scan_and_download(self, cfg: dict, *, config_loader=None):
         if not self._scan_lock.acquire(blocking=False):
             self._log(f'[WAIT] {T("st_scan_running")}')
             return False
+        if config_loader is None:
+            config_loader = getattr(
+                self._thread_local, 'config_loader', None)
         try:
-            return self._scan_and_download_locked(cfg)
+            return self._scan_and_download_locked(
+                cfg, config_loader=config_loader)
         finally:
             self._set_scan_state()
             self._scan_lock.release()
 
-    def _scan_and_download_locked(self, cfg: dict):
+    def _scan_and_download_locked(self, cfg: dict, *, config_loader=None):
         dest = str(cfg.get('output_folder') or '').strip() or _default_output_folder()
         cfg['output_folder'] = dest
         if not _valid_baseline_date(cfg.get('baseline_date')):
@@ -1542,8 +1553,32 @@ class SmallToolWorker:
         for v in all_new_videos:
             if self._stop.is_set():
                 return False
+            download_dest = str(v.get('_download_dest') or dest)
+            if config_loader is not None:
+                try:
+                    latest_cfg = config_loader()
+                    site_name = v.get('_site')
+                    if isinstance(latest_cfg, dict) and site_name in SITES:
+                        latest_dest = str(_resolve_site_settings(
+                            latest_cfg, site_name)['output_folder'])
+                        if latest_dest != download_dest:
+                            self._log(
+                                f'  [SETTINGS] {site_name} output folder '
+                                f'updated during scan: {latest_dest}')
+                        download_dest = latest_dest
+                except Exception as exc:
+                    self._log(
+                        f'  [WARN] could not refresh output folder: {exc}')
+            try:
+                os.makedirs(download_dest, exist_ok=True)
+            except OSError as exc:
+                self._log(
+                    f'  [ERR] output folder unavailable: '
+                    f'{download_dest} ({exc})')
+                download_incomplete = True
+                continue
             result = self._download_one(
-                v, str(v.get('_download_dest') or dest))
+                v, download_dest)
             if result == 'blocked':
                 download_blocked = True
             elif result == 'download_incomplete':

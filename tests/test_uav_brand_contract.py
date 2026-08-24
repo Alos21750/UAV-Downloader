@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_product_identity_and_release_channels_are_centralized():
     assert metadata.PRODUCT_NAME == "UAV Downloader"
-    assert metadata.VERSION == "3.1.2"
+    assert metadata.VERSION == "3.1.3"
     assert metadata.GITHUB_REPOSITORY == "Alos21750/UAV-Downloader"
     assert metadata.LEGACY_GITHUB_REPOSITORIES == (
         "Alos21750/ALOS-Unified-AV-Downloader",

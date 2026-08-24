@@ -16,7 +16,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '互動式多站下載器',
-        'version_label': 'v3.1.2',
+        'version_label': 'v3.1.3',
         'by_author': '',
         'status_ready': '就緒',
         'site_label': '網站',
@@ -398,7 +398,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': 'Interactive Multi-Site Downloader',
-        'version_label': 'v3.1.2',
+        'version_label': 'v3.1.3',
         'by_author': '',
         'status_ready': 'Ready',
         'site_label': 'Site',
@@ -781,7 +781,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '交互式多站下载器',
-        'version_label': 'v3.1.2',
+        'version_label': 'v3.1.3',
         'by_author': '',
         'status_ready': '就绪',
         'site_label': '网站',
@@ -1163,7 +1163,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '対話型マルチサイトダウンローダー',
-        'version_label': 'v3.1.2',
+        'version_label': 'v3.1.3',
         'by_author': '',
         'status_ready': '準備完了',
         'site_label': 'サイト',

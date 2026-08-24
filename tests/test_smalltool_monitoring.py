@@ -158,6 +158,60 @@ def test_worker_uses_independent_dates_and_output_folders_per_site(
     ]
 
 
+def test_active_scan_uses_latest_hanime_output_folder(monkeypatch, tmp_path):
+    """A folder saved while an automatic scan is running applies immediately."""
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(jable_smalltool, 'DAILY_SCAN_PAGES', 1)
+    monkeypatch.setattr(jable_smalltool, 'update_config', lambda *_a, **_k: None)
+
+    shared = tmp_path / 'shared'
+    hanime = tmp_path / 'hanime'
+    target = find_target('Hanime1', 'sort:latest-release')
+    assert target is not None
+    initial = {
+        'output_folder': str(shared),
+        'baseline_date': '2026-08-01',
+        'site_settings': {},
+        'first_run_done': True,
+        'selected_targets': [{
+            'site': 'Hanime1',
+            'id': target['id'],
+            'category': target['name'],
+        }],
+    }
+    latest = {
+        **initial,
+        'site_settings': {
+            'Hanime1': {'output_folder': str(hanime)},
+        },
+    }
+    settings_saved = {'value': False}
+
+    def fake_load_config():
+        return latest if settings_saved['value'] else initial
+
+    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+
+    def fake_fetch(_site, _url):
+        settings_saved['value'] = True
+        return [{
+            'url': 'https://hanime1.me/watch?v=407751',
+            'title': 'Hanime sample',
+            'date': '1 小時前',
+        }]
+
+    worker._fetch_page_for_site = fake_fetch
+    downloaded = []
+    worker._download_one = lambda video, dest: downloaded.append(
+        (video['_site'], dest))
+    monkeypatch.setattr(jable_smalltool, 'load_config', fake_load_config)
+
+    assert worker._perform_scan(worker.run_generation) is True
+    assert downloaded == [('Hanime1', str(hanime))]
+
+
 def test_missav_same_code_uses_selected_version_regardless_of_order():
     standard = {
         '_site': 'MissAV',
