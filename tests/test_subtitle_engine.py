@@ -26,6 +26,45 @@ def test_normalize_modes_and_language_outputs():
     assert subtitles.subtitle_languages('none') == ()
 
 
+def test_subtitle_media_workspace_uses_the_video_destination_volume(
+        monkeypatch, tmp_path):
+    video = tmp_path / 'movie.mp4'
+    video.write_bytes(b'video')
+    monkeypatch.setattr(
+        config, 'get_recognition_quality', lambda: 'quality')
+    monkeypatch.setattr(
+        subtitles, '_prepare_runtime',
+        lambda *_args: ('recognizer.exe', 'model.bin', 'vad.bin'))
+    monkeypatch.setattr(
+        subtitles, '_extract_audio',
+        lambda _video, wav, _log, _cancel:
+            open(wav, 'wb').close())
+
+    def fake_recognition(
+            _profile, _exe, _model, _vad, _wav, output_base, _log,
+            _cancel, **_kwargs):
+        output = output_base + '.srt'
+        subtitles._atomic_write_text(output, _sample_srt())
+        return output
+
+    monkeypatch.setattr(subtitles, '_run_recognition', fake_recognition)
+    original_temporary_directory = subtitles.tempfile.TemporaryDirectory
+    created = {}
+
+    def tracked_temporary_directory(*args, **kwargs):
+        created['dir'] = kwargs.get('dir')
+        return original_temporary_directory(*args, **kwargs)
+
+    monkeypatch.setattr(
+        subtitles.tempfile, 'TemporaryDirectory',
+        tracked_temporary_directory)
+
+    result = subtitles.generate_subtitles(str(video), 'ja')
+
+    assert result.files == (str(tmp_path / 'movie.ja.srt'),)
+    assert os.path.abspath(created['dir']) == os.path.abspath(tmp_path)
+
+
 def test_trusted_source_chinese_satisfies_zh_before_any_pipeline_or_write(
         monkeypatch, tmp_path):
     video = tmp_path / 'movie.mp4'
@@ -1144,6 +1183,84 @@ def test_prepare_translation_runtime_installs_and_verifies_pack(
     assert open(
         os.path.join(repaired['ja-en'], 'model.bin'), 'rb').read() == (
             payload['models/fugumt-ja-en-int8/model.bin'])
+
+
+def test_prepare_translation_runtime_accepts_verified_zip_beside_frozen_exe(
+        monkeypatch, tmp_path):
+    payload = {}
+    for model in ('fugumt-ja-en-int8', 'opus-mt-en-zh-int8'):
+        for filename in (
+                'config.json', 'model.bin', 'shared_vocabulary.json',
+                'source.spm', 'target.spm'):
+            path = f'models/{model}/{filename}'
+            payload[path] = f'{model}:{filename}'.encode()
+    payload['models/fugumt-ja-en-int8/vocab.json'] = b'{"<unk>": 0}'
+    manifest = {
+        'pack_version': 'test',
+        'models': {
+            'ja-en': {'path': 'models/fugumt-ja-en-int8'},
+            'en-zh': {'path': 'models/opus-mt-en-zh-int8'},
+        },
+        'files': [
+            {
+                'path': path,
+                'size': len(data),
+                'sha256': hashlib.sha256(data).hexdigest(),
+            }
+            for path, data in sorted(payload.items())
+        ],
+    }
+    manifest_bytes = (
+        json.dumps(manifest, sort_keys=True) + '\n').encode()
+    app_dir = tmp_path / 'portable-app'
+    app_dir.mkdir()
+    executable = app_dir / 'UAV_Browser.exe'
+    executable.write_bytes(b'MZ')
+    archive = app_dir / 'models.zip'
+    with zipfile.ZipFile(archive, 'w') as bundle:
+        bundle.writestr('manifest.json', manifest_bytes)
+        for path, data in payload.items():
+            bundle.writestr(path, data)
+
+    archive_bytes = archive.read_bytes()
+    monkeypatch.setattr(subtitles, 'TRANSLATION_PACK_VERSION', 'test')
+    monkeypatch.setattr(subtitles, 'TRANSLATION_PACK_NAME', 'models.zip')
+    monkeypatch.setattr(
+        subtitles, 'TRANSLATION_PACK_SIZE', len(archive_bytes))
+    monkeypatch.setattr(
+        subtitles, 'TRANSLATION_PACK_SHA256',
+        hashlib.sha256(archive_bytes).hexdigest())
+    monkeypatch.setattr(
+        subtitles, 'TRANSLATION_MANIFEST_SHA256',
+        hashlib.sha256(manifest_bytes).hexdigest())
+    monkeypatch.setattr(
+        subtitles, '_cache_root', lambda: str(tmp_path / 'cache'))
+    monkeypatch.setattr(subtitles.sys, 'frozen', True, raising=False)
+    monkeypatch.setattr(subtitles.sys, 'executable', str(executable))
+    monkeypatch.setattr(
+        subtitles, '_download_verified',
+        lambda *_args, **_kwargs:
+            pytest.fail('verified local component must avoid network access'))
+    subtitles._verified_paths.clear()
+
+    models = subtitles._prepare_translation_runtime(None, None)
+
+    assert os.path.isfile(os.path.join(models['ja-en'], 'model.bin'))
+    assert os.path.isfile(os.path.join(models['en-zh'], 'model.bin'))
+
+    shutil.rmtree(tmp_path / 'cache')
+    extracted = app_dir / 'models'
+    with zipfile.ZipFile(archive) as bundle:
+        bundle.extractall(extracted)
+    archive.unlink()
+    subtitles._verified_paths.clear()
+
+    models = subtitles._prepare_translation_runtime(None, None)
+
+    assert os.path.commonpath(
+        [os.path.abspath(models['ja-en']), os.path.abspath(extracted)]
+    ) == os.path.abspath(extracted)
+    assert os.path.isfile(os.path.join(models['ja-en'], 'model.bin'))
 
 
 def test_translate_srt_preserves_timestamps(monkeypatch, tmp_path):

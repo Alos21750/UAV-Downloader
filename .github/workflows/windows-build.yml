@@ -81,159 +81,6 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -q --timeout=20
 
-      - name: Build pinned ReazonSpeech CPU ASR pack
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = "Stop"
-
-          function Assert-PinnedFile {
-            param(
-              [Parameter(Mandatory = $true)][string] $Path,
-              [Parameter(Mandatory = $true)][long] $ExpectedSize,
-              [Parameter(Mandatory = $true)][string] $ExpectedSha256
-            )
-            if (!(Test-Path -LiteralPath $Path -PathType Leaf)) {
-              throw "Missing pinned input: $Path"
-            }
-            $item = Get-Item -LiteralPath $Path
-            if ($item.Length -ne $ExpectedSize) {
-              throw "Pinned input size mismatch: $Path"
-            }
-            $actual = (
-              Get-FileHash -Algorithm SHA256 -LiteralPath $Path
-            ).Hash.ToLowerInvariant()
-            if ($actual -ne $ExpectedSha256) {
-              throw "Pinned input hash mismatch: $Path"
-            }
-          }
-
-          function Get-PinnedFile {
-            param(
-              [Parameter(Mandatory = $true)][string] $Uri,
-              [Parameter(Mandatory = $true)][string] $Destination,
-              [Parameter(Mandatory = $true)][long] $ExpectedSize,
-              [Parameter(Mandatory = $true)][string] $ExpectedSha256
-            )
-            New-Item -ItemType Directory -Force `
-              -Path (Split-Path -Parent $Destination) | Out-Null
-            $partial = "$Destination.download"
-            if (Test-Path -LiteralPath $partial) {
-              Remove-Item -LiteralPath $partial -Force
-            }
-            Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $partial
-            Assert-PinnedFile $partial $ExpectedSize $ExpectedSha256
-            Move-Item -LiteralPath $partial -Destination $Destination
-          }
-
-          $root = Join-Path $env:RUNNER_TEMP "uav-reazonspeech-asr-v1"
-          New-Item -ItemType Directory -Path $root | Out-Null
-          $archive = Join-Path $root `
-            "sherpa-onnx-v1.13.4-win-x64-shared-MT-MinSizeRel-no-tts.tar.bz2"
-          Get-PinnedFile `
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-win-x64-shared-MT-MinSizeRel-no-tts.tar.bz2" `
-            $archive `
-            19828790 `
-            "a2a0e9e8e69446f59620a4837fdfff7041bc5d745b2a4260f41083b9f563ea59"
-
-          $runtimeRoot = Join-Path $root "runtime"
-          New-Item -ItemType Directory -Path $runtimeRoot | Out-Null
-          tar.exe -xjf $archive -C $runtimeRoot
-          if ($LASTEXITCODE -ne 0) {
-            throw "Could not extract the pinned sherpa-onnx runtime"
-          }
-          $runtimeDir = Join-Path $runtimeRoot `
-            "sherpa-onnx-v1.13.4-win-x64-shared-MT-MinSizeRel-no-tts\bin"
-          Assert-PinnedFile `
-            (Join-Path $runtimeDir "sherpa-onnx-offline.exe") `
-            2117120 `
-            "5ea3f02ee15e1af3fbf786568dd3f5ed85e67b302883e4cb763cf8ec2c93bb5a"
-          Assert-PinnedFile `
-            (Join-Path $runtimeDir "onnxruntime.dll") `
-            14438400 `
-            "7813cfb15cbcd05c567776a055806920924f2543cfbe1f38850e3bb1410e62bd"
-          Assert-PinnedFile `
-            (Join-Path $runtimeDir "onnxruntime_providers_shared.dll") `
-            104960 `
-            "cf52b931b9a76cde2290f654dbad81f037b5de19f75c0a34ec82ebdaf4a555d8"
-
-          $modelDir = Join-Path $root "model"
-          $modelPrefix = "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/"
-          $modelFiles = @(
-            @("tokens.txt", 45754, "2c3ac659818a48a0c04010e0593bbc4d7c8a24a054340b01131499c05fd52def"),
-            @("encoder-epoch-99-avg-1.int8.onnx", 154670139, "2c7bd08a8a99f9ddd0d9e458456577b1f6279214e51426f114f9eced44c54e1d"),
-            @("decoder-epoch-99-avg-1.onnx", 11767836, "58b18211ae06265466bfa17172dab574df94f76c8bcb61a3640c28ba860e4124"),
-            @("joiner-epoch-99-avg-1.int8.onnx", 2696970, "49cc7ea1d3d35a40a27442db5e89996da64bf0e683a903dce76e99e57a12e4de"),
-            @("README.md", 1188, "7debad4c9430f3310ad6d119fce385787c1c19f3ebc0cabe685a48dbe72a4de0")
-          )
-          foreach ($file in $modelFiles) {
-            Get-PinnedFile `
-              ($modelPrefix + $file[0]) `
-              (Join-Path $modelDir $file[0]) `
-              ([long] $file[1]) `
-              $file[2]
-          }
-
-          $licenseDir = Join-Path $root "licenses"
-          $apacheLicense = Join-Path $licenseDir "Apache-2.0.txt"
-          $onnxLicense = Join-Path $licenseDir "ONNXRuntime-MIT.txt"
-          $onnxNotices = Join-Path `
-            $licenseDir "ONNXRuntime-ThirdPartyNotices.txt"
-          Get-PinnedFile `
-            "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/142807252687d81b40d6315f23470a1512a00de3/LICENSE" `
-            $apacheLicense `
-            11358 `
-            "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
-          Get-PinnedFile `
-            "https://raw.githubusercontent.com/microsoft/onnxruntime/8f0278c77bf44b0cc83c098c6c722b92a36ac4b5/LICENSE" `
-            $onnxLicense `
-            1073 `
-            "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
-          Get-PinnedFile `
-            "https://raw.githubusercontent.com/microsoft/onnxruntime/8f0278c77bf44b0cc83c098c6c722b92a36ac4b5/ThirdPartyNotices.txt" `
-            $onnxNotices `
-            325054 `
-            "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
-
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $pack = Join-Path (Resolve-Path "dist") `
-            "UAV_reazonspeech_asr_v1.zip"
-          $resultText = & python scripts/build_reazonspeech_asr_pack.py `
-            --runtime-dir $runtimeDir `
-            --model-dir $modelDir `
-            --apache-license $apacheLicense `
-            --onnx-license $onnxLicense `
-            --onnx-third-party-notices $onnxNotices `
-            --output $pack
-          if ($LASTEXITCODE -ne 0) {
-            throw "ReazonSpeech pack builder failed"
-          }
-          $result = $resultText | ConvertFrom-Json
-          if (
-            $result.archive_size -ne 186186197 -or
-            $result.archive_sha256 -ne
-              "cf55e5485e14715beee6e0b12ca2b0998ad73ec755513e80138fa5161693c700" -or
-            $result.manifest_sha256 -ne
-              "dceb4ab39275828596eebe6148243ef12cd88a8e2c9a9bef7c9f69a1d61b652c"
-          ) {
-            throw "ReazonSpeech pack reproducibility gate failed"
-          }
-          Assert-PinnedFile `
-            $pack `
-            186186197 `
-            "cf55e5485e14715beee6e0b12ca2b0998ad73ec755513e80138fa5161693c700"
-
-          # Promote the exact previously qualified local-translation pack
-          # under its canonical UAV filename. Its immutable model revisions
-          # and licenses are documented in THIRD_PARTY_NOTICES.md.
-          $translationPack = Join-Path (Resolve-Path "dist") `
-            "UAV_local_translation_v1.zip"
-          Get-PinnedFile `
-            "https://github.com/Alos21750/UAV-Downloader/releases/download/v2.5.34/Jable_local_translation_v1.zip" `
-            $translationPack `
-            147330565 `
-            "1259a2abeb5026411da39c6f3dcd69ebd70bed654ac9cfaaee0c7373867c0bb4"
-
       - name: Build UAV Browser and UAV Watcher
         shell: pwsh
         run: |
@@ -251,9 +98,7 @@ jobs:
           $assetNames = @(
             "UAV_Browser.exe",
             "UAV_Watcher.exe",
-            "UAV_Watcher_portable.zip",
-            "UAV_reazonspeech_asr_v1.zip",
-            "UAV_local_translation_v1.zip"
+            "UAV_Watcher_portable.zip"
           )
           $checksums = foreach ($name in $assetNames) {
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "dist\$name").Hash
@@ -268,7 +113,7 @@ jobs:
       - name: Verify executable metadata
         shell: pwsh
         run: |
-          $expected = "3.1.3.0"
+          $expected = "3.1.4.0"
           $files = @(
             "dist\UAV_Browser.exe",
             "dist\UAV_Watcher.exe",
@@ -282,8 +127,6 @@ jobs:
           }
           foreach ($file in @(
             "dist\UAV_Watcher_portable.zip",
-            "dist\UAV_reazonspeech_asr_v1.zip",
-            "dist\UAV_local_translation_v1.zip",
             "dist\UAV_SHA256SUMS.txt"
           )) {
             if (!(Test-Path -LiteralPath $file)) { throw "Missing $file" }
@@ -296,8 +139,6 @@ jobs:
             dist/UAV_Browser.exe
             dist/UAV_Watcher.exe
             dist/UAV_Watcher_portable.zip
-            dist/UAV_reazonspeech_asr_v1.zip
-            dist/UAV_local_translation_v1.zip
             dist/UAV_SHA256SUMS.txt
 
       - name: Upload Windows executables
@@ -308,8 +149,6 @@ jobs:
             dist/UAV_Browser.exe
             dist/UAV_Watcher.exe
             dist/UAV_Watcher_portable.zip
-            dist/UAV_reazonspeech_asr_v1.zip
-            dist/UAV_local_translation_v1.zip
             dist/UAV_SHA256SUMS.txt
           if-no-files-found: error
           compression-level: 0

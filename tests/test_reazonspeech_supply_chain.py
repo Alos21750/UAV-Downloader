@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from scripts import build_reazonspeech_asr_pack as builder
+from uav_downloader.subtitles import engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,9 +22,7 @@ TRANSLATION_PACK_SHA256 = (
 )
 
 
-def test_windows_ci_builds_only_the_pinned_reazonspeech_inputs():
-    workflow = WORKFLOW.read_text(encoding='utf-8')
-
+def test_on_demand_components_keep_immutable_pinned_identities():
     assert builder.REAZON_MODEL_CARD_URL == (
         'https://huggingface.co/reazon-research/reazonspeech-k2-v2/'
         'resolve/291488c8151be24d7da4bf7af26e533fad96e407/README.md'
@@ -32,50 +31,33 @@ def test_windows_ci_builds_only_the_pinned_reazonspeech_inputs():
         1_188,
         '7debad4c9430f3310ad6d119fce385787c1c19f3ebc0cabe685a48dbe72a4de0',
     )
-    assert builder.REAZON_MODEL_FILE_URL_PREFIX in workflow
-    assert '@("README.md", 1188,' in workflow
-    assert builder.SHERPA_COMMIT in workflow
-    assert builder.REAZON_MODEL_REVISION in workflow
-    assert builder.ONNX_RUNTIME_COMMIT in workflow
-    assert builder.SHERPA_RELEASE_ARCHIVE_SHA256 in workflow
-    assert str(builder.SHERPA_RELEASE_ARCHIVE_SIZE) in workflow
-
-    for size, sha256 in (
-        *builder.RUNTIME_FILES.values(),
-        *builder.MODEL_FILES.values(),
-        *builder.LICENSE_FILES.values(),
-    ):
-        assert str(size) in workflow
-        assert sha256 in workflow
-
-    lowered = workflow.lower()
-    for mutable_source in (
-        '/latest/',
-        '/resolve/main/',
-        '/resolve/master/',
-        'raw.githubusercontent.com/k2-fsa/sherpa-onnx/master/',
-        'raw.githubusercontent.com/microsoft/onnxruntime/main/',
-    ):
-        assert mutable_source not in lowered
-    assert 'Assert-PinnedFile' in workflow
-    assert 'scripts/build_reazonspeech_asr_pack.py' in workflow
+    assert engine.REAZONSPEECH_PACK_NAME == PACK_NAME
+    assert engine.REAZONSPEECH_PACK_SIZE == PACK_SIZE
+    assert engine.REAZONSPEECH_PACK_SHA256 == PACK_SHA256
+    assert engine.REAZONSPEECH_MANIFEST_SHA256 == MANIFEST_SHA256
+    assert engine.REAZONSPEECH_PACK_RELEASE_TAG == 'v3.1.0'
+    assert '/latest/' not in engine.REAZONSPEECH_PACK_URL
+    assert engine.TRANSLATION_PACK_NAME == TRANSLATION_PACK_NAME
+    assert engine.TRANSLATION_PACK_SIZE == TRANSLATION_PACK_SIZE
+    assert engine.TRANSLATION_PACK_SHA256 == TRANSLATION_PACK_SHA256
+    assert engine.TRANSLATION_PACK_RELEASE_TAG == 'v3.1.0'
+    assert '/latest/' not in engine.TRANSLATION_PACK_URL
 
 
-def test_windows_ci_gates_attests_and_uploads_only_uav_assets():
+def test_windows_ci_attests_and_uploads_only_end_user_app_assets():
     workflow = WORKFLOW.read_text(encoding='utf-8')
 
-    assert str(PACK_SIZE) in workflow
-    assert PACK_SHA256 in workflow
-    assert MANIFEST_SHA256 in workflow
-    assert workflow.count(PACK_NAME) >= 5
-    assert f'"{PACK_NAME}"' in workflow
-    assert f'dist/{PACK_NAME}' in workflow
-    assert workflow.count(TRANSLATION_PACK_NAME) >= 5
-    assert str(TRANSLATION_PACK_SIZE) in workflow
-    assert TRANSLATION_PACK_SHA256 in workflow
+    assert PACK_NAME not in workflow
+    assert TRANSLATION_PACK_NAME not in workflow
     assert 'actions/attest@v4' in workflow
     assert 'compression-level: 0' in workflow
     assert 'UAV_SHA256SUMS.txt' in workflow
+    for asset in (
+        'UAV_Browser.exe',
+        'UAV_Watcher.exe',
+        'UAV_Watcher_portable.zip',
+    ):
+        assert f'dist/{asset}' in workflow
     for legacy_asset in (
         'ALOS_Browse.exe',
         'ALOS_Watch.exe',

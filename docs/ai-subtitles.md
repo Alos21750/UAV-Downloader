@@ -32,7 +32,18 @@ preserving user-edited or unknown-origin SRT files.
 The default translator is local and requires no API key. It uses pinned INT8
 FuguMT Japanese-to-English and OPUS-MT English-to-Chinese models. The local
 translation pack is downloaded only when English, Traditional Chinese, or all
-languages are actually requested, then reused offline.
+languages are actually requested, then reused offline. Users download only a
+UAV application; no separate model installation or archive extraction is part
+of the normal setup.
+
+If an SSL-intercepting proxy prevents the automatic transfer, a verified
+`UAV_local_translation_v1.zip` can be left unchanged beside the frozen EXE, or
+extracted there as `UAV_local_translation_v1`. The app accepts either form only
+after its immutable archive hash or complete per-file manifest verifies.
+
+Full-size HLS merge/remux files and WAV/ASR subtitle scratch files use the
+video's selected destination volume. They do not use the Windows system temp
+volume merely because processing starts after download progress reaches 100%.
 
 The local pipeline preserves every cue boundary and timestamp. It applies a
 versioned exact-match translation memory and curated terminology for adult
@@ -57,7 +68,9 @@ and responsibility.
 
 ## Supply-chain verification
 
-Release model packs are built from pinned inputs, gated by exact size and
-SHA-256 values, included in `UAV_SHA256SUMS.txt`, and covered by GitHub artifact
-attestations. License details are recorded in
+The immutable model packs were built from pinned inputs, gated by exact size
+and SHA-256 values, and attested in the fixed v3.1.0 component release. They are
+not duplicated in every application release. Current releases contain only the
+three Windows application forms plus `UAV_SHA256SUMS.txt`; each is covered by a
+GitHub artifact attestation. License details are recorded in
 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).

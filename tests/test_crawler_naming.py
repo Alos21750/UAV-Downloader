@@ -2,7 +2,9 @@
 """Segment temp-file naming (collision-free by playlist index) and AES IV derivation
 (implicit IV = media-sequence base + segment index; explicit IV overrides)."""
 import sys
+import shutil
 import types
+from pathlib import Path
 
 
 def _stub(name, factory=None):
@@ -77,3 +79,41 @@ def test_crawler_source_subtitle_evidence_is_bound_to_its_source_site():
         ('jable-category-chinese-subtitle',))
     assert crawler.source_subtitle_evidence() == (
         'jable-category-chinese-subtitle',)
+
+
+def test_remux_workspace_uses_the_download_destination_volume(
+        monkeypatch, tmp_path):
+    destination = tmp_path / 'downloads'
+    segments = destination / 'segments'
+    segments.mkdir(parents=True)
+    (segments / '000000.mp4').write_bytes(b'segment')
+
+    crawler = object.__new__(M3U8Crawler)
+    crawler._dest_folder = str(destination)
+    crawler._temp_folder = str(segments)
+    crawler._targetName = 'example'
+    crawler._tsList = ['https://cdn.example.test/000000.ts']
+    crawler._cancel_job = False
+    crawler._deleteMp4Chunks = lambda: None
+
+    created = {}
+
+    def fake_mkdtemp(prefix, dir=None):
+        created['dir'] = dir
+        root = Path(dir) if dir else tmp_path / 'system-temp'
+        workspace = root / f'{prefix}test'
+        workspace.mkdir(parents=True)
+        return str(workspace)
+
+    def fake_remux(merged, output, _workdir):
+        shutil.copyfile(merged, output)
+        return True
+
+    monkeypatch.setattr(
+        'uav_downloader.sites.base.tempfile.mkdtemp', fake_mkdtemp)
+    crawler._remux_to_mp4 = fake_remux
+
+    crawler._mergeMp4Chunks()
+
+    assert Path(created['dir']).resolve() == destination.resolve()
+    assert (destination / 'example.mp4').read_bytes() == b'segment'

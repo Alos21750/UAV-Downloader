@@ -38,7 +38,8 @@ The complete notices are included inside the optional archive:
 
 The speech-recognition pack is an optional download and is not part of the
 source archive. Its components remain subject to their respective licenses and
-model-card terms.
+model-card terms. UAV Downloader fetches the fixed v3.1.0 component on demand;
+the same immutable pack is not duplicated in each application release.
 
 ## Optional local subtitle-translation model pack
 
@@ -81,6 +82,9 @@ the complete applicable notice and terms at
 `third_party_licenses/Intel-Simplified-Software-License.txt`. The Windows
 release workflow disables UPX for all collected binaries. In particular,
 `libiomp5md.dll` is redistributed without UPX transformation.
+
+UAV Downloader fetches this fixed v3.1.0 translation component on demand. The
+same immutable pack is not duplicated in each application release.
 
 Windows executables are packaged with PyInstaller 6.13.0. The release workflow
 builds its bootloader from the corresponding source distribution. PyInstaller

@@ -48,7 +48,7 @@
 不確定時先下載 **UAV Browser**。兩個 Windows 執行檔都免安裝 Python，Release 版本已包含 ffmpeg。
 
 > [!NOTE]
-> Release 僅發布 `UAV_*` 正式資產；舊版 ALOS／Jable 檔名已停止發布。舊版使用者請直接下載對應的 UAV 檔案。
+> 每版 Release 只保留 `UAV_Browser.exe`、`UAV_Watcher.exe`、`UAV_Watcher_portable.zip` 與 `UAV_SHA256SUMS.txt`。AI 元件由程式在第一次實際使用時自動取得，不必另外下載或解壓模型包；舊版 ALOS／Jable 檔名也已停止發布。
 
 深入了解：[UAV Browser](./docs/uav-browser.md) · [UAV Watcher 無人值守流程](./docs/uav-watcher.md) · [AI 字幕](./docs/ai-subtitles.md) · [Docker / CLI](./docs/docker-cli.md) · [升級至 UAV](./docs/migration-to-uav.md)
 
@@ -57,6 +57,8 @@
 1. 下載 [UAV_Browser.exe](https://github.com/Alos21750/UAV-Downloader/releases/latest/download/UAV_Browser.exe) 或 [UAV_Watcher.exe](https://github.com/Alos21750/UAV-Downloader/releases/latest/download/UAV_Watcher.exe)。
 2. 把檔案放在可寫入的資料夾，直接雙擊執行。
 3. 首次開啟選擇語言；之後可隨時切換繁體中文、简体中文、English、日本語與明／暗主題。
+
+影片進度到 100% 後的合併／MP4 重新封裝，以及字幕辨識的 WAV／ASR 大型暫存，會使用影片儲存資料夾所在磁碟，不再占用 Windows 系統 `%TEMP%`（通常是 C 槽）。
 
 SmartScreen 信譽提醒與 Defender Antivirus 隔離是不同事件。請先閱讀 [Windows 下載與安全驗證](./WINDOWS_SECURITY.md)：核對 `UAV_SHA256SUMS.txt` 與 GitHub provenance；若 Defender 顯示 threat name，請勿直接降低防護設定。
 
@@ -109,7 +111,8 @@ UAV Watcher 可設為每 1–168 小時自動檢查，或每天依這台電腦�
 - 原有的 [whisper.cpp](https://github.com/ggml-org/whisper.cpp) 模式仍可明確選用：**精準 large-v3-turbo q5（約 574 MB）**、**平衡 small q5（約 190 MB）**、**快速 base q5（約 60 MB）**。自動模式只會在執行失敗、輸出損壞或時間軸結構無效時另行下載並改用平衡模式；不會因為猜測文字內容好壞而擅自切換。
 - [官方 Silero VAD](https://huggingface.co/ggml-org/whisper-vad/tree/main) 只作為語音閘門；辨識會使用保留原始靜音的、具上下文且互不重疊的視窗，再把結果映射回影片的絕對時間。ReazonSpeech 使用 CPU 高效率的 RNN-T 解碼；三個 Whisper 模式則使用 beam search、best-of 與溫度 fallback。
 - App 會記錄自己產生字幕所使用的辨識 profile 與 pipeline 來源；兩者變更時會重新產生由 App 建立的字幕及衍生翻譯。沒有來源記錄的既有 SRT，或產生後由使用者修改過的 SRT，會原樣保留。
-- 本地英文與台灣繁中翻譯使用固定版本、SHA-256 驗證的 [FuguMT](https://huggingface.co/staka/fugumt-ja-en) 與 [OPUS-MT](https://huggingface.co/Helsinki-NLP/opus-mt-en-zh) INT8 小模型，不使用 Google 或其他免費網路翻譯端點。本地翻譯模型包約 **147 MB**，只會在實際開始產生英文、繁中或三語字幕時下載；選擇「不產生」或「日文」不會下載，改用 LLM API 時也不需要這個本地翻譯模型包。下載一次後即可離線重複使用。
+- 本地英文與台灣繁中翻譯使用固定版本、SHA-256 驗證的 [FuguMT](https://huggingface.co/staka/fugumt-ja-en) 與 [OPUS-MT](https://huggingface.co/Helsinki-NLP/opus-mt-en-zh) INT8 小模型，不使用 Google 或其他免費網路翻譯端點。使用者只需下載 UAV 應用程式；約 **147 MB** 的翻譯元件會在第一次實際產生英文、繁中或三語字幕時由 App 自動取得，之後可離線重用。選擇「不產生」／「日文」或改用 LLM API 都不會取得它。
+- 若公司 Proxy／SSL 攔截使自動取得失敗，可把固定的 [`UAV_local_translation_v1.zip`](https://github.com/Alos21750/UAV-Downloader/releases/download/v3.1.0/UAV_local_translation_v1.zip) 原封不動放在 EXE 旁；也支援解壓成旁邊的 `UAV_local_translation_v1` 資料夾。App 只接受尺寸、SHA-256 與逐檔 manifest 全部吻合的元件，無須猜測應放到哪個 AppData 子目錄。
 - 可選的 API 擴充支援 **OpenAI、Anthropic、Gemini** 與 **OpenAI-compatible** API；後者可連接 DeepSeek、OpenRouter、Groq、Ollama、LiteLLM 等相容服務。影音內容中只有辨識後的字幕文字會送到所選服務；API 驗證與一般連線資訊也會正常送出，但影片與音訊始終留在本機。
 - 使用者自行提供的 API Key 會透過 Windows DPAPI，以目前登入的 Windows 帳號加密保存；專案與 EXE 不附帶任何 API Key。各服務的費用、額度、資料處理與使用政策由該供應商決定，使用前請自行確認。
 - 本地翻譯會逐一保留每個 cue 與原時間軸，套用 900 多組人工撰寫與審核的成人語境、安全／同意、拍攝隱私、現場指示與日常短句，並使用保守的台灣用語校正及版本化 exact-match 翻譯記憶；不做容易反轉「停／不要停」語意的模糊比對。

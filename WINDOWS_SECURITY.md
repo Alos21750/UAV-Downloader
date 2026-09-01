@@ -4,16 +4,14 @@
 
 ### 官方資產
 
-只從本專案的 [GitHub Releases](https://github.com/Alos21750/UAV-Downloader/releases) 下載。v3 Release 提供以下 canonical、可驗證資產：
+只從本專案的 [GitHub Releases](https://github.com/Alos21750/UAV-Downloader/releases) 下載。每個目前版本只提供以下 canonical、可驗證資產：
 
 - `UAV_Browser.exe`
 - `UAV_Watcher.exe`
 - `UAV_Watcher_portable.zip`：不使用 one-file 臨時自解壓流程的 UAV Watcher 備用版本
-- `UAV_reazonspeech_asr_v1.zip`：預設「自動」字幕辨識首次使用時下載的 CPU 模型包
-- `UAV_local_translation_v1.zip`：首次產生英文或繁中字幕時下載的本機翻譯模型包
 - `UAV_SHA256SUMS.txt`
 
-Release 僅發布上列 `UAV_*` 正式資產，不再附帶 ALOS／Jable 舊檔名別名。
+AI 元件不會在每個版本重複發布。App 會在第一次實際使用對應功能時，自動從固定且已驗證的 v3.1.0 元件版本取得；正常使用者不必手動下載或解壓模型包。Release 也不再附帶 ALOS／Jable 舊檔名別名。
 
 先用 `UAV_SHA256SUMS.txt` 核對檔案雜湊：
 
@@ -29,6 +27,16 @@ gh attestation verify .\UAV_Watcher.exe `
 
 gh attestation verify .\UAV_Watcher_portable.zip `
   -R Alos21750/UAV-Downloader
+```
+
+若 SSL／Proxy 攔截阻止 App 自動取得，才需要手動下載固定元件並原樣放在 EXE 旁：
+
+- [`UAV_reazonspeech_asr_v1.zip`](https://github.com/Alos21750/UAV-Downloader/releases/download/v3.1.0/UAV_reazonspeech_asr_v1.zip)：`cf55e5485e14715beee6e0b12ca2b0998ad73ec755513e80138fa5161693c700`
+- [`UAV_local_translation_v1.zip`](https://github.com/Alos21750/UAV-Downloader/releases/download/v3.1.0/UAV_local_translation_v1.zip)：`1259a2abeb5026411da39c6f3dcd69ebd70bed654ac9cfaaee0c7373867c0bb4`
+
+兩者也可用 GitHub attestation 驗證：
+
+```powershell
 
 gh attestation verify .\UAV_reazonspeech_asr_v1.zip `
   -R Alos21750/UAV-Downloader
@@ -69,16 +77,14 @@ gh attestation verify .\UAV_local_translation_v1.zip `
 
 ### Official assets
 
-Download only from this project's [GitHub Releases](https://github.com/Alos21750/UAV-Downloader/releases). v3 releases provide these canonical, verifiable assets:
+Download only from this project's [GitHub Releases](https://github.com/Alos21750/UAV-Downloader/releases). Each current release provides only these canonical, verifiable assets:
 
 - `UAV_Browser.exe`
 - `UAV_Watcher.exe`
 - `UAV_Watcher_portable.zip`, an onedir fallback without one-file temporary extraction
-- `UAV_reazonspeech_asr_v1.zip`, the CPU recognition pack downloaded on first use of the default Auto subtitle profile
-- `UAV_local_translation_v1.zip`, the local translation models downloaded when English or Traditional Chinese subtitles are first requested
 - `UAV_SHA256SUMS.txt`
 
-Releases publish only the canonical `UAV_*` assets listed above; legacy ALOS and Jable filename aliases are no longer included.
+AI components are not duplicated in each release. The app automatically fetches them from the fixed, verified v3.1.0 component release when the corresponding feature is first used; normal users do not manually download or extract a model pack. Legacy ALOS and Jable filename aliases are no longer included.
 
 Compare the downloaded file with `UAV_SHA256SUMS.txt`:
 
@@ -94,6 +100,16 @@ gh attestation verify .\UAV_Watcher.exe `
 
 gh attestation verify .\UAV_Watcher_portable.zip `
   -R Alos21750/UAV-Downloader
+```
+
+Only when SSL or proxy interception prevents the automatic fetch, download the fixed component and leave the ZIP unchanged beside the EXE:
+
+- [`UAV_reazonspeech_asr_v1.zip`](https://github.com/Alos21750/UAV-Downloader/releases/download/v3.1.0/UAV_reazonspeech_asr_v1.zip): `cf55e5485e14715beee6e0b12ca2b0998ad73ec755513e80138fa5161693c700`
+- [`UAV_local_translation_v1.zip`](https://github.com/Alos21750/UAV-Downloader/releases/download/v3.1.0/UAV_local_translation_v1.zip): `1259a2abeb5026411da39c6f3dcd69ebd70bed654ac9cfaaee0c7373867c0bb4`
+
+GitHub attestations are also available for both fixed components:
+
+```powershell
 
 gh attestation verify .\UAV_reazonspeech_asr_v1.zip `
   -R Alos21750/UAV-Downloader

@@ -48,7 +48,7 @@
 迷った場合は **UAV Browser** から始めてください。どちらの Windows 実行ファイルも Python のインストールは不要で、Release 版には ffmpeg が含まれています。
 
 > [!NOTE]
-> Release では正式な `UAV_*` アセットのみを公開します。旧 ALOS／Jable ファイル名の公開は終了したため、旧版ユーザーも対応する UAV ファイルを直接ダウンロードしてください。
+> 各 Release に残すのは `UAV_Browser.exe`、`UAV_Watcher.exe`、`UAV_Watcher_portable.zip`、`UAV_SHA256SUMS.txt` だけです。AI コンポーネントは初回の実利用時に App が自動取得するため、モデルパックを別途ダウンロード／展開する必要はありません。旧 ALOS／Jable ファイル名の公開も終了しています。
 
 詳細：[UAV Browser](./docs/uav-browser.md) · [UAV Watcher の無人自動運転](./docs/uav-watcher.md) · [AI 字幕](./docs/ai-subtitles.md) · [Docker / CLI](./docs/docker-cli.md) · [UAV への移行](./docs/migration-to-uav.md)
 
@@ -57,6 +57,8 @@
 1. [UAV_Browser.exe](https://github.com/Alos21750/UAV-Downloader/releases/latest/download/UAV_Browser.exe) または [UAV_Watcher.exe](https://github.com/Alos21750/UAV-Downloader/releases/latest/download/UAV_Watcher.exe) をダウンロードします。
 2. 書き込み可能なフォルダーへ置き、ダブルクリックして実行します。
 3. 初回起動時に言語を選択します。以後は日本語、English、繁體中文、简体中文、およびライト／ダークテーマをいつでも切り替えられます。
+
+進捗 100% 後のフルサイズ結合／MP4 再多重化ワークスペースと、字幕認識用の大きな WAV／ASR 一時ファイルは、Windows の `%TEMP%`（通常 C:）ではなく、選択した動画保存先と同じドライブを使用します。
 
 SmartScreen の評価警告と Defender Antivirus の隔離は別の事象です。まず [Windows のダウンロードとセキュリティ検証](./WINDOWS_SECURITY.md)を読み、`UAV_SHA256SUMS.txt` と GitHub provenance を確認してください。Defender が脅威名を表示した場合、保護設定を安易に弱めないでください。
 
@@ -109,7 +111,8 @@ UAV Watcher は 1–168 時間ごと、またはこのコンピューターの�
 - 従来の [whisper.cpp](https://github.com/ggml-org/whisper.cpp) プロファイルも明示的に選択できます：**高精度 large-v3-turbo q5（約 574 MB）**、**バランス small q5（約 190 MB）**、**高速 base q5（約 60 MB）**。自動モードがバランス版を追加ダウンロードして切り替えるのは、実行失敗、出力破損、またはタイムライン構造が無効な場合だけです。正常な文字列の品質を推測して勝手に切り替えることはありません。
 - [公式 Silero VAD](https://huggingface.co/ggml-org/whisper-vad/tree/main) は発話ゲートとしてのみ使用されます。認識は元の無音を保持した、文脈を含む重複しないウィンドウで実行し、結果を動画の絶対時刻へ戻します。ReazonSpeech は CPU 効率の高い RNN-T デコードを使用し、3 種類の Whisper プロファイルは beam search、best-of 候補、temperature fallback を使用します。
 - App は生成した字幕の認識プロファイルとパイプラインの provenance を記録します。いずれかが変更された場合は App 生成字幕と派生翻訳を再生成しますが、provenance のない既存 SRT やユーザーが編集した SRT は変更せずに保持します。
-- ローカルの英語および台湾繁体字中国語翻訳には、固定版かつ SHA-256 検証済みの [FuguMT](https://huggingface.co/staka/fugumt-ja-en) と [OPUS-MT](https://huggingface.co/Helsinki-NLP/opus-mt-en-zh) INT8 小型モデルを使用します。Google やその他の無料オンライン翻訳エンドポイントは使用しません。約 **147 MB** のローカル翻訳パックは、英語、繁体字中国語、または 3 言語の字幕処理を実際に開始したときだけダウンロードされます。オフと日本語のみではダウンロードせず、LLM API 使用時にも不要です。一度取得すればオフラインで再利用できます。
+- ローカルの英語および台湾繁体字中国語翻訳には、固定版かつ SHA-256 検証済みの [FuguMT](https://huggingface.co/staka/fugumt-ja-en) と [OPUS-MT](https://huggingface.co/Helsinki-NLP/opus-mt-en-zh) INT8 小型モデルを使用します。Google やその他の無料オンライン翻訳エンドポイントは使用しません。ユーザーがダウンロードするのは UAV App だけです。約 **147 MB** の翻訳コンポーネントは英語、繁体字中国語、または 3 言語の処理を初めて開始したとき App が自動取得し、以後はオフラインで再利用します。オフ、日本語のみ、LLM API では取得しません。
+- 企業 Proxy／SSL インターセプターで自動取得できない場合は、固定版 [`UAV_local_translation_v1.zip`](https://github.com/Alos21750/UAV-Downloader/releases/download/v3.1.0/UAV_local_translation_v1.zip) を変更せず EXE の隣へ置いてください。隣の `UAV_local_translation_v1` フォルダーへ展開した形も認識します。サイズ、SHA-256、全ファイル manifest が一致した場合だけ使用するため、AppData の配置先を推測する必要はありません。
 - オプションの API 拡張は **OpenAI、Anthropic、Gemini**、および **OpenAI-compatible** API に対応しています。互換モードでは DeepSeek、OpenRouter、Groq、Ollama、LiteLLM などへ接続できます。選択したサービスへ送信されるメディア由来の情報は認識済み字幕テキストだけです。必要な API 認証情報と通常の接続メタデータも送信されますが、動画と音声は常にローカルに残ります。
 - ユーザーが入力した API Key は、現在サインインしている Windows アカウント用の Windows DPAPI で暗号化して保存されます。プロジェクトや EXE に API Key は含まれません。料金、使用量上限、データ処理、利用規約は選択したプロバイダーによって異なるため、使用前に最新条件を確認してください。
 - ローカル翻訳では各 cue を元のタイムスタンプに固定し、メンテナーが作成・確認した 900 以上の成人向け文脈、安全／同意、撮影時のプライバシー、現場指示、日常表現に加え、保守的な台湾表現の補正とバージョン管理された exact-match 翻訳メモリを使用します。「止めて」と「止めないで」のような意味を反転させる恐れがある曖昧一致は使用しません。

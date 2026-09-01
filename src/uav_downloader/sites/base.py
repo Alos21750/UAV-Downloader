@@ -770,7 +770,12 @@ class M3U8Crawler:
         n = len(self._tsList)
         print(f'開始合成影片...共有 {n} 個片段', flush=True)
 
-        workdir = tempfile.mkdtemp(prefix='jbremux_')   # local, per-user temp
+        # Keep the full-size merge and remux copies on the selected download
+        # volume.  Windows' default temp directory normally lives on C:, and
+        # using it here could consume almost two extra copies of a video after
+        # the segment progress had already reached 100%.
+        workdir = tempfile.mkdtemp(
+            prefix='uav-remux-', dir=self._dest_folder)
         merged = os.path.join(workdir, 'merged.ts')
         out_mp4 = os.path.join(workdir, 'out.mp4')
         published = False

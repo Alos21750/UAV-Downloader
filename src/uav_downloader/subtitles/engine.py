@@ -563,6 +563,48 @@ def _cache_root() -> str:
     return str(product_data_dir(base) / 'subtitle_tools')
 
 
+def _component_search_directories() -> tuple[str, ...]:
+    """Return trusted locations for manually supplied, pinned components.
+
+    Frozen users naturally place an offline pack beside the executable.  A
+    source checkout can use the entry-point directory or current directory.
+    Every candidate still has to pass the immutable size and SHA-256 gate (or
+    the per-file signed manifest gate for an extracted directory).
+    """
+    candidates: list[str] = []
+    if getattr(sys, 'frozen', False):
+        candidates.append(os.path.dirname(os.path.abspath(sys.executable)))
+    else:
+        try:
+            candidates.append(os.path.dirname(os.path.abspath(sys.argv[0])))
+        except (AttributeError, IndexError, OSError, TypeError):
+            pass
+        candidates.append(os.getcwd())
+
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        path = os.path.abspath(candidate)
+        key = os.path.normcase(path)
+        if key in seen or not os.path.isdir(path):
+            continue
+        seen.add(key)
+        resolved.append(path)
+    return tuple(resolved)
+
+
+def _component_install_candidates(pack_name: str) -> tuple[str, ...]:
+    stem = os.path.splitext(os.path.basename(pack_name))[0]
+    candidates: list[str] = []
+    for root in _component_search_directories():
+        candidates.extend((
+            os.path.join(root, stem),
+            os.path.join(root, 'components', stem),
+            root,
+        ))
+    return tuple(dict.fromkeys(os.path.abspath(path) for path in candidates))
+
+
 @contextmanager
 def _interprocess_cache_lock(
         name: str, cancel_check: Optional[CancelCheck],
@@ -685,6 +727,20 @@ def _is_verified(
         return False
     _verified_paths[key] = identity
     return True
+
+
+def _find_verified_component_archive(
+        filename: str, expected_size: int, expected_sha256: str,
+        cancel_check: Optional[CancelCheck]) -> Optional[str]:
+    for root in _component_search_directories():
+        for candidate in (
+                os.path.join(root, filename),
+                os.path.join(root, 'components', filename)):
+            if _is_verified(
+                    candidate, expected_size, expected_sha256,
+                    cancel_check):
+                return candidate
+    return None
 
 
 def _download_verified(url: str, destination: str, expected_size: int,
@@ -1215,12 +1271,28 @@ def _prepare_reazonspeech_runtime_locked(
                 return _verify_reazonspeech_install(
                     runtime_dir, cancel_check=cancel_check)
 
+        for candidate in _component_install_candidates(
+                REAZONSPEECH_PACK_NAME):
+            try:
+                installed = _verify_reazonspeech_install(
+                    candidate, require_marker=False,
+                    cancel_check=cancel_check)
+            except SubtitleCancelled:
+                raise
+            except SubtitleError:
+                continue
+            _notify(progress_callback, 'model', 100)
+            return installed
+
         if not REAZONSPEECH_PACK_SIZE or not REAZONSPEECH_PACK_SHA256:
             raise SubtitleError(
                 'ReazonSpeech model pack is not configured')
         _notify(progress_callback, 'model', 0)
-        archive = os.path.join(
+        managed_archive = os.path.join(
             root, 'downloads', REAZONSPEECH_PACK_NAME)
+        archive = _find_verified_component_archive(
+            REAZONSPEECH_PACK_NAME, REAZONSPEECH_PACK_SIZE,
+            REAZONSPEECH_PACK_SHA256, cancel_check)
 
         def download_progress(
                 _stage: str, percent: Optional[int]) -> None:
@@ -1229,10 +1301,13 @@ def _prepare_reazonspeech_runtime_locked(
                 else min(70, max(0, int(percent * 0.70))))
             _notify(progress_callback, 'model', mapped)
 
-        _download_verified(
-            REAZONSPEECH_PACK_URL, archive,
-            REAZONSPEECH_PACK_SIZE, REAZONSPEECH_PACK_SHA256,
-            'model', download_progress, cancel_check)
+        if archive:
+            _notify(progress_callback, 'model', 70)
+        else:
+            archive = _download_verified(
+                REAZONSPEECH_PACK_URL, managed_archive,
+                REAZONSPEECH_PACK_SIZE, REAZONSPEECH_PACK_SHA256,
+                'model', download_progress, cancel_check)
         # The verified archive remains on disk while its similarly sized
         # contents are extracted. Reserve room for that second copy plus the
         # normal processing safety margin before creating an install tree.
@@ -1277,12 +1352,14 @@ def _prepare_reazonspeech_runtime_locked(
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
-        try:
-            os.remove(archive)
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
+        if os.path.normcase(os.path.abspath(archive)) == os.path.normcase(
+                os.path.abspath(managed_archive)):
+            try:
+                os.remove(archive)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
         installed = _verify_reazonspeech_install(
             runtime_dir, cancel_check=cancel_check)
         _notify(progress_callback, 'model', 100)
@@ -2178,7 +2255,9 @@ def _run_whisper(exe: str, model: str, vad_model: str, wav_path: str,
         raise _asr_failure('runtime')
 
     try:
-        work_dir = tempfile.mkdtemp(prefix='uav-asr-')
+        work_dir = tempfile.mkdtemp(
+            prefix='uav-asr-',
+            dir=os.path.dirname(os.path.abspath(wav_path)))
     except OSError as exc:
         raise _asr_failure('runtime') from exc
     try:
@@ -2693,7 +2772,9 @@ def _run_reazonspeech(
         pack_root, cancel_check=cancel_check)
 
     try:
-        work_dir = tempfile.mkdtemp(prefix='uav-reazonspeech-')
+        work_dir = tempfile.mkdtemp(
+            prefix='uav-reazonspeech-',
+            dir=os.path.dirname(os.path.abspath(wav_path)))
     except OSError as exc:
         raise _asr_failure('runtime') from exc
     try:
@@ -3062,10 +3143,27 @@ def _prepare_translation_runtime_locked(
                 return _verify_translation_install(
                     runtime_dir, cancel_check=cancel_check)
 
+        for candidate in _component_install_candidates(
+                TRANSLATION_PACK_NAME):
+            try:
+                installed = _verify_translation_install(
+                    candidate, require_marker=False,
+                    cancel_check=cancel_check)
+            except SubtitleCancelled:
+                raise
+            except SubtitleError:
+                continue
+            _notify(progress_callback, 'translation_model', 100)
+            return installed
+
         if not TRANSLATION_PACK_SIZE or not TRANSLATION_PACK_SHA256:
             raise SubtitleError('Local translation model pack is not configured')
         _notify(progress_callback, 'translation_model', 0)
-        archive = os.path.join(root, 'downloads', TRANSLATION_PACK_NAME)
+        managed_archive = os.path.join(
+            root, 'downloads', TRANSLATION_PACK_NAME)
+        archive = _find_verified_component_archive(
+            TRANSLATION_PACK_NAME, TRANSLATION_PACK_SIZE,
+            TRANSLATION_PACK_SHA256, cancel_check)
 
         def download_progress(
                 _stage: str, percent: Optional[int]) -> None:
@@ -3075,10 +3173,13 @@ def _prepare_translation_runtime_locked(
             _notify(
                 progress_callback, 'translation_model', mapped)
 
-        _download_verified(
-            TRANSLATION_PACK_URL, archive, TRANSLATION_PACK_SIZE,
-            TRANSLATION_PACK_SHA256, 'translation_model',
-            download_progress, cancel_check)
+        if archive:
+            _notify(progress_callback, 'translation_model', 70)
+        else:
+            archive = _download_verified(
+                TRANSLATION_PACK_URL, managed_archive,
+                TRANSLATION_PACK_SIZE, TRANSLATION_PACK_SHA256,
+                'translation_model', download_progress, cancel_check)
 
         temp_dir = tempfile.mkdtemp(
             prefix=f'translation-v{TRANSLATION_PACK_VERSION}-install-',
@@ -3119,11 +3220,13 @@ def _prepare_translation_runtime_locked(
 
         # The extracted, per-file verified pack is sufficient.  Do not keep a
         # second ~140 MB archive in the user's cache.
-        try:
-            os.remove(archive)
-            _verified_paths.pop(os.path.abspath(archive), None)
-        except OSError:
-            pass
+        if os.path.normcase(os.path.abspath(archive)) == os.path.normcase(
+                os.path.abspath(managed_archive)):
+            try:
+                os.remove(archive)
+                _verified_paths.pop(os.path.abspath(archive), None)
+            except OSError:
+                pass
         installed = _verify_translation_install(
             runtime_dir,
             progress_callback=progress_callback,
@@ -5057,7 +5160,8 @@ def generate_subtitles(video_path: str, mode,
                     progress_callback, cancel_check)
 
         with tempfile.TemporaryDirectory(
-                prefix='uav-subtitle-') as temp_dir:
+                prefix='uav-subtitle-',
+                dir=os.path.dirname(os.path.abspath(video_path))) as temp_dir:
             wav = os.path.join(temp_dir, 'audio.wav')
             log = os.path.join(temp_dir, 'process.log')
             if need_whisper:
