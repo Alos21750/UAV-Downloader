@@ -8,6 +8,16 @@ three. Selected files use the same video stem with `.ja.srt`, `.en.srt`, and
 `.zh-TW.srt` suffixes. If translation fails while only English or Traditional
 Chinese was requested, an unrequested Japanese sidecar is not left behind.
 
+## Subtitling videos downloaded before this feature existed
+
+UAV Browser's Download tab has a "Subtitle Local Files" button for legacy MP4s
+that were downloaded before AI subtitles existed. Clicking it opens a file
+picker; each selected video is queued through the same subtitle pipeline a
+fresh download uses, at whatever output mode is currently selected in
+Settings. These local entries are never treated as downloads: they are not
+saved to the persisted queue, and their retry action simply reruns subtitle
+generation on the same file rather than re-downloading anything.
+
 ## Speech recognition
 
 The recommended automatic profile uses a pinned ReazonSpeech K2 v2 model with
