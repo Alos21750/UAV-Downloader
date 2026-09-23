@@ -175,7 +175,7 @@ class _DownloadTask:
     __slots__ = (
         'url', 'dest', 'epoch', 'job', 'subtitle_mode',
         'source_subtitle_evidence', 'cancelled',
-        'download_started', 'slow_requeue_triggered', 'slow_requeue_kbps',
+        'download_started', 'slow_requeue_checked', 'prev_total',
     )
 
     def __init__(
@@ -191,8 +191,8 @@ class _DownloadTask:
                 source_subtitle_evidence))
         self.cancelled = threading.Event()
         self.download_started = None
-        self.slow_requeue_triggered = False
-        self.slow_requeue_kbps = None
+        self.slow_requeue_checked = False
+        self.prev_total = None
 
 
 class DownloadManager:
@@ -335,6 +335,7 @@ class DownloadManager:
             else:
                 self._items[url] = DownloadItem(url, dest=dest)
                 item = self._items[url]
+            item.auto_requeues = 0  # a fresh enqueue starts a new session
             task = _DownloadTask(
                 url, dest, self._cancel_epoch,
                 item.source_subtitle_evidence)
@@ -442,7 +443,6 @@ class DownloadManager:
                     pass
                 self._complete_download(task, '已取消')
                 return
-            task.download_started = time.monotonic()
             ok = job.start_download()
             if ok is False and not job._cancel_job:
                 raise Exception(T('parse_failed_short'))
@@ -727,7 +727,8 @@ class DownloadManager:
                     self._context_cancelled_locked(task)):
                 return
             self._on_progress(task.url, done, total, speed_bps)
-            should_restart = self._check_slow_requeue_locked(task, speed_bps)
+            should_restart = self._check_slow_requeue_locked(
+                task, total, speed_bps)
         if should_restart:
             # Never restart/cancel synchronously here: this callback runs
             # inside the crawler's own worker pool (for HLS, its segment
@@ -738,23 +739,36 @@ class DownloadManager:
                 kwargs={'automatic': True}, daemon=True).start()
 
     def _check_slow_requeue_locked(
-            self, task: _DownloadTask, speed_bps: float) -> bool:
+            self, task: _DownloadTask, total: int,
+            speed_bps: float) -> bool:
         """Decide whether a slow download should be auto-restarted.
 
         Must be called with self._lock already held. Returns True only the
         one time a restart should be kicked off; the caller does that on a
         new thread. When automatic attempts are exhausted, flags the item's
         error instead and returns False so the download keeps running.
+
+        The grace clock tracks the job's own speed window rather than
+        `_run_download`'s call to start_download(): `total` changing (e.g.
+        SupJav falling back from HLS segment counts to a direct MP4 byte
+        count mid-download) means speed_bps now averages a different
+        window, so the clock restarts and the once-per-task judgement is
+        re-armed.
         """
-        if task.slow_requeue_triggered or task.download_started is None:
+        if total != task.prev_total:
+            task.prev_total = total
+            task.download_started = time.monotonic()
+            task.slow_requeue_checked = False
+            return False
+        if task.slow_requeue_checked or task.download_started is None:
             return False
         if time.monotonic() - task.download_started < SLOW_REQUEUE_GRACE_SECONDS:
             return False
-        if task.slow_requeue_kbps is None:
-            # Progress ticks arrive many times per second; read the saved
-            # preference once per task instead of on every tick.
-            task.slow_requeue_kbps = self._slow_requeue_kbps_getter()
-        threshold_kbps = task.slow_requeue_kbps
+
+        # Judge only once per speed window: a restart begins the download
+        # from zero anyway, so re-checking the same run again is pointless.
+        task.slow_requeue_checked = True
+        threshold_kbps = self._slow_requeue_kbps_getter()
         if not threshold_kbps:
             return False
         from uav_downloader.sites.base import speed_limiter
@@ -763,7 +777,6 @@ class DownloadManager:
         if speed_bps >= threshold_kbps * 1024:
             return False
 
-        task.slow_requeue_triggered = True
         item = self._items.get(task.url)
         if item is None:
             return False
