@@ -3611,7 +3611,9 @@ class ModernApp(ctk.CTk):
             if mode == 'none':
                 self._status_lbl.configure(text=T('subtitle_local_need_mode'))
                 return
-            self._dlmgr.enqueue_local_subtitles(url, mode)
+            if not self._dlmgr.enqueue_local_subtitles(url, mode):
+                self._status_lbl.configure(
+                    text=T('subtitle_local_missing', path=url))
             return
         dest = item.dest or self._dest_var.get() or 'download'
         restart = getattr(self._dlmgr, 'restart', None)

@@ -45,6 +45,7 @@ _stub_runtime_dependency('customtkinter', _customtkinter_stub)
 
 from uav_downloader.apps import browse as gui_modern
 from uav_downloader.apps.browse import DownloadManager, ModernApp
+from uav_downloader.i18n.locales import T
 from uav_downloader.subtitles.engine import SubtitleResult
 
 
@@ -180,6 +181,35 @@ def test_retry_local_item_reruns_subtitles_never_downloads(
     assert calls == [(str(video), 'en'), (str(video), 'en')]
     assert enqueue_calls == []
     assert create_site_calls == []
+
+
+def test_retry_local_item_reports_a_moved_file(monkeypatch, tmp_path):
+    video = tmp_path / 'legacy.mp4'
+    video.write_bytes(b'video')
+    monkeypatch.setattr(
+        gui_modern, 'generate_subtitles',
+        lambda path, mode, **kwargs: SubtitleResult(
+            (str(tmp_path / 'legacy.en.srt'),), ()))
+    monkeypatch.setattr(gui_modern.config, 'get_subtitle_pref', lambda: 'en')
+    manager = DownloadManager()
+    assert manager.enqueue_local_subtitles(str(video), 'en') is True
+    assert _wait_until(
+        lambda: manager.subtitle_active_count == 0
+        and manager.subtitle_pending_count == 0)
+    video.unlink()
+    enqueue_calls = []
+    monkeypatch.setattr(
+        manager, 'enqueue', lambda *a, **k: enqueue_calls.append((a, k)))
+    status = []
+    app = _AppStandIn(manager)
+    app._status_lbl = types.SimpleNamespace(
+        configure=lambda **kw: status.append(kw['text']))
+
+    ModernApp._retry_download(app, str(video))
+
+    assert status == [T('subtitle_local_missing', path=str(video))]
+    assert enqueue_calls == []
+    assert manager.subtitle_pending_count == 0
 
 
 def test_save_csv_excludes_local_items(monkeypatch, tmp_path):

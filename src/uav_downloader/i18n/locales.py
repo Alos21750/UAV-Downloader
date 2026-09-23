@@ -133,6 +133,7 @@ STRINGS = {
         'subtitle_local_video_filter': '影片檔案',
         'subtitle_local_all_filter': '所有檔案',
         'subtitle_local_added': '已加入 {n} 個檔案進行字幕處理',
+        'subtitle_local_missing': '找不到檔案：{path}',
 
         # Download states
         'state_downloading': '下載中',
@@ -521,6 +522,7 @@ STRINGS = {
         'subtitle_local_video_filter': 'Video files',
         'subtitle_local_all_filter': 'All files',
         'subtitle_local_added': 'Added {n} file(s) for subtitling',
+        'subtitle_local_missing': 'File not found: {path}',
 
         # Download states
         'state_downloading': 'Downloading',
@@ -908,6 +910,7 @@ STRINGS = {
         'subtitle_local_video_filter': '视频文件',
         'subtitle_local_all_filter': '所有文件',
         'subtitle_local_added': '已将 {n} 个文件加入字幕处理',
+        'subtitle_local_missing': '找不到文件：{path}',
 
         # Download states
         'state_downloading': '下载中',
@@ -1296,6 +1299,7 @@ STRINGS = {
         'subtitle_local_video_filter': '動画ファイル',
         'subtitle_local_all_filter': 'すべてのファイル',
         'subtitle_local_added': '{n} 件のファイルを字幕処理に追加しました',
+        'subtitle_local_missing': 'ファイルが見つかりません：{path}',
 
         # Download states
         'state_downloading': 'ダウンロード中',
