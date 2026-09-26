@@ -128,6 +128,12 @@ STRINGS = {
         'dl_list_empty': '下載清單是空的',
         'dl_list_more_not_shown': '+{n} 筆未顯示',
         'subtitle_queue_status': '字幕處理 {active}，等待 {pending}',
+        'subtitle_local_files': '舊影片字幕',
+        'subtitle_local_need_mode': '請先到「設定」選擇字幕語言後再試',
+        'subtitle_local_video_filter': '影片檔案',
+        'subtitle_local_all_filter': '所有檔案',
+        'subtitle_local_added': '已加入 {n} 個檔案進行字幕處理',
+        'subtitle_local_missing': '找不到檔案：{path}',
 
         # Download states
         'state_downloading': '下載中',
@@ -511,6 +517,12 @@ STRINGS = {
         'dl_list_empty': 'No downloads yet',
         'dl_list_more_not_shown': '+{n} more not shown',
         'subtitle_queue_status': 'Subtitles {active}, waiting {pending}',
+        'subtitle_local_files': 'Subtitle Local Files',
+        'subtitle_local_need_mode': 'Please choose subtitle languages in Settings first',
+        'subtitle_local_video_filter': 'Video files',
+        'subtitle_local_all_filter': 'All files',
+        'subtitle_local_added': 'Added {n} file(s) for subtitling',
+        'subtitle_local_missing': 'File not found: {path}',
 
         # Download states
         'state_downloading': 'Downloading',
@@ -893,6 +905,12 @@ STRINGS = {
         'dl_list_empty': '下载列表为空',
         'dl_list_more_not_shown': '+{n} 项未显示',
         'subtitle_queue_status': '字幕处理 {active}，等待 {pending}',
+        'subtitle_local_files': '旧视频字幕',
+        'subtitle_local_need_mode': '请先在“设置”中选择字幕语言后再试',
+        'subtitle_local_video_filter': '视频文件',
+        'subtitle_local_all_filter': '所有文件',
+        'subtitle_local_added': '已将 {n} 个文件加入字幕处理',
+        'subtitle_local_missing': '找不到文件：{path}',
 
         # Download states
         'state_downloading': '下载中',
@@ -1276,6 +1294,12 @@ STRINGS = {
         'dl_list_empty': 'ダウンロードはありません',
         'dl_list_more_not_shown': '+{n} 件は非表示',
         'subtitle_queue_status': '字幕処理 {active}、待機 {pending}',
+        'subtitle_local_files': 'ローカル動画字幕',
+        'subtitle_local_need_mode': '先に「設定」で字幕言語を選択してください',
+        'subtitle_local_video_filter': '動画ファイル',
+        'subtitle_local_all_filter': 'すべてのファイル',
+        'subtitle_local_added': '{n} 件のファイルを字幕処理に追加しました',
+        'subtitle_local_missing': 'ファイルが見つかりません：{path}',
 
         # Download states
         'state_downloading': 'ダウンロード中',
