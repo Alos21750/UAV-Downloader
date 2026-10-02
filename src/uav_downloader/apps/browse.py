@@ -147,12 +147,12 @@ def _download_row_action(item):
 class DownloadItem:
     __slots__ = (
         'url', 'name', 'state', 'progress', 'speed', 'error', 'dest',
-        'source_subtitle_evidence',
+        'source_subtitle_evidence', 'local',
     )
 
     def __init__(
             self, url: str, name: str = '', state: str = '', dest: str = '',
-            source_subtitle_evidence=()):
+            source_subtitle_evidence=(), local: bool = False):
         self.url = url
         self.name = name or url.rstrip('/').split('/')[-1]
         self.state = state
@@ -164,6 +164,9 @@ class DownloadItem:
             'url': url,
             '_source_subtitle_evidence': source_subtitle_evidence,
         })
+        # An existing local video queued for subtitles only: never
+        # downloaded, requeued or persisted.
+        self.local = local
 
 
 class _DownloadTask:
@@ -186,6 +189,18 @@ class _DownloadTask:
             normalize_source_subtitle_evidence(
                 source_subtitle_evidence))
         self.cancelled = threading.Event()
+
+
+class _LocalSubtitleJob:
+    """Job stand-in that lets an existing local video reuse _run_subtitle."""
+    __slots__ = ('_path', '_cancel_job')
+
+    def __init__(self, path: str):
+        self._path = path
+        self._cancel_job = False
+
+    def _get_video_savename(self) -> str:
+        return self._path
 
 
 class DownloadManager:
@@ -330,6 +345,33 @@ class DownloadManager:
                 self._set_state(url, '等待中')
         if start_task is not None:
             self._start_download_thread(start_task)
+
+    def enqueue_local_subtitles(self, path: str, mode: str) -> bool:
+        """Queue an existing local video for subtitle generation only."""
+        mode = normalize_subtitle_mode(mode)
+        if mode == 'none':
+            return False
+        abs_path = os.path.abspath(path)
+        if not os.path.isfile(abs_path):
+            return False
+        with self._lock:
+            if self._url_inflight_locked(abs_path):
+                return False
+            item = self._items.get(abs_path)
+            if item is None:
+                item = DownloadItem(
+                    abs_path, name=os.path.basename(abs_path),
+                    dest=os.path.dirname(abs_path), local=True)
+                self._items[abs_path] = item
+            else:
+                item.local = True
+            task = _DownloadTask(abs_path, item.dest, self._cancel_epoch)
+            task.subtitle_mode = mode
+            task.job = _LocalSubtitleJob(abs_path)
+            self._subtitle_pending.append(task)
+            self._set_state(abs_path, '字幕準備中', progress=0)
+        self._try_next_subtitle()
+        return True
 
     def cancel_all(self, cleanup: bool = True):
         with self._lock:
@@ -714,6 +756,9 @@ class DownloadManager:
     def save_csv(self, path: str):
         with self._lock:
             items = list(self._items.values())
+        # Local subtitle-only rows hold file paths, not URLs: never reload them
+        # as downloads.
+        items = [item for item in items if not item.local]
         # Python 3.7+ dict insertion order is used as the recency proxy for
         # capped terminal history; resumable items are never dropped.
         items = _select_persist(items, MAX_PERSIST_ROWS)
@@ -1948,6 +1993,11 @@ class ModernApp(ctk.CTk):
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
                       command=self._download_all).pack(side='left', padx=(8, 0))
+        ctk.CTkButton(actions_left, text=T('subtitle_local_files'), width=150, height=38,
+                      corner_radius=CONTROL_RADIUS,
+                      fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
+                      hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+                      command=self._subtitle_local_files).pack(side='left', padx=(8, 0))
 
         speed = ctk.CTkFrame(bar, fg_color='transparent')
         speed.grid(row=0, column=1, pady=10)
@@ -3518,6 +3568,9 @@ class ModernApp(ctk.CTk):
         dest = self._dest_var.get() or 'download'
         count = 0
         for item in self._dlmgr.get_items():
+            # Local subtitle-only rows are not downloads.
+            if item.local:
+                continue
             # Skip items that are already active or completed; queued ('等待中')
             # items still need enqueue() to (re)start them.
             if item.state in (
@@ -3528,9 +3581,39 @@ class ModernApp(ctk.CTk):
         if count:
             print(f'已加入 {count} 個下載任務')
 
+    def _subtitle_local_files(self):
+        """Generate subtitles for videos that are already on disk."""
+        mode = normalize_subtitle_mode(config.get_subtitle_pref())
+        if mode == 'none':
+            self._status_lbl.configure(text=T('subtitle_local_need_mode'))
+            return
+        paths = filedialog.askopenfilenames(
+            filetypes=[
+                (T('subtitle_local_video_filter'),
+                 '*.mp4 *.mkv *.ts *.mov *.m4v *.webm *.avi'),
+                (T('subtitle_local_all_filter'), '*.*'),
+            ])
+        if not paths:
+            return
+        count = sum(
+            1 for path in paths
+            if self._dlmgr.enqueue_local_subtitles(path, mode))
+        self._refresh_downloads(schedule=False)
+        self._status_lbl.configure(
+            text=T('subtitle_local_added', n=count))
+
     def _retry_download(self, url: str):
         item = next((i for i in self._dlmgr.get_items() if i.url == url), None)
         if item is None:
+            return
+        if item.local:
+            mode = normalize_subtitle_mode(config.get_subtitle_pref())
+            if mode == 'none':
+                self._status_lbl.configure(text=T('subtitle_local_need_mode'))
+                return
+            if not self._dlmgr.enqueue_local_subtitles(url, mode):
+                self._status_lbl.configure(
+                    text=T('subtitle_local_missing', path=url))
             return
         dest = item.dest or self._dest_var.get() or 'download'
         restart = getattr(self._dlmgr, 'restart', None)
