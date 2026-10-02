@@ -17,6 +17,14 @@ MIRRORS = {
     'supjav': ['supjav.com'],
 }
 
+# Cloudflare answers bursts of supjav.com searches with an HTTP 429 challenge
+# (measured: about ten searches within ten seconds from one IP; video and
+# listing pages were not limited) that lifts after a few quiet seconds. Wait
+# these seconds and retry the same host instead of reporting a block.
+RATE_LIMIT_WAITS = {
+    'supjav': (10, 20),
+}
+
 _cf_lock = threading.Lock()
 _prefs_lock = threading.Lock()
 _proxy_lock = threading.Lock()
