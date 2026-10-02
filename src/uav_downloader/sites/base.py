@@ -229,6 +229,12 @@ class _SpeedLimiter:
         self._tokens = 0.0
         self._last = time.time()
 
+    @property
+    def limit_bps(self) -> int:
+        """Current global cap in bytes/s, or 0 when unlimited."""
+        with self._lock:
+            return self._limit_bps
+
     def set_limit(self, mbps: float) -> None:
         with self._lock:
             self._limit_bps = int(mbps * 1024 * 1024) if mbps > 0 else 0
