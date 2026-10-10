@@ -407,7 +407,7 @@ def test_both_apps_expose_and_persist_per_video_worker_limit(monkeypatch):
 
     assert gui_modern.SETTINGS_INLINE_HELP_WRAP <= 620
     assert modern_ui.count(
-        'wraplength=SETTINGS_INLINE_HELP_WRAP') == 4
+        'wraplength=SETTINGS_INLINE_HELP_WRAP') == 5
     assert modern_ui.count("justify='left', anchor='w'") >= 4
 
     class _Var:

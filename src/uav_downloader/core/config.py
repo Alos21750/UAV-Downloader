@@ -36,6 +36,9 @@ DEFAULT_MAX_WORKERS_PER_VIDEO = (
     min(os.cpu_count() * 2, 16) if os.cpu_count() else 8)
 MIN_WORKERS_PER_VIDEO = 1
 MAX_WORKERS_PER_VIDEO = 16
+DEFAULT_SLOW_REQUEUE_KBPS = 0
+MIN_SLOW_REQUEUE_KBPS = 0
+MAX_SLOW_REQUEUE_KBPS = 100000
 VALID_PROXY_SCHEMES = {
     'http', 'https', 'socks4', 'socks4a', 'socks5', 'socks5h',
 }
@@ -302,6 +305,34 @@ def set_max_workers_per_video(value):
         with _prefs_lock:
             prefs = _load_prefs()
             prefs['max_workers_per_video'] = normalized
+            _save_prefs(prefs)
+    except Exception:
+        pass
+    return normalized
+
+
+def normalize_slow_requeue_kbps(value):
+    """Return a safe slow-download auto-requeue threshold in KB/s (0 = off)."""
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        parsed = DEFAULT_SLOW_REQUEUE_KBPS
+    return max(MIN_SLOW_REQUEUE_KBPS, min(parsed, MAX_SLOW_REQUEUE_KBPS))
+
+
+def get_slow_requeue_kbps():
+    """Return the persisted slow-download auto-requeue threshold (KB/s)."""
+    return normalize_slow_requeue_kbps(
+        _load_prefs().get('slow_requeue_kbps'))
+
+
+def set_slow_requeue_kbps(value):
+    """Persist a clamped slow-download auto-requeue threshold for every client."""
+    normalized = normalize_slow_requeue_kbps(value)
+    try:
+        with _prefs_lock:
+            prefs = _load_prefs()
+            prefs['slow_requeue_kbps'] = normalized
             _save_prefs(prefs)
     except Exception:
         pass
