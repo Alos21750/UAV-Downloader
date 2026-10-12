@@ -38,7 +38,9 @@
 
 ## Three workflows, one download core
 
-### New in v3.2.0
+### New in v3.2.1
+
+Browser now closes safely during startup; background UI updates run on the main thread.
 
 - Generate subtitles for existing videos from Download → Subtitle Local Files.
 - Enable optional slow/stalled-download requeue in Settings (default off).

@@ -11,6 +11,7 @@ import time
 import shutil
 import webbrowser
 import threading
+import queue
 import concurrent.futures
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -1162,6 +1163,11 @@ def _fetch_thumbnail(url: str, site_key: str = '') -> Optional[Image.Image]:
 class ModernApp(ctk.CTk):
     def __init__(self, url: str = '', dest: str = 'download', lang: str = 'en'):
         super().__init__()
+        self._is_closing = False
+        self._startup_complete = False
+        self._close_requested = False
+        self._ui_callbacks = queue.SimpleQueue()
+        self.protocol('WM_DELETE_WINDOW', self._on_close)
 
         get_shared_ssl_context()
 
@@ -1183,7 +1189,6 @@ class ModernApp(ctk.CTk):
 
         self._dest = dest
         self._url_input = url
-        self._is_closing = False
         self._rebuilding = False
 
         # Browse state
@@ -1252,6 +1257,11 @@ class ModernApp(ctk.CTk):
         self._build_ui()
         self.bind('<Configure>', self._on_root_resize, add='+')
         self.protocol('WM_DELETE_WINDOW', self._on_close)
+        self._startup_complete = True
+        if self._close_requested:
+            self._on_close()
+            return
+        self.after(30, self._drain_ui_callbacks)
         # Start periodic refresh for downloads
         self._refresh_downloads()
         # Start clipboard monitor (main-thread safe)
@@ -1349,18 +1359,27 @@ class ModernApp(ctk.CTk):
         if gen is not None and gen != self._build_gen:
             return
 
-        def _run():
+        # No Tk calls from worker threads, even before mainloop or while
+        # CustomTkinter processes a close event during its startup update.
+        self._ui_callbacks.put((gen, fn))
+
+    def _drain_ui_callbacks(self):
+        for _ in range(64):
             if self._is_closing:
                 return
+            try:
+                gen, fn = self._ui_callbacks.get_nowait()
+            except queue.Empty:
+                break
             if gen is not None and gen != self._build_gen:
-                return
+                continue
             try:
                 fn()
             except tk.TclError:
                 pass
-
         try:
-            self.after(0, _run)
+            if not self._is_closing:
+                self.after(30, self._drain_ui_callbacks)
         except tk.TclError:
             pass
 
@@ -4509,6 +4528,9 @@ class ModernApp(ctk.CTk):
     # ── Close ────────────────────────────────────────────────────────
     def _on_close(self):
         self._is_closing = True
+        if not getattr(self, '_startup_complete', True):
+            self._close_requested = True
+            return
         if self._dl_drain_id:
             try:
                 self.after_cancel(self._dl_drain_id)
@@ -4536,5 +4558,12 @@ def gui_modern_main(url: str = '', dest: str = 'download', lang: str = 'en'):
     _crumb("gui_modern_main: constructing ModernApp")
     app = ModernApp(url=url, dest=dest, lang=lang)
     _crumb("gui_modern_main: app constructed, entering mainloop")
-    app.mainloop()
+    try:
+        if not app._is_closing:
+            app.mainloop()
+    except tk.TclError:
+        # CTk.mainloop calls update() while styling the Windows titlebar.
+        # A legitimate close handled during that update destroys the root.
+        if not app._is_closing:
+            raise
     _crumb("gui_modern_main: mainloop returned (normal exit)")

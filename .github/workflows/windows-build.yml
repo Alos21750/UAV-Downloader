@@ -113,7 +113,7 @@ jobs:
       - name: Verify executable metadata
         shell: pwsh
         run: |
-          $expected = "3.2.0.0"
+          $expected = "3.2.1.0"
           $files = @(
             "dist\UAV_Browser.exe",
             "dist\UAV_Watcher.exe",
