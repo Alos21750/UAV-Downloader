@@ -16,6 +16,7 @@ except Exception:
 import urllib.request
 import m3u8
 from uav_downloader.core import config
+from uav_downloader.core.storage import StorageWriteError, storage_open
 from Crypto.Cipher import AES
 from uav_downloader.core.config import headers
 import concurrent.futures
@@ -740,10 +741,12 @@ class M3U8Crawler:
         try:
             os.replace(src, dst)   # same volume: instant + atomic
             return True
-        except OSError:
-            pass
+        except OSError as exc:
+            import errno
+            if exc.errno != errno.EXDEV:
+                raise StorageWriteError(dst, exc) from exc
         try:
-            with open(src, 'rb') as fi, open(dst, 'wb') as fo:
+            with storage_open(src, 'rb') as fi, storage_open(dst, 'wb') as fo:
                 while True:
                     if self._cancel_job:
                         break
@@ -756,6 +759,8 @@ class M3U8Crawler:
             try: os.remove(dst)      # cancelled mid-copy
             except OSError: pass
             return False
+        except StorageWriteError:
+            raise
         except Exception:
             return False
 
@@ -781,7 +786,7 @@ class M3U8Crawler:
         published = False
         try:
             remaining = n
-            with open(merged, 'wb') as out:
+            with storage_open(merged, 'wb') as out:
                 for idx, ts_url in enumerate(self._tsList):
                     if self._cancel_job:
                         return 0
@@ -790,7 +795,7 @@ class M3U8Crawler:
                         if not self._cancel_job:
                             print(f"\n片段 {idx} 遺失, 合成失敗!!!", flush=True)
                         return 0
-                    with open(seg, 'rb') as f:
+                    with storage_open(seg, 'rb') as f:
                         shutil.copyfileobj(f, out, 1024 * 1024)
                     remaining -= 1
                     print(f'\r合成影片中, 剩餘 {remaining} 個片段', end="")
@@ -811,7 +816,10 @@ class M3U8Crawler:
                     try: os.remove(part)
                     except OSError: pass
                 return 0
-            os.replace(part, saveName)
+            try:
+                os.replace(part, saveName)
+            except OSError as exc:
+                raise StorageWriteError(saveName, exc) from exc
             published = True
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
@@ -874,6 +882,8 @@ class M3U8Crawler:
 
     def _scrape(self, task):
         """Download and decrypt one segment. task=(seq_num, url)"""
+        if self._cancel_job or getattr(self, '_storage_error', None):
+            return False
         seq_num, url = task
         saveName = self._seg_savename(seq_num)
         if os.path.exists(saveName):
@@ -896,7 +906,7 @@ class M3U8Crawler:
             if not _is_valid_ts_segment(content_ts):
                 return False
             speed_limiter.acquire(len(content_ts))
-            with open(saveName, 'wb') as f:
+            with storage_open(saveName, 'wb') as f:
                 f.write(content_ts)
             with self._speed_lock:
                 self._pending_set.discard((seq_num, url))
@@ -915,10 +925,14 @@ class M3U8Crawler:
                 if self._progress_callback:
                     self._progress_callback(done, self._job_total, speed)
             return True
+        except StorageWriteError as exc:
+            self._storage_error = exc
+            raise
         except Exception:
             return False
 
     def _startCrawl(self):
+        self._storage_error = None
         self._speed_start = time.time()
         self._bytes_downloaded = 0
         total = len(self._tsList)

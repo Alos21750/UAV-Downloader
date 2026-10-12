@@ -27,6 +27,7 @@ except Exception:
 
 from uav_downloader import sites as M3U8Sites
 from uav_downloader.core import config
+from uav_downloader.core.storage import StorageWriteError
 from uav_downloader.sites import base as M3U8Crawler
 
 
@@ -84,6 +85,10 @@ def main():
                 print(f"[失敗] 無法解析影片（版面改版 / 被 Cloudflare 阻擋 / 影片不存在）: {url}", flush=True); fail += 1; continue
             site.start_download()
             print(f"[完成] {url}", flush=True); ok += 1
+        except StorageWriteError as exc:
+            print(f'[Storage error] {url}: {exc}', flush=True)
+            fail += 1
+            break
         except Exception as exc:
             print(f"[錯誤] {url}: {exc}", flush=True); fail += 1
     print(f"\n===== 完成 {ok} 個，失敗 {fail} 個 =====", flush=True)

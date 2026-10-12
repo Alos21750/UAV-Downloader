@@ -22,6 +22,7 @@ import requests
 from PIL import Image
 
 from uav_downloader.core import config
+from uav_downloader.core.storage import StorageWriteError
 from uav_downloader import sites as M3U8Sites
 from uav_downloader.i18n import sites as site_i18n
 from uav_downloader.core import updater
@@ -442,6 +443,14 @@ class DownloadManager:
             self._complete_download(task, '已下載', progress=100)
         except Exception as exc:
             print(f'[下載失敗] {url}\n  {exc}', flush=True)
+            if isinstance(exc, StorageWriteError):
+                # No automatic queue advance or cleanup writes on a device
+                # that has just failed. The user must explicitly retry.
+                self.cancel_all(cleanup=False)
+                self._complete_download(task, '已取消')
+                with self._lock:
+                    self._set_state(url, '未完成', error=str(exc))
+                return
             if self._context_cancelled(task):
                 self._complete_download(task, '已取消')
             elif isinstance(exc, MirrorsBlockedError):
