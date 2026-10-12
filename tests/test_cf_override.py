@@ -18,6 +18,7 @@ def _m3u8_stub():
 _stub_runtime_dependency('m3u8', _m3u8_stub)
 
 from uav_downloader.core import config
+from uav_downloader.sites import base
 from uav_downloader.sites.base import fetch_with_mirrors
 
 
@@ -183,3 +184,86 @@ def test_fetch_with_mirrors_falls_back_to_plain_after_blocked_cookie_trial(tmp_p
     assert host is None
     assert reason == 'blocked'
     assert len(scraper.calls) == 2
+
+
+def _rate_limit_env(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, '_cf_store_path', lambda: str(tmp_path / 'cf.json'))
+    monkeypatch.setattr(config, 'MIRRORS', {'t': ['supjav.com']})
+    monkeypatch.setattr(config, 'RATE_LIMIT_WAITS', {'t': (10, 20)})
+    _reset_cf()
+    sleeps = []
+    monkeypatch.setattr(base.time, 'sleep', sleeps.append)
+    return sleeps
+
+
+def test_supjav_rate_limit_waits_are_configured():
+    assert config.RATE_LIMIT_WAITS['supjav']
+
+
+def test_fetch_with_mirrors_waits_out_rate_limit_on_same_host(tmp_path, monkeypatch):
+    sleeps = _rate_limit_env(monkeypatch, tmp_path)
+    scraper = FakeScraper([429, 200])
+
+    resp, host, reason = fetch_with_mirrors(
+        scraper, 'https://supjav.com/?s=x', 't', validate=lambda r: True)
+
+    assert reason == 'ok'
+    assert host == 'supjav.com'
+    assert resp.status_code == 200
+    assert sleeps == [10]
+    assert len(scraper.calls) == 2
+
+
+def test_fetch_with_mirrors_reports_blocked_after_rate_limit_waits_run_out(tmp_path, monkeypatch):
+    sleeps = _rate_limit_env(monkeypatch, tmp_path)
+    scraper = FakeScraper([429, 429, 429, 200])
+
+    resp, host, reason = fetch_with_mirrors(
+        scraper, 'https://supjav.com/?s=x', 't', validate=lambda r: True)
+
+    assert (resp, host, reason) == (None, None, 'blocked')
+    assert sleeps == [10, 20]
+    assert len(scraper.calls) == 3
+
+
+def test_fetch_with_mirrors_does_not_wait_on_403_or_unlisted_sites(tmp_path, monkeypatch):
+    sleeps = _rate_limit_env(monkeypatch, tmp_path)
+    scraper = FakeScraper([403])
+    assert fetch_with_mirrors(
+        scraper, 'https://supjav.com/1.html', 't', validate=lambda r: True)[2] == 'blocked'
+    assert sleeps == []
+
+    monkeypatch.setattr(config, 'RATE_LIMIT_WAITS', {})
+    scraper = FakeScraper([429])
+    assert fetch_with_mirrors(
+        scraper, 'https://supjav.com/1.html', 't', validate=lambda r: True)[2] == 'blocked'
+    assert sleeps == []
+    assert len(scraper.calls) == 1
+
+
+class FlakyScraper(FakeScraper):
+    def __init__(self, failures):
+        super().__init__()
+        self.failures = failures
+
+    def get(self, url, **kwargs):
+        if self.failures:
+            self.failures -= 1
+            self.calls.append(('error', None))
+            raise ConnectionError('reset')
+        return super().get(url, **kwargs)
+
+
+def test_fetch_with_mirrors_retries_one_transport_error_only(tmp_path, monkeypatch):
+    sleeps = _rate_limit_env(monkeypatch, tmp_path)
+
+    scraper = FlakyScraper(failures=1)
+    assert fetch_with_mirrors(
+        scraper, 'https://supjav.com/1.html', 't', validate=lambda r: True)[2] == 'ok'
+    assert len(scraper.calls) == 2
+
+    scraper = FlakyScraper(failures=5)
+    assert fetch_with_mirrors(
+        scraper, 'https://supjav.com/1.html', 't', validate=lambda r: True)[2] == 'blocked'
+    assert len(scraper.calls) == 2
+    assert sleeps == []
