@@ -42,10 +42,30 @@ Check Now performs one immediate scan without creating a duplicate schedule.
 The activity panel can remain collapsed while idle and opened only when a log
 is needed.
 
+Initial and scheduled scans have no fixed page cap. Watcher keeps scanning until
+the listing ends, the baseline date is reached, a scheduled check reaches a
+fully seen page, or the site repeats a listing page. Cancellation stays available
+during scanning, and detail requests retain their existing pacing.
+
+Choose **All versions** to retain every distinct version of a release (standard,
+Chinese subtitles, English subtitles, uncensored, or reduced mosaic). Identical
+versions still deduplicate across categories and sites. Changing the version
+preference triggers a fresh scan from the baseline so previously skipped
+versions can be reconsidered, while successful downloads stay recorded.
+In All versions mode, files go into `versions/<version-kind>/` underneath each
+site's configured destination; combined variants use a name such as
+`chinese-subtitle+uncensored`. These separate folders prevent versions with the
+same code-only filename from overwriting or suppressing each other.
+
 MissAV downloads use at most 4 segment requests per video and 8 across all
 active MissAV videos. If a transient CDN failure leaves a few segments missing,
 UAV Watcher keeps validated chunks, leaves the run pending, and resumes only
 the missing segments on the next check.
+
+Destination storage errors (including a full disk or device I/O failure) stop
+monitoring immediately. The affected video stays pending and validated chunks
+are preserved. Check available space and device health, then explicitly start
+monitoring again; storage failures do not enter the scheduled network-retry loop.
 
 ## Deduplication and state
 

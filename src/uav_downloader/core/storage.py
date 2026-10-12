@@ -1,6 +1,15 @@
 """Identify destination I/O failures separately from retryable transport errors."""
 
 import errno
+import re
+
+
+def storage_failure_message(message):
+    return bool(re.search(
+        r'no space left|disk (?:is )?full|input/output error|i/o error|'
+        r'device (?:is )?not ready|no such device|device not connected|'
+        r'error (?:writing|closing)|failed to (?:write|flush)',
+        str(message), re.IGNORECASE))
 
 
 class StorageWriteError(OSError):
@@ -43,6 +52,9 @@ class _StorageFile:
 
     def truncate(self, *args):
         return self._io('truncate', *args)
+
+    def flush(self):
+        return self._io('flush')
 
     def __getattr__(self, name):
         return getattr(self.file, name)

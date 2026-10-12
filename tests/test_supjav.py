@@ -321,6 +321,268 @@ def test_is_url_vaildate_accepts_direct_url_source():
     assert s.is_url_vaildate() is True
 
 
+def _source_scraper(monkeypatch, name, body, embed_url):
+    page = _FakeResp(text=f'<h1>Test video</h1><a class="btn-server" data-link="abc">{name}</a>')
+
+    class Scraper:
+        calls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return _FakeResp(text=body, url=embed_url)
+
+    scraper = Scraper()
+    monkeypatch.setattr(supjav_mod, '_make_scraper', lambda: scraper)
+    monkeypatch.setattr(supjav_mod, 'fetch_with_mirrors', lambda *a, **k: (page, 'supjav.com', 'ok'))
+    return scraper
+
+
+@pytest.mark.parametrize('name,embed_url', [
+    ('EVS', 'https://evsishere.xyz/embed/video'),
+    ('LUC', 'https://luminscdn.xyz/e/video'),
+])
+def test_new_packed_sources_work_without_legacy_servers(monkeypatch, name, embed_url):
+    assert SiteSupJav.validate_url('https://supjav.com/462685.html') == '462685'
+    _source_scraper(monkeypatch, name, '<script>eval(function /* m3u8 */)</script>', embed_url)
+    monkeypatch.setattr(supjav_mod, '_unpack_js_eval', lambda _: 'sources:[{file:"https://cdn.example/master.m3u8?token=signed&x=2"}]')
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._url = 'https://supjav.com/462685.html'
+    crawler.get_url_infos()
+    assert crawler.is_url_vaildate()
+    assert crawler._m3u8url == 'https://cdn.example/master.m3u8?token=signed&x=2'
+    assert crawler._extra_headers == {'Referer': embed_url, 'Origin': 'https://' + embed_url.split('/')[2]}
+
+
+def test_vas_uses_same_origin_stream_api_and_preserves_signed_url(monkeypatch):
+    scraper = _source_scraper(monkeypatch, 'VAS', 'let apiURL="/api/stream";', 'https://vvaassjjav.xyz/e/abc123?lang=en#supjav')
+    posted = []
+
+    def post(url, **kwargs):
+        posted.append((url, kwargs))
+        return _FakeResp(text='{"streaming_url":"https://cdn.example/master.m3u8?token=x&expires=123"}')
+
+    scraper.post = post
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._url = 'https://supjav.com/462685.html'
+    crawler.get_url_infos()
+    assert crawler._m3u8url.endswith('?token=x&expires=123')
+    assert posted[0][0] == 'https://vvaassjjav.xyz/api/stream?lang=en'
+    assert posted[0][1]['json'] == {'filecode': 'abc123', 'device': 'web', 'codecs': []}
+    assert posted[0][1]['headers']['Origin'] == 'https://vvaassjjav.xyz'
+    assert posted[0][1]['allow_redirects'] is False
+
+
+def test_voe_config_decoder_ignores_decoy_video_url():
+    import base64, codecs, json
+    expected = 'https://cdn.example/hls/master.m3u8?token=abc&x=1'
+    config = json.dumps({'source': expected})
+    reversed_b64 = base64.b64encode(config.encode()).decode()[::-1]
+    shifted = ''.join(chr(ord(c) + 3) for c in reversed_b64)
+    encoded = codecs.encode(base64.b64encode(shifted.encode()).decode(), 'rot13')
+    noisy = '@$'.join(encoded[i:i+4] for i in range(0, len(encoded), 4))
+    body = '<script>var source="https://test-videos.co.uk/decoy.mp4";</script>'
+    body += '<script type="application/json">' + json.dumps([noisy]) + '</script>'
+    assert supjav_mod._extract_voe_m3u8(body) == expected
+    assert supjav_mod._extract_voe_m3u8('<script type="application/json">["invalid"]</script>') is None
+
+
+@pytest.mark.parametrize('url', [
+    'file:///video/master.m3u8', 'http://cdn.example/master.m3u8',
+    'https://user:secret@cdn.example/master.m3u8',
+    'https://localhost/master.m3u8', 'https://sub.localhost/master.m3u8',
+    'https://device.local/master.m3u8', 'https://nas.internal/master.m3u8',
+    'https://127.0.0.1/master.m3u8', 'https://127.0.0.1./master.m3u8',
+    'https://10.1.2.3/master.m3u8', 'https://192.168.0.1/master.m3u8',
+    'https://169.254.169.254/master.m3u8', 'https://[::1]/master.m3u8',
+    'https://[fc00::1]/master.m3u8', 'https://2130706433/master.m3u8',
+    'https://127.1/master.m3u8', 'https://0x7f.0.0.1/master.m3u8',
+    'https://ｌｏｃａｌｈｏｓｔ/master.m3u8',
+])
+def test_supjav_hls_rejects_credentials_and_local_destinations(url):
+    assert supjav_mod._valid_hls_url(url) is None
+
+
+def test_vas_rejects_private_embed_before_stream_api_post(monkeypatch):
+    scraper = _source_scraper(monkeypatch, 'VAS', 'let apiURL="/api/stream";', 'https://127.0.0.1/e/abc123')
+    scraper.post = lambda *a, **k: pytest.fail('must not POST to local API')
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._url = 'https://supjav.com/462685.html'
+    with pytest.raises(Exception, match='無可用下載來源'):
+        crawler.get_url_infos()
+
+
+def test_voe_does_not_follow_private_literal_redirect(monkeypatch):
+    body = "<script>window.location.href='https://127.0.0.1/e/video';</script>"
+    scraper = _source_scraper(monkeypatch, 'VOE', body, 'https://voe.sx/e/video')
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    assert crawler._resolve_server(scraper, 'VOE', 'abc')[0] is None
+    assert len(scraper.calls) == 1
+
+
+def test_supjav_http_redirect_rejects_local_location_before_fetch(monkeypatch):
+    scraper = _source_scraper(monkeypatch, 'EVS', '', 'https://lk1.supremejav.com/supjav.php?c=cba')
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        return _FakeResp(status_code=302, headers={'Location':'https://127.0.0.1/e/video'}, url=url)
+
+    scraper.get = get
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    with pytest.raises(ValueError):
+        crawler._resolve_server(scraper, 'EVS', 'abc')
+    assert len(calls) == 1
+    assert calls[0][1]['allow_redirects'] is False
+
+
+def test_supjav_embed_http_redirect_loop_is_bounded(monkeypatch):
+    scraper = _source_scraper(monkeypatch, 'EVS', '', 'https://embed.example/e/video')
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append(url)
+        return _FakeResp(status_code=302, headers={'Location':'/e/video'}, url=url)
+
+    scraper.get = get
+    with pytest.raises(ValueError, match='Too many'):
+        SiteSupJav.__new__(SiteSupJav)._resolve_server(scraper, 'EVS', 'abc')
+    assert len(calls) == 6
+
+
+def test_new_hls_sources_fallback_without_streamtape(monkeypatch):
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._m3u8url = 'https://evs.example/master.m3u8'
+    crawler._extra_headers = {'Referer': 'https://evs.example/embed/video'}
+    crawler._hls_sources = [
+        ('EVS', crawler._m3u8url, crawler._extra_headers),
+        ('VAS', 'https://vas.example/master.m3u8', {'Referer': 'https://vas.example/e/video'}),
+    ]
+    crawler._direct_url = None
+    crawler._cancel_job = False
+    attempts = []
+    cleaned = []
+
+    def download(self):
+        attempts.append((self._m3u8url, self._extra_headers))
+        if len(attempts) == 1:
+            raise RuntimeError('dead CDN')
+        return True
+
+    monkeypatch.setattr(M3U8Crawler, 'start_download', download)
+    crawler.cleanup_temp = lambda: cleaned.append(True)
+    assert crawler.start_download() is True
+    assert len(attempts) == 2
+    assert attempts[1][1] == {'Referer': 'https://vas.example/e/video'}
+    assert cleaned == [True]
+
+
+def test_blocked_source_resolution_does_not_mask_new_fallback(monkeypatch):
+    _source_scraper(monkeypatch, 'EVS', '', 'https://evs.example/embed/video')
+    page = _FakeResp(text='<h1>Test</h1><a class="btn-server" data-link="a">EVS</a><a class="btn-server" data-link="b">VAS</a>')
+    monkeypatch.setattr(supjav_mod, 'fetch_with_mirrors', lambda *a, **k: (page, 'supjav.com', 'ok'))
+    attempted = []
+
+    def resolve(self, scraper, name, link):
+        attempted.append(name)
+        if name == 'EVS':
+            raise crawler_mod.MirrorsBlockedError('upstream blocked')
+        return 'https://cdn.example/master.m3u8', {'Referer': 'https://vas.example/e/video'}
+
+    monkeypatch.setattr(SiteSupJav, '_resolve_server', resolve)
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._url = 'https://supjav.com/462685.html'
+    crawler.get_url_infos()
+    assert attempted == ['EVS', 'VAS']
+    assert crawler._hls_sources[0][0] == 'VAS'
+
+
+def test_voe_literal_redirect_is_bounded_and_uses_new_embed_referer(monkeypatch):
+    scraper = _source_scraper(monkeypatch, 'VOE', '', 'https://voe.sx/e/video')
+    calls = []
+    redirect_page = "<script>window.location.href='https://voe-alternate.example/e/video';</script>"
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        if len(calls) == 1:
+            return _FakeResp(text=redirect_page, url='https://voe.sx/e/video')
+        return _FakeResp(text='encoded-player', url='https://voe-alternate.example/e/video')
+
+    scraper.get = get
+    monkeypatch.setattr(supjav_mod, '_extract_voe_m3u8', lambda body: 'https://cdn.example/master.m3u8' if body == 'encoded-player' else None)
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._url = 'https://supjav.com/462685.html'
+    crawler.get_url_infos()
+    assert len(calls) == 2
+    assert calls[1][1]['headers']['Referer'] == 'https://voe.sx/e/video'
+    assert crawler._extra_headers['Referer'] == 'https://voe-alternate.example/e/video'
+
+
+def test_cancelled_hls_does_not_try_another_provider(monkeypatch):
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._m3u8url = 'https://cdn.example/master.m3u8'
+    crawler._hls_sources = [('EVS', crawler._m3u8url, {}), ('VAS', 'https://other.example/master.m3u8', {})]
+    crawler._cancel_job = True
+    attempts = []
+    monkeypatch.setattr(M3U8Crawler, 'start_download', lambda self: attempts.append(True) or False)
+    assert crawler.start_download() is False
+    assert attempts == [True]
+
+
+def test_supjav_luc_encrypted_segment_decrypts_before_ts_transform(monkeypatch, tmp_path):
+    import time
+    from Crypto.Cipher import AES
+    key = b'0123456789abcdef'
+    plain = (b'\x47' + b'\x11' * 187) * 4
+    encrypted = AES.new(key, AES.MODE_CBC, bytes(16)).encrypt(plain)
+    assert encrypted[:1] != b'\x47'
+    url = 'https://cdn.example/luc/segment.ts'
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._cancel_job = False
+    crawler._storage_error = None
+    crawler._temp_folder = str(tmp_path)
+    crawler._extra_headers = {}
+    crawler._key_content = key
+    crawler._key_iv = None
+    crawler._media_sequence = 0
+    crawler._speed_lock = threading.Lock()
+    crawler._pending_set = {(0, url)}
+    crawler._bytes_downloaded = 0
+    crawler._speed_start = time.time()
+    crawler._job_total = 1
+    crawler._progress_callback = None
+    monkeypatch.setattr(crawler_mod, '_http_get', lambda *a, **k: _FakeResp(content=encrypted))
+    monkeypatch.setattr(crawler_mod.speed_limiter, 'acquire', lambda _: None)
+    assert crawler._scrape((0, url)) is True
+    assert (tmp_path / '000000.mp4').read_bytes() == plain
+    assert not crawler._pending_set
+
+
+def test_supjav_source_fallback_stops_for_storage_failure(monkeypatch):
+    from uav_downloader.core.storage import StorageWriteError
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._m3u8url = 'https://cdn.example/master.m3u8'
+    crawler._extra_headers = {}
+    crawler._hls_sources = [('EVS', crawler._m3u8url, {}), ('LUC', 'https://other.example/master.m3u8', {})]
+    crawler._direct_url = 'https://streamtape.com/get_video?id=test'
+    crawler._cancel_job = False
+    attempts = []
+
+    def fail(self):
+        attempts.append(True)
+        raise StorageWriteError('video.mp4', OSError(28, 'disk full'))
+
+    monkeypatch.setattr(M3U8Crawler, 'start_download', fail)
+    with pytest.raises(StorageWriteError):
+        crawler.start_download()
+    assert attempts == [True]
+
+
 def test_direct_download_uses_parallel_ranges_and_assembles_file(monkeypatch, tmp_path):
     payload = bytes(range(256)) * 1024
     calls = []

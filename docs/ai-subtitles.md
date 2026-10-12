@@ -63,6 +63,21 @@ meaning in short commands.
 
 Google and other quota-limited public translation endpoints are not used.
 
+### Why Japanese → English → Traditional Chinese?
+
+For Traditional Chinese, recognition produces Japanese cues, FuguMT translates
+them into English, and OPUS-MT translates English into Chinese before OpenCC
+normalizes the script and local terminology is applied. English output stops
+after the first translation. Timing stays attached to the original cues.
+
+These compact, pinned INT8 models provide a reproducible CPU-only baseline and
+reuse the same English stage for both output languages. A pivot can accumulate
+translation errors; this is a practical packaging choice, not a claim that it
+outperforms every direct Japanese-to-Chinese model. A replacement requires
+comparable dialogue-quality, CPU-memory, licensing and timing validation.
+Users can already select a local OpenAI-compatible LLM such as Ollama, or an
+external LLM API, to translate directly into the requested language.
+
 ## Optional LLM APIs
 
 Users may instead configure OpenAI, Anthropic, Gemini, or an

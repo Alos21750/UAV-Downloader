@@ -1,449 +1,397 @@
+"""Slow-transfer monitoring, identity guards, and watchdog lifecycle."""
 import json
-import sys
 import threading
 import time
 import types
 
+import pytest
 
-def _stub_runtime_dependency(name, factory=None):
-    try:
-        __import__(name)
-    except ImportError:
-        sys.modules[name] = factory() if factory else types.ModuleType(name)
-
-
-def _cloudscraper_stub():
-    mod = types.ModuleType('cloudscraper')
-    mod.create_scraper = lambda *args, **kwargs: None
-    return mod
-
-
-def _m3u8_stub():
-    mod = types.ModuleType('m3u8')
-    mod.load = lambda *args, **kwargs: None
-    return mod
-
-
-def _customtkinter_stub():
-    mod = types.ModuleType('customtkinter')
-
-    class CTk:
-        pass
-
-    mod.CTk = CTk
-    mod.CTkLabel = CTk
-    return mod
-
-
-_stub_runtime_dependency('cloudscraper', _cloudscraper_stub)
-_stub_runtime_dependency('m3u8', _m3u8_stub)
-_stub_runtime_dependency('customtkinter', _customtkinter_stub)
-
+from uav_downloader.apps import browse
+from uav_downloader.apps.browse import DownloadManager, _DownloadTask
 from uav_downloader.core import config
-from uav_downloader.apps import browse as gui_modern
-from uav_downloader.apps.browse import (
-    DownloadManager,
-    SLOW_REQUEUE_GRACE_SECONDS,
-    SLOW_REQUEUE_MAX_ATTEMPTS,
-    _DownloadTask,
-)
 from uav_downloader.i18n.locales import T
-from uav_downloader.sites import base as sites_base
-
+from uav_downloader.sites import base
 
 URL = 'https://supjav.com/slow-requeue.html'
-DEST = r'C:\Videos'
-SLOW_BPS = 500 * 1024      # 500 KB/s
-THRESHOLD_KBPS = 750       # KB/s
+DEST = 'download'
+KB = 1024
 
 
-def _active_task(manager, now, total=100):
-    """Register a fresh, already-active task for URL and return it.
+@pytest.fixture
+def clock(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(browse.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(base.speed_limiter, '_limit_bps', 0)
+    return now
 
-    `download_started`/`prev_total` are poked directly to simulate a task
-    already past its first progress tick with a stable `total`, matching
-    the `total` the test's own `_on_context_progress` calls will pass.
-    """
+
+def active(clock, threshold=750, state='下載中'):
+    manager = DownloadManager(slow_requeue_kbps_getter=lambda: threshold)
+    item = manager.add_item(URL, dest=DEST, state=state)
     task = _DownloadTask(URL, DEST, manager._cancel_epoch)
-    task.download_started = now
-    task.prev_total = total
+    task.job = types.SimpleNamespace(_bytes_downloaded=0)
+    task.download_started = task.window_started = clock[0]
+    manager._active[URL] = task
+    return manager, item, task
+
+
+def check(manager, task, now):
     with manager._lock:
-        manager._active[URL] = task
-    return task
+        return manager._check_slow_requeue_locked(task, now)
 
 
-def test_slow_after_grace_triggers_one_restart_and_increments_counter(
-        monkeypatch):
-    now = [1000.0]
-    monkeypatch.setattr(gui_modern.time, 'monotonic', lambda: now[0])
-    manager = DownloadManager(
-        max_concurrent=1, slow_requeue_kbps_getter=lambda: THRESHOLD_KBPS)
-    item = manager.add_item(URL, dest=DEST, state='下載中')
-    task = _active_task(manager, now[0])
+def advance(clock, task, seconds=60, speed=0):
+    clock[0] += seconds
+    task.transferred_bytes += speed * seconds
+    task.job._bytes_downloaded = task.transferred_bytes
 
-    restart_calls = []
-    restart_done = threading.Event()
 
-    def fake_restart(url, dest, automatic=False):
-        restart_calls.append((url, dest, automatic))
-        restart_done.set()
-        return True
+def test_completed_progress_never_requests_automatic_restart(clock, monkeypatch):
+    manager, item, task = active(clock)
+    calls = []
+    monkeypatch.setattr(manager, 'restart', lambda *a, **k: calls.append((a, k)))
+    clock[0] += 61
+    task.job._bytes_downloaded = 100 * KB * 61
+    manager._on_context_progress(task, 2, 2, 100 * KB)
+    assert not calls
+    assert item.auto_requeues == 0
+    assert task.transfer_complete
+    assert not check(manager, task, clock[0] + 600)
 
-    monkeypatch.setattr(manager, 'restart', fake_restart)
 
-    now[0] += SLOW_REQUEUE_GRACE_SECONDS + 1
-    manager._on_context_progress(task, 1, 100, SLOW_BPS)
+def test_completion_after_decision_is_rechecked_before_cancel(clock):
+    manager, item, task = active(clock)
+    advance(clock, task)
+    assert check(manager, task, clock[0])
+    manager._on_context_progress(task, 100, 100, 0)
+    assert not manager.restart(URL, DEST, automatic=True, expected_task=task)
+    assert not task.cancelled.is_set()
+    assert item.auto_requeues == 0
 
-    assert restart_done.wait(1)
-    assert restart_calls == [(URL, DEST, True)]
+
+def test_delayed_automatic_restart_cannot_cancel_replacement(clock, monkeypatch):
+    manager, item, old = active(clock)
+    monkeypatch.setattr(manager, '_start_download_thread', lambda task: None)
+    assert manager.restart(URL, DEST)
+    manager._complete_download(old, '已取消')
+    replacement = manager._active[URL]
+    assert not manager.restart(URL, DEST, automatic=True, expected_task=old)
+    assert not replacement.cancelled.is_set()
+    assert item.auto_requeues == 0
+
+
+@pytest.mark.parametrize('guard', ['cancel', 'epoch', 'complete', 'stop', 'storage'])
+def test_automatic_restart_rechecks_task_guards(clock, guard):
+    manager, item, task = active(clock)
+    if guard == 'cancel':
+        task.cancelled.set()
+    elif guard == 'epoch':
+        manager._cancel_epoch += 1
+    elif guard == 'complete':
+        task.transfer_complete = True
+    elif guard == 'stop':
+        task.monitor_stop.set()
+    else:
+        task.job._storage_error = RuntimeError('disk disconnected')
+    assert not manager.restart(URL, DEST, automatic=True, expected_task=task)
+    assert item.auto_requeues == 0
+
+
+@pytest.mark.parametrize('state', ['準備中', '字幕準備中', '字幕辨識中', '已下載'])
+def test_monitor_never_requeues_preparation_subtitle_or_finished_rows(clock, state):
+    manager, item, task = active(clock, state=state)
+    advance(clock, task)
+    assert not check(manager, task, clock[0])
+    assert not manager.restart(URL, DEST, automatic=True, expected_task=task)
+    assert item.auto_requeues == 0
+
+
+def test_slow_initial_window_requests_only_one_restart(clock):
+    manager, item, task = active(clock)
+    advance(clock, task, seconds=59, speed=100 * KB)
+    assert not check(manager, task, clock[0])
+    advance(clock, task, seconds=1, speed=100 * KB)
+    assert check(manager, task, clock[0])
+    assert not check(manager, task, clock[0] + 120)
+    assert item.auto_requeues == 0
+    assert manager.restart(URL, DEST, automatic=True, expected_task=task)
     assert item.auto_requeues == 1
-    assert task.slow_requeue_checked is True
-
-    # A second slow tick on the SAME task must not fire a second restart.
-    manager._on_context_progress(task, 2, 100, SLOW_BPS)
-    assert restart_calls == [(URL, DEST, True)]
 
 
-def test_no_restart_when_threshold_disabled(monkeypatch):
-    now = [1000.0]
-    monkeypatch.setattr(gui_modern.time, 'monotonic', lambda: now[0])
-    manager = DownloadManager(
-        max_concurrent=1, slow_requeue_kbps_getter=lambda: 0)
-    manager.add_item(URL, dest=DEST, state='下載中')
-    task = _active_task(manager, now[0])
-    restart_calls = []
-    monkeypatch.setattr(
-        manager, 'restart',
-        lambda url, dest, automatic=False: restart_calls.append(1))
-
-    now[0] += SLOW_REQUEUE_GRACE_SECONDS + 1
-    manager._on_context_progress(task, 1, 100, SLOW_BPS)
-
-    assert restart_calls == []
-    # Still judged exactly once (threshold=0 just means "skip"), so a later
-    # tick must not re-read the getter or re-evaluate.
-    assert task.slow_requeue_checked is True
+def test_fast_then_slow_uses_recent_bytes_not_lifetime_average(clock):
+    manager, item, task = active(clock)
+    advance(clock, task, speed=10 * 1024 * KB)
+    assert not check(manager, task, clock[0])
+    advance(clock, task, speed=100 * KB)
+    assert task.transferred_bytes / 120 > 750 * KB
+    assert check(manager, task, clock[0])
 
 
-def test_no_restart_before_grace_elapses(monkeypatch):
-    now = [1000.0]
-    monkeypatch.setattr(gui_modern.time, 'monotonic', lambda: now[0])
-    manager = DownloadManager(
-        max_concurrent=1, slow_requeue_kbps_getter=lambda: THRESHOLD_KBPS)
-    manager.add_item(URL, dest=DEST, state='下載中')
-    task = _active_task(manager, now[0])
-    restart_calls = []
-    monkeypatch.setattr(
-        manager, 'restart',
-        lambda url, dest, automatic=False: restart_calls.append(1))
-
-    now[0] += SLOW_REQUEUE_GRACE_SECONDS - 1
-    manager._on_context_progress(task, 1, 100, SLOW_BPS)
-
-    assert restart_calls == []
-    assert task.slow_requeue_checked is False
+def test_fully_stalled_download_is_detected_without_any_progress_callback(clock):
+    manager, item, task = active(clock)
+    clock[0] += 60
+    assert task.prev_total is None
+    assert check(manager, task, clock[0])
 
 
-def test_no_restart_when_speed_meets_threshold(monkeypatch):
-    now = [1000.0]
-    monkeypatch.setattr(gui_modern.time, 'monotonic', lambda: now[0])
-    manager = DownloadManager(
-        max_concurrent=1, slow_requeue_kbps_getter=lambda: THRESHOLD_KBPS)
-    manager.add_item(URL, dest=DEST, state='下載中')
-    task = _active_task(manager, now[0])
-    restart_calls = []
-    monkeypatch.setattr(
-        manager, 'restart',
-        lambda url, dest, automatic=False: restart_calls.append(1))
-
-    now[0] += SLOW_REQUEUE_GRACE_SECONDS + 1
-    manager._on_context_progress(task, 1, 100, THRESHOLD_KBPS * 1024)
-
-    assert restart_calls == []
-    # A fast-enough download is still judged exactly once; it must not be
-    # re-evaluated even if it later happens to run slower.
-    assert task.slow_requeue_checked is True
+def test_stall_after_fast_window_is_detected(clock):
+    manager, item, task = active(clock)
+    advance(clock, task, speed=4 * 1024 * KB)
+    assert not check(manager, task, clock[0])
+    advance(clock, task)
+    assert check(manager, task, clock[0])
 
 
-def test_threshold_preference_is_read_once_per_task_after_grace(monkeypatch):
-    now = [1000.0]
-    monkeypatch.setattr(gui_modern.time, 'monotonic', lambda: now[0])
-    reads = []
-
-    def getter():
-        reads.append(1)
-        return THRESHOLD_KBPS
-
-    manager = DownloadManager(max_concurrent=1, slow_requeue_kbps_getter=getter)
-    manager.add_item(URL, dest=DEST, state='下載中')
-    task = _active_task(manager, now[0])
-
-    for tick in range(5):
-        manager._on_context_progress(task, tick, 100, THRESHOLD_KBPS * 2048)
-    assert reads == []   # still inside the grace period
-
-    now[0] += SLOW_REQUEUE_GRACE_SECONDS + 1
-    for tick in range(5):
-        manager._on_context_progress(task, tick, 100, THRESHOLD_KBPS * 2048)
-    assert reads == [1]
+def test_default_off_and_enabling_later_take_effect_at_next_window(clock):
+    threshold = [0]
+    manager, item, task = active(clock)
+    manager._slow_requeue_kbps_getter = lambda: threshold[0]
+    advance(clock, task)
+    assert not check(manager, task, clock[0])
+    threshold[0] = 750
+    advance(clock, task)
+    assert check(manager, task, clock[0])
 
 
-def test_total_change_after_grace_resets_clock_and_does_not_trigger(
-        monkeypatch):
-    now = [1000.0]
-    monkeypatch.setattr(gui_modern.time, 'monotonic', lambda: now[0])
-    manager = DownloadManager(
-        max_concurrent=1, slow_requeue_kbps_getter=lambda: THRESHOLD_KBPS)
-    manager.add_item(URL, dest=DEST, state='下載中')
-    task = _active_task(manager, now[0], total=100)  # e.g. HLS segment count
-    restart_calls = []
-    monkeypatch.setattr(
-        manager, 'restart',
-        lambda url, dest, automatic=False: restart_calls.append(1))
-
-    now[0] += SLOW_REQUEUE_GRACE_SECONDS + 1
-    # The job's speed window changes mid-download (e.g. SupJav falling
-    # back from HLS to a direct MP4): total flips from a segment count to
-    # a byte count, so the grace clock restarts and stays unchecked.
-    manager._on_context_progress(task, 1, 5_000_000, SLOW_BPS)
-
-    assert restart_calls == []
-    assert task.slow_requeue_checked is False
-    assert task.prev_total == 5_000_000
-    assert task.download_started == now[0]
-
-    # Right after the reset, the new grace period has not elapsed yet even
-    # though the old start time was already far in the past.
-    manager._on_context_progress(task, 2, 5_000_000, SLOW_BPS)
-
-    assert restart_calls == []
-    assert task.slow_requeue_checked is False
+def test_speed_limit_suppresses_monitor_and_resets_window(clock, monkeypatch):
+    manager, item, task = active(clock)
+    monkeypatch.setattr(base.speed_limiter, '_limit_bps', 100 * KB)
+    advance(clock, task)
+    assert not check(manager, task, clock[0])
+    monkeypatch.setattr(base.speed_limiter, '_limit_bps', 0)
+    advance(clock, task, speed=1000 * KB)
+    assert not check(manager, task, clock[0])
 
 
-def test_no_restart_when_global_speed_cap_active(monkeypatch):
-    now = [1000.0]
-    monkeypatch.setattr(gui_modern.time, 'monotonic', lambda: now[0])
-    monkeypatch.setattr(sites_base.speed_limiter, '_limit_bps', 900_000)
-    manager = DownloadManager(
-        max_concurrent=1, slow_requeue_kbps_getter=lambda: THRESHOLD_KBPS)
-    manager.add_item(URL, dest=DEST, state='下載中')
-    task = _active_task(manager, now[0])
-    restart_calls = []
-    monkeypatch.setattr(
-        manager, 'restart',
-        lambda url, dest, automatic=False: restart_calls.append(1))
+@pytest.mark.parametrize('change', ['disabled', 'cap'])
+def test_option_changes_after_decision_prevent_delayed_restart(clock, monkeypatch, change):
+    manager, item, task = active(clock)
+    advance(clock, task)
+    assert check(manager, task, clock[0])
+    if change == 'disabled':
+        manager._slow_requeue_kbps_getter = lambda: 0
+    else:
+        monkeypatch.setattr(base.speed_limiter, '_limit_bps', 100 * KB)
+    assert not manager._restart_slow_download(task)
+    assert not task.cancelled.is_set()
+    assert item.auto_requeues == 0
+    assert not task.slow_requeue_checked
+    monkeypatch.setattr(base.speed_limiter, '_limit_bps', 0)
+    manager._slow_requeue_kbps_getter = lambda: 750
+    advance(clock, task)
+    assert check(manager, task, clock[0])
 
-    now[0] += SLOW_REQUEUE_GRACE_SECONDS + 1
-    manager._on_context_progress(task, 1, 100, SLOW_BPS)
 
-    assert restart_calls == []
-    assert task.slow_requeue_checked is True
+def test_exact_threshold_is_not_slow(clock):
+    manager, item, task = active(clock)
+    advance(clock, task, speed=750 * KB)
+    assert not check(manager, task, clock[0])
 
 
-def test_exhausted_after_max_attempts_flags_item_and_keeps_downloading(
-        monkeypatch):
-    now = [1000.0]
-    monkeypatch.setattr(gui_modern.time, 'monotonic', lambda: now[0])
-    manager = DownloadManager(
-        max_concurrent=1, slow_requeue_kbps_getter=lambda: THRESHOLD_KBPS)
-    item = manager.add_item(URL, dest=DEST, state='下載中')
-    restart_calls = []
-    monkeypatch.setattr(
-        manager, 'restart',
-        lambda url, dest, automatic=False: restart_calls.append(automatic)
-        or True)
+def test_hls_callback_samples_exact_bytes(clock, monkeypatch):
+    manager, item, task = active(clock)
+    calls = []
+    monkeypatch.setattr(manager, 'restart', lambda *a, **k: calls.append(k))
+    advance(clock, task, speed=1000 * KB)
+    manager._on_context_progress(task, 10, 100, 1)
+    assert not calls
+    assert task.window_bytes == 1000 * KB * 60
+    advance(clock, task, speed=100 * KB)
+    manager._on_context_progress(task, 20, 100, 1000 * KB)
+    assert _poll(lambda: len(calls) == 1)
+    assert calls == [{'automatic': True, 'expected_task': task}]
 
-    for _ in range(SLOW_REQUEUE_MAX_ATTEMPTS):
-        now[0] += SLOW_REQUEUE_GRACE_SECONDS + 1
-        task = _active_task(manager, now[0] - SLOW_REQUEUE_GRACE_SECONDS - 1)
-        manager._on_context_progress(task, 1, 100, SLOW_BPS)
 
-    assert len(restart_calls) == SLOW_REQUEUE_MAX_ATTEMPTS
-    assert item.auto_requeues == SLOW_REQUEUE_MAX_ATTEMPTS
-    assert item.error == ''
+def test_supjav_hls_with_st_fallback_uses_exact_hls_bytes(clock, monkeypatch):
+    manager, item, task = active(clock)
+    task.job._direct_url = 'https://streamtape.example/fallback.mp4'
+    task.job._progress_unit = 'segments'
+    task.monitor_unit = 'segments'
+    calls = []
+    monkeypatch.setattr(manager, 'restart', lambda *a, **k: calls.append(k))
+    advance(clock, task, speed=1000 * KB)
+    manager._on_context_progress(task, 10, 100, 1)
+    assert not calls
+    assert task.transferred_bytes == 1000 * KB * 60
 
-    # A fourth slow episode (fresh task, as a real restart would produce)
-    # must not restart again, but must flag the item while it keeps
-    # downloading.
-    now[0] += SLOW_REQUEUE_GRACE_SECONDS + 1
-    task4 = _active_task(manager, now[0] - SLOW_REQUEUE_GRACE_SECONDS - 1)
-    manager._on_context_progress(task4, 1, 100, SLOW_BPS)
 
-    assert len(restart_calls) == SLOW_REQUEUE_MAX_ATTEMPTS
+def test_direct_callback_samples_bytes_and_source_change_resets_window(clock):
+    manager, item, task = active(clock)
+    manager._on_context_progress(task, 1, 100, 0)
+    advance(clock, task, seconds=59, speed=1000 * KB)
+    task.job._direct_url = 'https://cdn.example/video.mp4'
+    task.job._progress_unit = 'bytes'
+    manager._on_context_progress(task, 500_000, 100_000_000, 100 * KB)
+    assert task.window_started == clock[0]
+    assert task.transferred_bytes == 500_000
+    assert not task.slow_requeue_checked
+    assert not check(manager, task, clock[0] + 59)
+    clock[0] += 60
+    task.transferred_bytes += 100 * KB * 60
+    assert check(manager, task, clock[0])
+
+
+def test_unknown_length_direct_progress_is_counted_without_completion(clock):
+    manager, item, task = active(clock)
+    task.job._progress_unit = 'bytes'
+    task.monitor_unit = 'bytes'
+    clock[0] += 60
+    manager._on_context_progress(task, 1000 * KB * 60, 0, 1000 * KB)
+    assert not task.transfer_complete
+    assert task.transferred_bytes == 1000 * KB * 60
+    assert not task.slow_requeue_checked
+
+
+@pytest.mark.parametrize('phase', ['preparing', 'postprocess'])
+def test_explicit_job_phase_blocks_watchdog_and_delayed_cancel(clock, phase):
+    manager, item, task = active(clock)
+    advance(clock, task)
+    assert check(manager, task, clock[0])
+    task.job._progress_unit = phase
+    assert not manager.restart(URL, DEST, automatic=True, expected_task=task)
+    task.slow_requeue_checked = False
+    assert not check(manager, task, clock[0] + 600)
+    assert item.auto_requeues == 0
+
+
+def test_grace_starts_after_explicit_preparation_phase(clock):
+    manager, item, task = active(clock)
+    task.job._progress_unit = 'preparing'
+    clock[0] += 600
+    assert not check(manager, task, clock[0])
+    task.job._progress_unit = 'segments'
+    assert not check(manager, task, clock[0])
+    assert not check(manager, task, clock[0] + 59)
+    assert check(manager, task, clock[0] + 60)
+
+
+def test_three_requeues_then_flag_and_continue(clock, monkeypatch):
+    manager, item, task = active(clock)
+    monkeypatch.setattr(manager, '_start_download_thread', lambda task: None)
+    for expected in range(1, 4):
+        task.window_started = task.download_started = clock[0]
+        item.state = '下載中'
+        advance(clock, task)
+        assert check(manager, task, clock[0])
+        assert manager.restart(URL, DEST, automatic=True, expected_task=task)
+        assert item.auto_requeues == expected
+        manager._complete_download(task, '已取消')
+        task = manager._active[URL]
+        task.job = types.SimpleNamespace(_bytes_downloaded=0)
+    task.window_started = task.download_started = clock[0]
+    item.state = '下載中'
+    advance(clock, task)
+    assert not check(manager, task, clock[0])
+    assert item.auto_requeues == 3
     assert item.state == '下載中'
-    assert item.error == T(
-        'slow_requeue_exhausted', n=SLOW_REQUEUE_MAX_ATTEMPTS)
+    assert item.error == T('slow_requeue_exhausted', n=3)
+    assert not task.cancelled.is_set()
 
 
-def test_manual_restart_resets_automatic_counter(monkeypatch):
-    manager = DownloadManager(max_concurrent=1)
-    item = manager.add_item(URL, dest=DEST, state='下載中')
-    item.auto_requeues = 2
-    task = _DownloadTask(URL, DEST, manager._cancel_epoch)
-    with manager._lock:
-        manager._active[URL] = task
-    monkeypatch.setattr(manager, '_start_download_thread', lambda t: None)
-
-    assert manager.restart(URL, DEST) is True
-
-    assert item.auto_requeues == 0
-
-
-def test_automatic_restart_does_not_reset_counter(monkeypatch):
-    manager = DownloadManager(max_concurrent=1)
-    item = manager.add_item(URL, dest=DEST, state='下載中')
-    item.auto_requeues = 1
-    task = _DownloadTask(URL, DEST, manager._cancel_epoch)
-    with manager._lock:
-        manager._active[URL] = task
-    monkeypatch.setattr(manager, '_start_download_thread', lambda t: None)
-
-    assert manager.restart(URL, DEST, automatic=True) is True
-
-    assert item.auto_requeues == 1
-
-
-def test_retry_download_fallback_resets_automatic_counter():
-    from uav_downloader.apps.browse import DownloadItem
-
-    item = DownloadItem(URL, state='未完成', dest=DEST)
+def test_manual_restart_and_new_enqueue_reset_counter(clock, monkeypatch):
+    manager, item, task = active(clock)
     item.auto_requeues = 3
-    item.error = 'old warning'
-
-    class FakeManager:
-        def __init__(self):
-            self.calls = []
-
-        def get_items(self):
-            return [item]
-
-        def enqueue(self, url, dest):
-            self.calls.append((url, dest))
-
-    app = gui_modern.ModernApp.__new__(gui_modern.ModernApp)
-    app._dlmgr = FakeManager()
-    app._dest_var = types.SimpleNamespace(get=lambda: DEST)
-
-    app._retry_download(item.url)
-
+    monkeypatch.setattr(manager, '_start_download_thread', lambda task: None)
+    assert manager.restart(URL, DEST)
     assert item.auto_requeues == 0
-    assert app._dlmgr.calls == [(item.url, DEST)]
+    manager._complete_download(task, '已取消')
+    manager._active.clear()
+    item.auto_requeues = 3
+    manager.enqueue(URL, DEST)
+    assert item.auto_requeues == 0
 
 
-def test_slow_requeue_kbps_round_trip_clamps_and_persists(
-        tmp_path, monkeypatch):
-    path = tmp_path / 'ui_prefs.json'
+def test_cancellation_stops_watchdog_and_prevents_automatic_restart(clock):
+    manager, item, task = active(clock)
+    manager._start_slow_monitor(task)
+    manager.cancel_all(cleanup=False)
+    task.monitor_thread.join(1)
+    assert not task.monitor_thread.is_alive()
+    assert task.monitor_stop.is_set()
+    clock[0] += 1000
+    assert not check(manager, task, clock[0])
+    assert item.auto_requeues == 0
+
+
+def test_normal_completion_stops_watchdog(clock):
+    manager, item, task = active(clock)
+    manager._start_slow_monitor(task)
+    manager._complete_download(task, '已下載')
+    task.monitor_thread.join(1)
+    assert not task.monitor_thread.is_alive()
+
+
+def test_subtitle_handoff_stops_download_watchdog(clock, monkeypatch):
+    manager, item, task = active(clock)
+    monkeypatch.setattr(manager, '_try_next_subtitle', lambda: None)
+    manager._start_slow_monitor(task)
+    assert manager._queue_subtitle(task, 'en')
+    task.monitor_thread.join(1)
+    assert not task.monitor_thread.is_alive()
+    assert manager._subtitle_pending == [task]
+
+
+def test_threshold_clamps_and_roundtrips(tmp_path, monkeypatch):
+    path = tmp_path / 'prefs.json'
     monkeypatch.setattr(config, '_ui_prefs_path', lambda: str(path))
-
     assert config.get_slow_requeue_kbps() == 0
     assert config.set_slow_requeue_kbps('750') == 750
     assert config.get_slow_requeue_kbps() == 750
-    assert config.set_slow_requeue_kbps(-5) == 0
-    assert config.set_slow_requeue_kbps(999999) == config.MAX_SLOW_REQUEUE_KBPS
-
-    stored = json.loads(path.read_text(encoding='utf-8'))
-    assert stored['slow_requeue_kbps'] == config.MAX_SLOW_REQUEUE_KBPS
-
-    path.write_text(
-        json.dumps({'slow_requeue_kbps': 'not-a-number'}), encoding='utf-8')
+    assert config.set_slow_requeue_kbps(-1) == 0
+    assert config.set_slow_requeue_kbps(999999) == 100000
+    path.write_text(json.dumps({'slow_requeue_kbps': 'bad'}), encoding='utf-8')
     assert config.get_slow_requeue_kbps() == 0
 
 
-class _SlowThenBlockJob:
-    """Simulates an HLS worker: one tick to arm the clock, one slow tick
-    past grace to trigger the requeue, then blocks (only reacting to
-    cancellation, like a segment pool between segments) until restart()
-    cancels it. The wait is bounded so the test cannot hang."""
-
-    def __init__(self, clock):
-        self._clock = clock
-        self._cancel_job = False
-        self._progress_callback = None
-
-    def is_url_vaildate(self):
-        return True
-
-    def target_name(self):
-        return 'slow-sample'
-
-    def start_download(self):
-        if self._progress_callback:
-            self._progress_callback(1, 100, SLOW_BPS)  # arms the clock
-        self._clock[0] += SLOW_REQUEUE_GRACE_SECONDS + 1
-        if self._progress_callback:
-            self._progress_callback(2, 100, SLOW_BPS)  # past grace: triggers
-        for _ in range(200):  # bounded wait (~2s), no real deadline math
-            if self._cancel_job:
-                break
-            time.sleep(0.01)
-        return False
-
-    def cancel_download(self, cleanup=True):
-        self._cancel_job = True
-
-
-class _FastReplacementJob:
-    """The requeue's replacement download: completes immediately."""
-
-    def __init__(self):
-        self._cancel_job = False
-        self._progress_callback = None
-
-    def is_url_vaildate(self):
-        return True
-
-    def target_name(self):
-        return 'fast-sample'
-
-    def start_download(self):
-        if self._progress_callback:
-            self._progress_callback(100, 100, 10 * 1024 * 1024)
-        return True
-
-    def cancel_download(self, cleanup=True):
-        self._cancel_job = True
-
-
-def _poll(predicate, attempts=200, interval=0.01):
-    """Bounded (~2s) wait without measuring real elapsed time, since
-    time.monotonic is patched in this module for the slow-requeue clock."""
-    for _ in range(attempts):
+def _poll(predicate):
+    for _ in range(300):
         if predicate():
             return True
-        time.sleep(interval)
+        time.sleep(0.01)
     return predicate()
 
 
-def test_slow_download_is_auto_requeued_end_to_end(monkeypatch):
-    """Drives the real enqueue -> worker thread -> progress callback ->
-    restart() -> replacement worker thread path with no mocking of
-    restart(), using a fake job + patched site factory (the same
-    monkeypatch.setattr(gui_modern.M3U8Sites, 'CreateSite', ...) approach
-    test_subtitle_integration.py's job-based tests use)."""
-    clock = [1000.0]
-    monkeypatch.setattr(gui_modern.time, 'monotonic', lambda: clock[0])
-
+def test_stalled_transfer_requeues_end_to_end_and_leaves_no_monitor(clock, monkeypatch):
     created = []
+    first_started = threading.Event()
+    first_task = []
 
-    def factory(_url, _dest):
-        job = (
-            _SlowThenBlockJob(clock) if not created
-            else _FastReplacementJob())
-        created.append(job)
-        return job
+    class Job:
+        def __init__(self):
+            self._cancel_job = False
+            self._bytes_downloaded = 0
+            self._progress_callback = None
+            self.number = len(created)
+            created.append(self)
 
-    monkeypatch.setattr(gui_modern.M3U8Sites, 'CreateSite', factory)
+        def is_url_vaildate(self):
+            return True
 
-    manager = DownloadManager(
-        max_concurrent=1, subtitle_mode_getter=lambda: 'none',
-        slow_requeue_kbps_getter=lambda: THRESHOLD_KBPS)
+        def target_name(self):
+            return 'test'
+
+        def cancel_download(self, cleanup=True):
+            self._cancel_job = True
+
+        def start_download(self):
+            if self.number == 0:
+                first_task.append(manager._active[URL])
+                first_started.set()
+                clock[0] += 61
+                assert _poll(lambda: self._cancel_job)
+                return False
+            self._progress_callback(1, 1, 0)
+            return True
+
+    monkeypatch.setattr(browse.M3U8Sites, 'CreateSite', lambda *args: Job())
+    manager = DownloadManager(subtitle_mode_getter=lambda: 'none',
+                              slow_requeue_kbps_getter=lambda: 750)
     item = manager.add_item(URL, dest=DEST)
-
     manager.enqueue(URL, DEST)
-
-    assert _poll(lambda: len(created) >= 2)
-    assert _poll(lambda: item.state in ('已下載', '未完成', '已取消'))
-
+    assert first_started.wait(1)
+    assert _poll(lambda: item.state == '已下載')
     assert len(created) == 2
     assert item.auto_requeues == 1
-    assert item.state == '已下載'
+    first_task[0].monitor_thread.join(1)
+    assert not first_task[0].monitor_thread.is_alive()
+    assert not manager._active

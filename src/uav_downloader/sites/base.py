@@ -618,11 +618,17 @@ class M3U8Crawler:
 
     def _create_temp_folder(self):
         if not os.path.exists(self._temp_folder):
-            os.makedirs(self._temp_folder, exist_ok=True)
+            try:
+                os.makedirs(self._temp_folder, exist_ok=True)
+            except OSError as exc:
+                raise StorageWriteError(self._temp_folder, exc) from exc
 
     def _create_dest_folder(self):
         if not os.path.exists(self._dest_folder):
-            os.makedirs(self._dest_folder, exist_ok=True)
+            try:
+                os.makedirs(self._dest_folder, exist_ok=True)
+            except OSError as exc:
+                raise StorageWriteError(self._dest_folder, exc) from exc
 
     def _get_video_savename(self):
         return os.path.join(self._dest_folder, self._targetName + ".mp4")
@@ -793,8 +799,11 @@ class M3U8Crawler:
         # volume.  Windows' default temp directory normally lives on C:, and
         # using it here could consume almost two extra copies of a video after
         # the segment progress had already reached 100%.
-        workdir = tempfile.mkdtemp(
-            prefix='uav-remux-', dir=self._dest_folder)
+        try:
+            workdir = tempfile.mkdtemp(
+                prefix='uav-remux-', dir=self._dest_folder)
+        except OSError as exc:
+            raise StorageWriteError(self._dest_folder, exc) from exc
         merged = os.path.join(workdir, 'merged.ts')
         out_mp4 = os.path.join(workdir, 'out.mp4')
         published = False
@@ -864,7 +873,7 @@ class M3U8Crawler:
                '-avoid_negative_ts', 'make_zero', out_arg]
         print('正在重新封裝為可正常拖曳的 MP4 ...', flush=True)
         try:
-            with open(log_path, 'wb') as errf:
+            with storage_open(log_path, 'wb') as errf:
                 proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
                                         stdout=subprocess.DEVNULL, stderr=errf,
                                         **_no_window_kwargs())
@@ -878,19 +887,33 @@ class M3U8Crawler:
                                 proc.kill(); proc.wait(); return False
                 finally:
                     self._ffmpeg_proc = None
+        except StorageWriteError:
+            raise
         except Exception as e:
             print(f'[合成] ffmpeg 執行錯誤: {e}', flush=True)
             return False
         if self._cancel_job:
             return False
-        if proc.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 0:
-            return True
+        try:
+            if proc.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 0:
+                return True
+        except OSError as exc:
+            raise StorageWriteError(out_mp4, exc) from exc
         tail = ''
         try:
-            with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            with storage_open(log_path, 'r', encoding='utf-8', errors='replace') as f:
                 tail = f.read()[-800:]
+        except StorageWriteError:
+            raise
         except Exception:
             pass
+        storage_failure = re.search(
+            r'no space left|disk (?:is )?full|input/output error|'
+            r'i/o error|device (?:is )?not ready|no such device|'
+            r'device not connected|error (?:writing|closing)|'
+            r'failed to (?:write|flush)', tail, re.IGNORECASE)
+        if storage_failure:
+            raise StorageWriteError(out_mp4, OSError(tail.strip()))
         print(f'[合成] ffmpeg 重新封裝失敗 rc={proc.returncode}: {tail}', flush=True)
         return False
 
@@ -913,15 +936,25 @@ class M3U8Crawler:
             content_ts = response.content
             if not content_ts:
                 return False
-            content_ts = self._transform_segment(content_ts)
             if self._key_content:
                 cipher = self._make_cipher(seq_num)
                 content_ts = cipher.decrypt(content_ts)
+            # Provider wrappers/TS headers belong to the plaintext stream.
+            # LUC encrypts the whole segment, so stripping its ciphertext
+            # before AES decryption would discard every valid segment.
+            content_ts = self._transform_segment(content_ts)
             if not _is_valid_ts_segment(content_ts):
                 return False
             speed_limiter.acquire(len(content_ts))
-            with storage_open(saveName, 'wb') as f:
+            # Publish only fully written segments. A disk error must not
+            # leave a truncated .ts looking resumable on the next run.
+            part = saveName + '.part'
+            with storage_open(part, 'wb') as f:
                 f.write(content_ts)
+            try:
+                os.replace(part, saveName)
+            except OSError as exc:
+                raise StorageWriteError(saveName, exc) from exc
             with self._speed_lock:
                 self._pending_set.discard((seq_num, url))
                 self._bytes_downloaded += len(content_ts)
@@ -947,6 +980,7 @@ class M3U8Crawler:
 
     def _startCrawl(self):
         self._storage_error = None
+        self._progress_unit = 'segments'
         self._speed_start = time.time()
         self._bytes_downloaded = 0
         total = len(self._tsList)
@@ -1007,8 +1041,10 @@ class M3U8Crawler:
                 response = _http_get(self._imageUrl, self._m3u8_headers(), timeout=15)
                 if response.status_code != 200:
                     return None
-                with open(self._get_image_savename(), 'wb') as fs:
+                with storage_open(self._get_image_savename(), 'wb') as fs:
                     fs.write(response.content)
+            except StorageWriteError:
+                raise
             except Exception:
                 return None
         return self._get_image_savename()
@@ -1027,6 +1063,7 @@ class M3U8Crawler:
         if self._cancel_job:
             return False
         self._cancel_job = False
+        self._progress_unit = 'preparing'
         self._create_dest_folder()
         self.download_image()
         if not self.is_target_video_exist():
@@ -1035,6 +1072,7 @@ class M3U8Crawler:
             if not self._cancel_job:
                 self._prepareCrawl()
             if not self._cancel_job and not self._pending_set:
+                self._progress_unit = 'postprocess'
                 merged = self._mergeMp4Chunks()
                 if not merged and not self._cancel_job:
                     raise Exception("merge/publish failed")

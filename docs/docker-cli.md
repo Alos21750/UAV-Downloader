@@ -3,6 +3,11 @@
 UAV Downloader CLI downloads supported URLs without a desktop interface. It is a
 run-to-completion job for Docker hosts, NAS systems, servers, and scripts.
 
+The current container does not include a browser-based UI. The NAS Web UI
+proposal is tracked in [issue #47](https://github.com/Alos21750/UAV-Downloader/issues/47).
+Its initial scope is persistent URL queues, progress and logs, retry/cancel,
+download settings and authenticated LAN access. No release date is committed.
+
 ## Docker
 
 The canonical multi-architecture image is:

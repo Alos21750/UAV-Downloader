@@ -387,6 +387,8 @@ def video_versions(video: dict) -> set[str]:
 
 def normalize_version_preference(value) -> str:
     pref = str(value or '').strip().casefold()
+    if pref == 'all':
+        return pref
     if pref == 'uncensored-leak':
         pref = 'uncensored'
     if pref in VALID_VERSION_PREFERENCES:
@@ -395,7 +397,7 @@ def normalize_version_preference(value) -> str:
 
 
 def dedupe_video_candidates(videos: list[dict], preference: str):
-    """Deduplicate by code across categories/sites using version then source priority."""
+    """Deduplicate by code, or by code+variant for all-version downloads."""
     preference = normalize_version_preference(preference)
     url_versions = defaultdict(set)
     url_source_subtitle_evidence = defaultdict(set)
@@ -433,6 +435,8 @@ def dedupe_video_candidates(videos: list[dict], preference: str):
         if code:
             video['_code'] = code
         identity = f'code:{code}' if code else (f'url:{url}' if url else '')
+        if code and preference == 'all':
+            identity += ':versions:' + '+'.join(sorted(versions))
         if not identity:
             kept.append(video)
             kept_records.append((index, video, url, code, versions))

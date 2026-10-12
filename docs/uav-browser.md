@@ -37,6 +37,20 @@ items can be retried independently.
 Download work and subtitle generation use separate queues. A long subtitle job
 therefore does not occupy a video download slot.
 
+The Download tab's Subtitle Local Files button queues existing videos using the
+language settings selected in Settings. Those rows do not download or enter the
+saved URL queue; Retry regenerates subtitles on the same local file.
+
+Slow-download requeue is optional and defaults to 0 (off). Set a KB/s threshold
+in Settings to inspect successive 60-second transfer windows, including stalls.
+UAV Browser restarts a slow transfer up to three times, then warns and continues.
+A restart discards transfer progress to avoid mixing different source streams.
+Preparation, remux, completed transfers and subtitles are excluded. A global
+speed cap disables automatic requeue.
+
+Destination I/O failures stop the download/subtitle queue without deleting
+validated chunks. Check free space and device health before explicitly retrying.
+
 Validated HLS segments are resumable. If a MissAV CDN request remains
 unavailable after the automatic retry window, Retry requests only the missing
 segments rather than restarting the complete video.

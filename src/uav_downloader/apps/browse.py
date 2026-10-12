@@ -180,6 +180,9 @@ class _DownloadTask:
         'url', 'dest', 'epoch', 'job', 'subtitle_mode',
         'source_subtitle_evidence', 'cancelled',
         'download_started', 'slow_requeue_checked', 'prev_total',
+        'transfer_complete', 'transferred_bytes', 'window_bytes',
+        'window_started', 'last_done', 'monitor_stop', 'monitor_thread',
+        'monitor_unit',
     )
 
     def __init__(
@@ -197,6 +200,14 @@ class _DownloadTask:
         self.download_started = None
         self.slow_requeue_checked = False
         self.prev_total = None
+        self.transfer_complete = False
+        self.transferred_bytes = 0.0
+        self.window_bytes = 0.0
+        self.window_started = None
+        self.last_done = 0
+        self.monitor_stop = threading.Event()
+        self.monitor_thread = None
+        self.monitor_unit = None
 
 
 class _LocalSubtitleJob:
@@ -300,7 +311,8 @@ class DownloadManager:
         if removed_subtitles:
             self._try_next_subtitle()
 
-    def restart(self, url: str, dest: str, automatic: bool = False) -> bool:
+    def restart(self, url: str, dest: str, automatic: bool = False,
+                expected_task: _DownloadTask | None = None) -> bool:
         """Cancel one active video and safely put a fresh task first in line.
 
         `automatic` marks a self-triggered slow-download requeue; manual
@@ -311,6 +323,26 @@ class DownloadManager:
             task = self._active.get(url)
             if item is None or task is None:
                 return False
+
+            if automatic:
+                from uav_downloader.sites.base import speed_limiter
+                # An asynchronous decision must never apply to a replacement
+                # sharing the URL, nor to a transfer that has entered remux.
+                if (task is not expected_task or
+                        self._context_cancelled_locked(task) or
+                        task.transfer_complete or task.monitor_stop.is_set() or
+                        getattr(task.job, '_progress_unit', None) in (
+                            'preparing', 'postprocess') or
+                        item.state != '下載中' or
+                        bool(getattr(task.job, '_storage_error', None)) or
+                        speed_limiter.limit_bps > 0 or
+                        not self._slow_requeue_kbps_getter()):
+                    return False
+                if url in self._restart_pending:
+                    return False
+                if item.auto_requeues >= SLOW_REQUEUE_MAX_ATTEMPTS:
+                    return False
+                item.auto_requeues += 1
 
             if not automatic:
                 item.auto_requeues = 0
@@ -327,6 +359,7 @@ class DownloadManager:
             self._restart_pending[url] = (
                 task, restart_dest, cleanup_done)
             task.cancelled.set()
+            task.monitor_stop.set()
             self._set_state(url, '等待中', progress=0, error='')
 
         # Keep cleanup outside the manager lock.  The replacement is created
@@ -486,7 +519,9 @@ class DownloadManager:
                     pass
                 self._complete_download(task, '已取消')
                 return
+            self._start_slow_monitor(task)
             ok = job.start_download()
+            task.monitor_stop.set()
             if ok is False and not job._cancel_job:
                 raise Exception(T('parse_failed_short'))
             if job._cancel_job or self._context_cancelled(task):
@@ -517,6 +552,8 @@ class DownloadManager:
                     task, '封鎖/解析失敗', error=ERR_BLOCKED)
             else:
                 self._complete_download(task, '未完成', error=str(exc))
+        finally:
+            task.monitor_stop.set()
 
     def _try_next(self):
         task = None
@@ -540,6 +577,7 @@ class DownloadManager:
                     self._context_cancelled_locked(task)):
                 return False
             task.subtitle_mode = mode
+            task.monitor_stop.set()
             self._active.pop(task.url, None)
             self._subtitle_pending.append(task)
             self._set_state(task.url, '字幕準備中', progress=0)
@@ -614,6 +652,12 @@ class DownloadManager:
                     'subtitle_failed', error=T('subtitle_empty_result'))
         except SubtitleCancelled:
             task.cancelled.set()
+        except StorageWriteError as exc:
+            self.cancel_all(cleanup=False)
+            self._complete_subtitle(task, '已取消')
+            with self._lock:
+                self._set_state(task.url, '未完成', error=str(exc))
+            return
         except Exception as exc:
             warning = T(
                 'subtitle_failed',
@@ -668,6 +712,7 @@ class DownloadManager:
 
     def _complete_download(self, task: _DownloadTask, state: str,
                            progress: int = -1, error=None):
+        task.monitor_stop.set()
         with self._lock:
             restart = self._restart_pending.get(task.url)
             cleanup_done = (
@@ -725,6 +770,7 @@ class DownloadManager:
                 continue
             seen.add(id(task))
             task.cancelled.set()
+            task.monitor_stop.set()
             job = task.job
             if not job or not hasattr(job, 'cancel_download'):
                 continue
@@ -778,47 +824,118 @@ class DownloadManager:
                     self._context_cancelled_locked(task)):
                 return
             self._on_progress(task.url, done, total, speed_bps)
-            should_restart = self._check_slow_requeue_locked(
-                task, total, speed_bps)
+            now = time.monotonic()
+            if task.download_started is None:
+                task.download_started = now
+                task.window_started = now
+            source_changed = task.prev_total is not None and (
+                    total != task.prev_total or done < task.last_done)
+            if source_changed:
+                # HLS -> direct MP4/source fallback starts a fresh byte window.
+                task.download_started = now
+                task.window_started = now
+                task.window_bytes = 0.0
+                task.transferred_bytes = 0.0
+                task.slow_requeue_checked = False
+            task.prev_total = total
+            task.last_done = done
+            task.transfer_complete = total > 0 and done >= total
+            job = task.job
+            if getattr(job, '_progress_unit', None) == 'bytes':
+                task.transferred_bytes = float(done)
+            elif hasattr(job, '_bytes_downloaded'):
+                task.transferred_bytes = float(job._bytes_downloaded)
+            else:
+                # Compatibility for custom download jobs with only an average
+                # speed callback. Production HLS/direct jobs use exact bytes.
+                task.transferred_bytes = max(
+                    task.transferred_bytes,
+                    speed_bps * max(0.0, now - task.download_started))
+            if source_changed:
+                task.window_bytes = task.transferred_bytes
+            should_restart = self._check_slow_requeue_locked(task, now)
         if should_restart:
             # Never restart/cancel synchronously here: this callback runs
             # inside the crawler's own worker pool (for HLS, its segment
             # ThreadPoolExecutor), and restart() waits on that same pool's
             # cleanup — a synchronous call would deadlock it.
             threading.Thread(
-                target=self.restart, args=(task.url, task.dest),
-                kwargs={'automatic': True}, daemon=True).start()
+                target=self._restart_slow_download, args=(task,),
+                daemon=True).start()
 
-    def _check_slow_requeue_locked(
-            self, task: _DownloadTask, total: int,
-            speed_bps: float) -> bool:
-        """Decide whether a slow download should be auto-restarted.
+    def _restart_slow_download(self, task: _DownloadTask) -> bool:
+        accepted = self.restart(task.url, task.dest, automatic=True,
+                                expected_task=task)
+        if not accepted:
+            with self._lock:
+                # A user may switch the option off or apply a speed cap
+                # between decision and cancellation. Keep monitoring this
+                # transfer if that decision was superseded.
+                if not self._context_cancelled_locked(task):
+                    task.slow_requeue_checked = False
+        return accepted
 
-        Must be called with self._lock already held. Returns True only the
-        one time a restart should be kicked off; the caller does that on a
-        new thread. When automatic attempts are exhausted, flags the item's
-        error instead and returns False so the download keeps running.
+    def _start_slow_monitor(self, task: _DownloadTask):
+        with self._lock:
+            if self._context_cancelled_locked(task):
+                return
+            now = time.monotonic()
+            task.download_started = task.window_started = now
+            task.monitor_unit = getattr(task.job, '_progress_unit', None)
+            task.monitor_thread = threading.Thread(
+                target=self._monitor_slow_download, args=(task,),
+                name='uav-slow-download-monitor', daemon=True)
+            task.monitor_thread.start()
 
-        The grace clock tracks the job's own speed window rather than
-        `_run_download`'s call to start_download(): `total` changing (e.g.
-        SupJav falling back from HLS segment counts to a direct MP4 byte
-        count mid-download) means speed_bps now averages a different
-        window, so the clock restarts and the once-per-task judgement is
-        re-armed.
+    def _monitor_slow_download(self, task: _DownloadTask):
+        # One bounded watcher per active transfer; no manager-wide thread that
+        # could keep a discarded manager alive. Completion/cancel wakes it.
+        while not task.monitor_stop.wait(1.0):
+            with self._lock:
+                if (self._active.get(task.url) is not task or
+                        self._context_cancelled_locked(task)):
+                    return
+                should_restart = self._check_slow_requeue_locked(
+                    task, time.monotonic())
+            if should_restart:
+                if self._restart_slow_download(task):
+                    return
+
+    def _check_slow_requeue_locked(self, task: _DownloadTask,
+                                   now: float) -> bool:
+        """Evaluate successive 60-second byte windows, including no progress.
+
+        Called under the manager lock. Callers restart outside it. The
+        decision is advisory; restart rechecks identity and completion.
         """
-        if total != task.prev_total:
-            task.prev_total = total
-            task.download_started = time.monotonic()
-            task.slow_requeue_checked = False
+        item = self._items.get(task.url)
+        if (self._active.get(task.url) is not task or
+                self._context_cancelled_locked(task) or item is None or
+                item.state != '下載中' or task.transfer_complete or
+                task.monitor_stop.is_set() or task.slow_requeue_checked or
+                bool(getattr(task.job, '_storage_error', None))):
             return False
-        if task.slow_requeue_checked or task.download_started is None:
+        unit = getattr(task.job, '_progress_unit', None)
+        if unit in ('preparing', 'postprocess'):
+            task.monitor_unit = unit
+            task.window_started = task.download_started = None
             return False
-        if time.monotonic() - task.download_started < SLOW_REQUEUE_GRACE_SECONDS:
+        if unit in ('segments', 'bytes') and unit != task.monitor_unit:
+            task.monitor_unit = unit
+            task.window_started = task.download_started = now
+            task.window_bytes = task.transferred_bytes
             return False
-
-        # Judge only once per speed window: a restart begins the download
-        # from zero anyway, so re-checking the same run again is pointless.
-        task.slow_requeue_checked = True
+        if task.window_started is None:
+            task.window_started = task.download_started
+        if task.window_started is None:
+            return False
+        elapsed = now - task.window_started
+        if elapsed < SLOW_REQUEUE_GRACE_SECONDS:
+            return False
+        speed_bps = max(
+            0.0, task.transferred_bytes - task.window_bytes) / elapsed
+        task.window_started = now
+        task.window_bytes = task.transferred_bytes
         threshold_kbps = self._slow_requeue_kbps_getter()
         if not threshold_kbps:
             return False
@@ -828,14 +945,11 @@ class DownloadManager:
         if speed_bps >= threshold_kbps * 1024:
             return False
 
-        item = self._items.get(task.url)
-        if item is None:
-            return False
         if item.auto_requeues < SLOW_REQUEUE_MAX_ATTEMPTS:
-            item.auto_requeues += 1
+            task.slow_requeue_checked = True
             print(
                 f'[慢速自動重排] {task.url} 速度 {speed_bps / 1024:.0f} KB/s '
-                f'低於門檻 {threshold_kbps} KB/s，第 {item.auto_requeues}/'
+                f'低於門檻 {threshold_kbps} KB/s，第 {item.auto_requeues + 1}/'
                 f'{SLOW_REQUEUE_MAX_ATTEMPTS} 次自動重新排隊', flush=True)
             return True
         print(
@@ -2068,7 +2182,7 @@ class ModernApp(ctk.CTk):
         ctk.CTkFrame(tab, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
 
         # ── Action bar ──────────────────────────────────────────────
-        bar = ctk.CTkFrame(tab, fg_color=BG_HEADER, corner_radius=0, height=58)
+        bar = ctk.CTkFrame(tab, fg_color=BG_HEADER, corner_radius=0, height=106)
         bar.pack(fill='x')
         bar.pack_propagate(False)
         bar.grid_columnconfigure(1, weight=1)
@@ -2086,11 +2200,14 @@ class ModernApp(ctk.CTk):
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
                       command=self._download_all).pack(side='left', padx=(8, 0))
-        ctk.CTkButton(actions_left, text=T('subtitle_local_files'), width=150, height=38,
+        local_actions = ctk.CTkFrame(bar, fg_color='transparent')
+        local_actions.grid(row=1, column=0, columnspan=3,
+                           padx=16, pady=(0, 10), sticky='w')
+        ctk.CTkButton(local_actions, text=T('subtitle_local_files'), width=150, height=38,
                       corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-                      command=self._subtitle_local_files).pack(side='left', padx=(8, 0))
+                      command=self._subtitle_local_files).pack(side='left')
 
         speed = ctk.CTkFrame(bar, fg_color='transparent')
         speed.grid(row=0, column=1, pady=10)

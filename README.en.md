@@ -38,6 +38,17 @@
 
 ## Three workflows, one download core
 
+### New in v3.2.0
+
+- Generate subtitles for existing videos from Download → Subtitle Local Files.
+- Enable optional slow/stalled-download requeue in Settings (default off).
+- Watcher scans beyond the former 50-page cap and can keep all release variants
+  in separate `versions/<kind>` folders under each site's selected destination.
+- SupJav supports EVS, VAS, LUC and VOE alongside existing sources; HTTP 429 waits
+  and retries, while real 403 challenges still require a valid session.
+- Destination write errors stop downloads instead of retrying disk failures
+  as network errors. Check the device before explicitly resuming.
+
 | What you want to do | Choose | Workflow |
 |---|---|---|
 | Browse, search, and pick individual videos | **UAV_Browser.exe** | Browse cards, multi-select, queue, or download now |

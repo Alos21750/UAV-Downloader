@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import re
+from itertools import count
 from dataclasses import dataclass
 from datetime import date, datetime, timezone, timedelta
 from typing import Optional
@@ -249,6 +250,7 @@ from uav_downloader.ui.theme import (
     category_columns_for_width,
 )
 from uav_downloader.core import paths as product_paths
+from uav_downloader.core.storage import StorageWriteError
 from uav_downloader.metadata import APP_DISPLAY_NAMES, VERSION
 
 # Optional direct-fetch fallback for diagnostics / when cloudscraper struggles
@@ -270,9 +272,13 @@ _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
 PER_VIDEO_FETCH_DELAY_SEC = 0.3
+PER_LISTING_FETCH_DELAY_SEC = 0.3
 SCAN_RETRY_BACKOFF_SEC = 10 * 60
-MAX_SCAN_PAGES = 50
-DAILY_SCAN_PAGES = 3
+# A configured baseline can span thousands of listing pages. End-of-list,
+# known entries, baseline dates and repeated pages bound each scan instead.
+# Keep the optional limits available for diagnostics/tests, disabled by default.
+MAX_SCAN_PAGES = None
+DAILY_SCAN_PAGES = None
 MAX_CONCURRENT = 2
 DEFAULT_SCAN_INTERVAL_HOURS = 24
 DEFAULT_DAILY_SCAN_TIME = '18:00'
@@ -779,6 +785,17 @@ class SmallToolWorker:
             self._scan_state = (
                 (site, category, page, eligible_count) if site else None)
 
+    def _halt_for_storage_error(self, error):
+        # Keep the current video pending and preserve validated segment files.
+        # A damaged/full destination requires an explicit user retry, never a
+        # scheduled retry that could repeatedly write to the failing device.
+        self._log(f'[STORAGE-ERR] {error}')
+        with self._control:
+            self._stop.set()
+            self._manual_requested = False
+            self._control.notify_all()
+        self._set_status('st_storage_failed', ERROR_C)
+
     @property
     def run_generation(self) -> int:
         with self._control:
@@ -1248,6 +1265,9 @@ class SmallToolWorker:
         try:
             return self._scan_and_download_locked(
                 cfg, config_loader=config_loader)
+        except StorageWriteError as exc:
+            self._halt_for_storage_error(exc)
+            return False
         finally:
             self._set_scan_state()
             self._scan_lock.release()
@@ -1278,7 +1298,10 @@ class SmallToolWorker:
             }
         }
         for settings in site_runtime.values():
-            os.makedirs(settings['output_folder'], exist_ok=True)
+            try:
+                os.makedirs(settings['output_folder'], exist_ok=True)
+            except OSError as exc:
+                raise StorageWriteError(settings['output_folder'], exc) from exc
 
         first_run = not cfg.get('first_run_done', False)
         is_jable_site = any(t['site'] == 'JableTV' for t in targets)
@@ -1330,12 +1353,16 @@ class SmallToolWorker:
             max_pages = MAX_SCAN_PAGES if first_run else DAILY_SCAN_PAGES
             reached_baseline = False
             consecutive_skips = 0
+            listing_fingerprints = set()
 
-            for page in range(1, max_pages + 1):
+            pages = count(1) if max_pages is None else range(1, max_pages + 1)
+            for page in pages:
                 if self._stop.is_set():
                     return False
                 if reached_baseline:
                     break
+                if page > 1 and self._stop.wait(PER_LISTING_FETCH_DELAY_SEC):
+                    return False
 
                 page_url = self._build_page_url(site_name, base_url, page)
                 self._set_scan_state(
@@ -1351,6 +1378,13 @@ class SmallToolWorker:
                 if not videos:
                     self._log(f'  Page {page}: no videos — end.')
                     break
+                fingerprint = frozenset(
+                    str(video.get('url') or '').strip() for video in videos
+                    if video.get('url'))
+                if not fingerprint or fingerprint in listing_fingerprints:
+                    self._log(f'  Page {page}: repeated listing or no usable URLs — end.')
+                    break
+                listing_fingerprints.add(fingerprint)
 
                 target_id = str(cat.get('id') or target.get('id') or '')
                 for video in videos:
@@ -1381,7 +1415,8 @@ class SmallToolWorker:
                                 if value in VALID_VERSION_PREFERENCES)
                         reconsider_preferred = (
                             seen_entry.get('reason') == 'duplicate-version' and
-                            version_preference in known_versions)
+                            (version_preference == 'all' or
+                             version_preference in known_versions))
                         reconsider_older_baseline = False
                         if seen_entry.get('reason') == 'before-baseline':
                             release_date = seen_entry.get('release_date')
@@ -1569,17 +1604,21 @@ class SmallToolWorker:
                 except Exception as exc:
                     self._log(
                         f'  [WARN] could not refresh output folder: {exc}')
+            if version_preference == 'all':
+                # Code-only filenames otherwise collide across versions of
+                # the same release. Keep the selected site's base directory.
+                variant = '+'.join(sorted(video_versions(v)))
+                download_dest = os.path.join(download_dest, 'versions', variant)
             try:
                 os.makedirs(download_dest, exist_ok=True)
             except OSError as exc:
-                self._log(
-                    f'  [ERR] output folder unavailable: '
-                    f'{download_dest} ({exc})')
-                download_incomplete = True
-                continue
+                self._halt_for_storage_error(StorageWriteError(download_dest, exc))
+                return False
             result = self._download_one(
                 v, download_dest)
-            if result == 'blocked':
+            if result == 'storage_failed':
+                return False
+            elif result == 'blocked':
                 download_blocked = True
             elif result == 'download_incomplete':
                 download_incomplete = True
@@ -1733,11 +1772,16 @@ class SmallToolWorker:
                 except SubtitleCancelled:
                     self._log(f'  [CANCELLED] {T("subtitle_cancelled")}')
                     return
+                except StorageWriteError:
+                    raise
                 except Exception as exc:
                     self._log(f'  [SUBTITLE-ERR] {T("subtitle_failed", error=str(exc))}')
                     return 'subtitle_failed'
             self._log(f'  [OK] {title}')
             self._mark_seen(vurl, title, video=video)
+        except StorageWriteError as exc:
+            self._halt_for_storage_error(exc)
+            return 'storage_failed'
         except DownloadIncompleteError as e:
             # Each crawler stores validated segments in a URL-specific temp
             # folder.  Preserve those files so the next unattended check only
@@ -2149,6 +2193,7 @@ class SmallToolApp(ctk.CTk):
             'standard': T('st_pref_standard'),
             'english-subtitle': T('st_pref_english'),
             'reducing-mosaic': T('st_pref_reducing_mosaic'),
+            'all': T('st_pref_all'),
         }.get(pref, T('st_pref_chinese'))
 
     def _version_values(self) -> list[str]:
@@ -2158,6 +2203,7 @@ class SmallToolApp(ctk.CTk):
             T('st_pref_standard'),
             T('st_pref_english'),
             T('st_pref_reducing_mosaic'),
+            T('st_pref_all'),
         ]
 
     def _version_pref_from_label(self, label: str) -> str:
@@ -2167,6 +2213,7 @@ class SmallToolApp(ctk.CTk):
             T('st_pref_standard'): 'standard',
             T('st_pref_english'): 'english-subtitle',
             T('st_pref_reducing_mosaic'): 'reducing-mosaic',
+            T('st_pref_all'): 'all',
         }.get(str(label or ''), DEFAULT_VERSION_PREFERENCE)
 
     def _subtitle_label(self) -> str:
@@ -3882,10 +3929,17 @@ class SmallToolApp(ctk.CTk):
 
     def _on_version_change(self, val):
         pref = self._version_pref_from_label(val)
+        changed = pref != _normalize_version_pref(self._cfg)
         self._cfg['version_preference'] = pref
         self._cfg.pop('missav_version_preference', None)
+        patch = {'version_preference': pref}
+        if changed:
+            # Revisit older pages that contain versions skipped by the previous
+            # preference. Successful download history still prevents duplicates.
+            self._cfg['first_run_done'] = False
+            patch['first_run_done'] = False
         update_config(
-            {'version_preference': pref},
+            patch,
             remove=('missav_version_preference',))
 
     def _on_subtitle_change(self, val):

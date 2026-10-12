@@ -37,6 +37,8 @@ from urllib.parse import quote, urlsplit, urlunsplit
 import requests
 
 from uav_downloader.core import config
+from uav_downloader.core.storage import (
+    StorageWriteError, storage_open, storage_failure_message)
 from uav_downloader.core.paths import product_data_dir
 from uav_downloader.metadata import PRODUCT_NAME
 from uav_downloader.sites.base import locate_ffmpeg
@@ -348,8 +350,11 @@ class SubtitleProcessTimeout(SubtitleError):
     """Raised when a supervised native subtitle process stops responding."""
 
 
-class SubtitleStorageError(SubtitleError):
+class SubtitleStorageError(SubtitleError, StorageWriteError):
     """Raised before temporary ASR files can exhaust the destination disk."""
+
+    def __init__(self, message, path=''):
+        StorageWriteError.__init__(self, path, OSError(message))
 
 
 class ReazonSpeechStructuralError(SubtitleError):
@@ -1480,7 +1485,9 @@ def _run_process(args: list[str], log_path: str,
     if disk_guard_path:
         _ensure_asr_temp_space(disk_guard_path)
     try:
-        log_handle = open(log_path, 'wb')
+        log_handle = storage_open(log_path, 'wb')
+    except StorageWriteError:
+        raise
     except OSError as exc:
         raise SubtitleError('Subtitle process could not start') from exc
     with log_handle:
@@ -1502,6 +1509,11 @@ def _run_process(args: list[str], log_path: str,
                 disk_guard_path=disk_guard_path,
             )
             if process.returncode != 0:
+                log_handle.flush()
+                with storage_open(log_path, 'rb') as failure_log:
+                    detail = failure_log.read()[-2000:].decode('utf-8', errors='replace')
+                if storage_failure_message(detail):
+                    raise StorageWriteError(log_path, OSError(detail.strip()))
                 raise SubtitleError(
                     f'Subtitle process exited with code {process.returncode}')
         finally:
@@ -1525,6 +1537,8 @@ def _extract_audio(video_path: str, wav_path: str, log_path: str,
     except SubtitleCancelled:
         raise
     except SubtitleStorageError:
+        raise
+    except StorageWriteError:
         raise
     except SubtitleError as exc:
         raise _asr_failure('audio', log_path) from exc
@@ -4585,7 +4599,32 @@ def run_llm_translation_diagnostic(destination_path: str) -> dict:
     return payload
 
 
+@contextmanager
+def _destination_workspace(video_path):
+    destination = os.path.dirname(os.path.abspath(video_path))
+    try:
+        workspace = tempfile.TemporaryDirectory(
+            prefix='uav-subtitle-', dir=destination)
+        path = workspace.__enter__()
+    except OSError as exc:
+        raise StorageWriteError(destination, exc) from exc
+    try:
+        yield path
+    finally:
+        try:
+            workspace.__exit__(*sys.exc_info())
+        except OSError as exc:
+            raise StorageWriteError(destination, exc) from exc
+
+
 def _atomic_write_text(destination: str, text: str) -> None:
+    try:
+        _atomic_write_text_impl(destination, text)
+    except OSError as exc:
+        raise StorageWriteError(destination, exc) from exc
+
+
+def _atomic_write_text_impl(destination: str, text: str) -> None:
     destination_dir = os.path.dirname(destination)
     os.makedirs(destination_dir, exist_ok=True)
     descriptor, temp = tempfile.mkstemp(
@@ -5159,9 +5198,7 @@ def generate_subtitles(video_path: str, mode,
                 exe, model, vad_model = _prepare_runtime(
                     progress_callback, cancel_check)
 
-        with tempfile.TemporaryDirectory(
-                prefix='uav-subtitle-',
-                dir=os.path.dirname(os.path.abspath(video_path))) as temp_dir:
+        with _destination_workspace(video_path) as temp_dir:
             wav = os.path.join(temp_dir, 'audio.wav')
             log = os.path.join(temp_dir, 'process.log')
             if need_whisper:
