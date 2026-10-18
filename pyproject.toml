@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,9 +7,27 @@ name = "uav-downloader"
 version = "3.2.1"
 description = "JableTV, MissAV, SupJav and Hanime1 downloader with unattended automation and local AI subtitles"
 readme = "README.en.md"
-requires-python = ">=3.10"
-license = { file = "LICENSE" }
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "ALOS", email = "alos21750@users.noreply.github.com" }]
+dependencies = [
+  "requests>=2.28.0",
+  "PySocks>=1.7.1",
+  "beautifulsoup4>=4.11.0",
+  "m3u8>=3.0.0",
+  "pycryptodome>=3.15.0",
+  "cloudscraper>=1.2.68",
+  "Pillow>=9.2.0",
+  "customtkinter>=5.2.0",
+  "curl_cffi>=0.7.0",
+  "imageio-ffmpeg>=0.5.1",
+  "ctranslate2==4.8.1",
+  "numpy==2.5.1",
+  "PyYAML==6.0.3",
+  "sentencepiece==0.2.2",
+  "opencc-python-reimplemented==0.1.7",
+]
 keywords = [
   "jabletv",
   "missav",
@@ -25,12 +43,15 @@ keywords = [
 ]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
-  "License :: OSI Approved :: Apache Software License",
   "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-timeout>=2.3",
 ]
 
 [project.urls]
@@ -55,4 +76,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]

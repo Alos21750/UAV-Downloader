@@ -144,12 +144,11 @@ Hanime1 は公式 `watch?v=` URL、サイト内検索、ページ送りに加え
 
 ## ソースコードから実行
 
-現在のコードには **Python 3.10+** と Tk が必要です。以前の README にあった Python 3.8+ という記載は、現在使用している構文には対応しません。
+現在のコードには **Python 3.12+** と Tk が必要です。これは固定された NumPy バージョンの最低要件と一致します。
 
 ```bash
 git clone https://github.com/Alos21750/UAV-Downloader.git
 cd UAV-Downloader
-python -m pip install -r requirements.txt
 python -m pip install -e .
 
 # フル GUI

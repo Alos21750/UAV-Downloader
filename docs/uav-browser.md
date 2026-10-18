@@ -11,13 +11,25 @@ queue individual videos from JableTV, MissAV, SupJav, and Hanime1.
    On Hanime1, Full filters can combine keywords, 9 genres, 9 sort modes,
    6 published-date ranges, 8 duration ranges, and multiple selections from
    the complete 240-tag catalog.
-3. Select one or more video cards.
-4. Add the selection to the persistent queue or download it immediately.
-5. Follow progress on the Download tab while continuing to browse.
+3. Select the current page, select cards across pages, or select every unique
+   result from the current search/listing.
+4. Review the selection, remove unwanted cards, and choose a resolution and
+   filename template for the batch.
+5. Add the selection to the persistent queue or download it immediately. The
+   result summary reports new, duplicate, and unsupported URLs separately.
+6. Follow progress on the Download tab while continuing to browse.
 
-URLs can also be pasted directly or imported from text and CSV files. Active
-downloads can be stopped and placed at the front of the queue again; failed
-items can be retried independently.
+URLs can also be pasted explicitly or imported from UTF-8 text, CSV, and JSON
+files. Copying a URL only fills the input; it no longer changes the persistent
+queue without a user action. Queue/history snapshots can be exported as CSV or
+JSON.
+
+The Download tab can filter All, Active, Queued, Failed, History, and Paused
+items. Each row shows its source, video code, resolution, optional thumbnail,
+progress, speed, and ETA. Clicking the detail line copies structured diagnostic
+data. Active and queued jobs can be paused without deleting validated temporary
+chunks, then resumed later. Cancel and Clear remain destructive and require
+confirmation.
 
 ## Controls
 
@@ -29,7 +41,15 @@ items can be retried independently.
 - Filename format: Code + full title (default), or Code only. Code only keeps
   everything before the first Unicode whitespace and therefore also supports
   names such as `FC2-PPV-1234567` without studio-specific regular expressions.
+- Optional filename templates with the allowlisted `{title}`, `{code}`, and
+  `{site}` fields. Path separators and unsafe filename characters are rejected.
+- Per-batch resolution and filename settings from the selection review dialog.
 - Optional download speed limit.
+- Optional daily local start time, destination free-space threshold, and
+  completion notification.
+- Bounded automatic retry with exponential backoff for temporary network and
+  Cloudflare failures. Permanent URL, storage, permission, missing-video, and
+  missing-ffmpeg failures are not retried blindly.
 - Custom HTTP, HTTPS, SOCKS4, or SOCKS5 proxy, or the enabled Windows manual
   proxy.
 - Local-first Japanese, English, and Traditional Chinese AI subtitles.
@@ -50,6 +70,17 @@ speed cap disables automatic requeue.
 
 Destination I/O failures stop the download/subtitle queue without deleting
 validated chunks. Check free space and device health before explicitly retrying.
+UAV Browser also performs a writable-directory and free-space preflight before
+starting a new batch.
+
+The queue file now keeps a stable job ID, site, thumbnail, resolution, filename
+template, error category, retry count, and timestamps. Older queue CSV files
+remain readable; interrupted active/scheduled states are restored as Incomplete
+so they never start unexpectedly after a crash.
+
+Thai is available from the language picker for the primary browse, selection,
+download, queue, safety, and settings workflow. Site-provided category names
+fall back to English when a reviewed Thai label is unavailable.
 
 Validated HLS segments are resumable. If a MissAV CDN request remains
 unavailable after the automatic retry window, Retry requests only the missing
@@ -66,7 +97,6 @@ portable, includes ffmpeg, and does not require a Python installation.
 From a source checkout:
 
 ```bash
-python -m pip install -r requirements.txt
 python -m pip install -e .
 uav-browser
 ```

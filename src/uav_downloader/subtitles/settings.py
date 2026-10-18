@@ -41,7 +41,7 @@ PROVIDER_DEFAULTS = {
     LOCAL: {"base_url": "", "model": ""},
     OPENAI: {
         "base_url": "https://api.openai.com/v1",
-        "model": "gpt-5.6-luna",
+        "model": "gpt-6-luna",
     },
     ANTHROPIC: {
         "base_url": "https://api.anthropic.com/v1",

@@ -53,15 +53,26 @@ class SiteMissAV(M3U8Crawler):
     segment_retry_base_delay = 1.5
     segment_retry_max_delay = 8.0
     _segment_request_gate = threading.BoundedSemaphore(8)
-    # Matches video pages ONLY (no dm\d+ routing prefix — those are category pages):
+    # Matches video pages, including optional dm routing and language prefixes:
     #   https://missav.ai/cn/sone-543-chinese-subtitle
     #   https://missav.ai/sone-543
     #   https://missav.ai/dm1151/092014_887
     #   https://missav.ai/dm464/081012-097
     # Does NOT match:
     #   https://missav.ai/dm278/chinese-subtitle  (category listing)
-    website_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:cn|en|ja|ko|ms|th)/([a-zA-Z0-9][a-zA-Z0-9\-_]+)|https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/([a-zA-Z0-9][a-zA-Z0-9\-_]*[-_]\d[a-zA-Z0-9\-_]*)'
-    website_dirname_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?([a-zA-Z0-9][a-zA-Z0-9\-_]*[-_]\d[a-zA-Z0-9\-_]*)'
+    # MissAV video codes are not uniformly separated from their numeric part.
+    # Besides codes such as ``sone-543`` and ``092014_887``, current search
+    # results contain compact codes such as ``mdhg0020`` and ``mcy0244``.
+    # Require at least one digit in the final slug instead of requiring a
+    # ``-``/``_`` immediately before it.  Category slugs such as ``new`` and
+    # ``chinese-subtitle`` remain excluded because they contain no digit.
+    website_pattern = (
+        r'https://(?:www\.)?'
+        r'(?:missav\.(?:ai|ws|live)|missav123\.com)/'
+        r'(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?'
+        r'([a-zA-Z0-9][a-zA-Z0-9_-]*\d[a-zA-Z0-9_-]*)/?$'
+    )
+    website_dirname_pattern = website_pattern
 
     _shared_scraper = None
     _scraper_lock = threading.Lock()

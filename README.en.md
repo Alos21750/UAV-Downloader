@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="./README.md">繁體中文</a> · <a href="./README.zh-CN.md">简体中文</a> · <strong>English</strong> · <a href="./README.ja.md">日本語</a>
+  <a href="./README.md">繁體中文</a> · <a href="./README.zh-CN.md">简体中文</a> · <strong>English</strong> · <a href="./README.ja.md">日本語</a> · <a href="./MANUAL.th.md">คู่มือภาษาไทย</a>
 </p>
 
 <h1 align="center">UAV Downloader</h1>
@@ -147,12 +147,11 @@ Hanime1 support covers official `watch?v=` URLs, search, pagination, and combina
 
 ## Run from source
 
-The current code requires **Python 3.10+** and Tk. The former Python 3.8+ README claim no longer matches syntax used by the project.
+The current code requires **Python 3.12+** and Tk. This matches the minimum version supported by the pinned NumPy dependency.
 
 ```bash
 git clone https://github.com/Alos21750/UAV-Downloader.git
 cd UAV-Downloader
-python -m pip install -r requirements.txt
 python -m pip install -e .
 
 # Full GUI

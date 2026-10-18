@@ -26,11 +26,17 @@ def test_validate_accepts_video_pages():
     assert SiteMissAV.validate_url('https://missav.ai/cn/sone-543-chinese-subtitle')
     assert SiteMissAV.validate_url('https://missav.ai/dm1151/092014_887')
     assert SiteMissAV.validate_url('https://missav.ai/dm464/081012-097')
+    # Current actress/search listings also use compact codes with no dash or
+    # underscore before the numeric portion.
+    assert SiteMissAV.validate_url('https://missav.ai/en/mdhg0020')
+    assert SiteMissAV.validate_url('https://missav.ai/dm13/en/mcy0244')
+    assert SiteMissAV.validate_url('https://missav.ai/dm13/en/mkyba008')
 
 
 def test_validate_rejects_category_and_foreign_pages():
     assert not SiteMissAV.validate_url('https://missav.ai/dm278/chinese-subtitle')
     assert not SiteMissAV.validate_url('https://missav.ai/dm539/new')
+    assert not SiteMissAV.validate_url('https://missav.ai/dm298/en/today-hot')
     assert not SiteMissAV.validate_url('https://jable.tv/videos/x/')
 
 

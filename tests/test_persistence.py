@@ -270,8 +270,40 @@ def test_clear_then_save_writes_header_only(tmp_path):
         rows = list(csv.reader(f))
     assert rows == [[
         '狀態', '名稱', '進度', '速度', '網址', '目標',
-        '字幕來源證據',
+        '字幕來源證據', '工作 ID', '網站', '解析度',
+        '檔名範本', '縮圖', '錯誤', '錯誤代碼',
+        '重試次數', '排程時間', '建立時間', '更新時間',
     ]]
+
+
+def test_queue_round_trip_preserves_job_metadata_and_error(tmp_path):
+    path = tmp_path / 'download_queue.csv'
+    manager = DownloadManager(auto_retry_count_getter=lambda: 0)
+    item = manager.add_item(
+        'https://missav.ai/en/mdhg0020',
+        name='MDHG0020 Full title', state='未完成', dest='downloads',
+        resolution='720', filename_template='{site} {code}',
+        thumbnail='https://cdn.example/thumb.jpg',
+        job_id='stable-job-id', site='MissAV', created_at=123.0)
+    item.error = 'connection timed out'
+    item.error_code = 'network'
+    item.retry_count = 2
+    item.updated_at = 456.0
+
+    manager.save_csv(str(path))
+    loaded = DownloadManager()
+    loaded.load_csv(str(path))
+    restored = loaded.get_items()[0]
+
+    assert restored.job_id == 'stable-job-id'
+    assert restored.site == 'MissAV'
+    assert restored.resolution == '720'
+    assert restored.filename_template == '{site} {code}'
+    assert restored.thumbnail == 'https://cdn.example/thumb.jpg'
+    assert restored.error_code == 'network'
+    assert restored.retry_count == 2
+    assert restored.created_at == 123.0
+    assert restored.updated_at == 456.0
 
 
 def test__visible_window_prioritizes_active():
@@ -450,10 +482,11 @@ def test_cancel_all_after_restart_request_suppresses_replacement(
 
 
 def test_download_row_action_exposes_requeue_only_for_active_video_states():
-    assert _download_row_action(_item('preparing', '準備中')) == 'requeue'
-    assert _download_row_action(_item('downloading', '下載中')) == 'requeue'
+    assert _download_row_action(_item('preparing', '準備中')) == 'pause'
+    assert _download_row_action(_item('downloading', '下載中')) == 'pause'
     assert _download_row_action(_item('failed', '未完成')) == 'retry'
     assert _download_row_action(_item('blocked', '封鎖/解析失敗')) == 'retry'
     assert _download_row_action(_item('cancelled', '已取消')) == 'retry'
-    assert _download_row_action(_item('queued', '等待中')) == ''
+    assert _download_row_action(_item('queued', '等待中')) == 'pause'
+    assert _download_row_action(_item('paused', '已暫停')) == 'resume'
     assert _download_row_action(_item('done', '已下載')) == ''

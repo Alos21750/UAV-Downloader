@@ -76,10 +76,11 @@ def test_cli_stops_batch_on_storage_error(monkeypatch, tmp_path):
     def create(*args, **kwargs):
         calls.append(args)
         return Site()
-    monkeypatch.setattr(headless, 'gather_urls', lambda: ['one', 'two'])
+    monkeypatch.setattr(
+        headless, 'gather_urls', lambda *_args: ['one', 'two'])
     monkeypatch.setattr(headless.M3U8Sites, 'CreateSite', create)
     monkeypatch.setenv('DOWNLOAD_DIR', str(tmp_path))
-    assert headless.main() == 1
+    assert headless.main([]) == 1
     assert len(calls) == 1
 
 

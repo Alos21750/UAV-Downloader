@@ -1,5 +1,5 @@
 <p align="center">
-  <strong>繁體中文</strong> · <a href="./README.zh-CN.md">简体中文</a> · <a href="./README.en.md">English</a> · <a href="./README.ja.md">日本語</a>
+  <strong>繁體中文</strong> · <a href="./README.zh-CN.md">简体中文</a> · <a href="./README.en.md">English</a> · <a href="./README.ja.md">日本語</a> · <a href="./MANUAL.th.md">คู่มือภาษาไทย</a>
 </p>
 
 <h1 align="center">UAV Downloader</h1>
@@ -144,12 +144,11 @@ Hanime1 支援官方 `watch?v=` 網址、站內搜尋、分頁，以及可組合
 
 ## 從原始碼執行
 
-需要 **Python 3.10+** 與 Tk。舊 README 的 Python 3.8+ 已不符合目前原始碼語法需求。
+需要 **Python 3.12+** 與 Tk；這與目前固定版本的 NumPy 最低需求一致。
 
 ```bash
 git clone https://github.com/Alos21750/UAV-Downloader.git
 cd UAV-Downloader
-python -m pip install -r requirements.txt
 python -m pip install -e .
 
 # 完整 GUI

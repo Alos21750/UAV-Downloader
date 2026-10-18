@@ -53,22 +53,30 @@ def VaildateUrl(url):  # noqa: N802 - legacy API typo retained for v2 callers
     return validate_url(url)
 
 
-def create_site(url, savepath="", silence=False, max_workers=None):
+def create_site(
+        url, savepath="", silence=False, max_workers=None,
+        resolution=None, filename_template=None):
     site = validate_url(url)
     if site is None:
         return None
-    if max_workers is None:
-        return site(url, savepath=savepath, silence=silence)
-    return site(
-        url,
-        savepath=savepath,
-        silence=silence,
-        max_workers=max_workers,
-    )
+    kwargs = {
+        'savepath': savepath,
+        'silence': silence,
+        'max_workers': max_workers,
+    }
+    if resolution is not None:
+        kwargs['resolution'] = resolution
+    if filename_template is not None:
+        kwargs['filename_template'] = filename_template
+    return site(url, **kwargs)
 
 
-def CreateSite(url, savepath="", silence=False, max_workers=None):  # noqa: N802
-    return create_site(url, savepath, silence, max_workers)
+def CreateSite(  # noqa: N802
+        url, savepath="", silence=False, max_workers=None,
+        resolution=None, filename_template=None):
+    return create_site(
+        url, savepath, silence, max_workers,
+        resolution, filename_template)
 
 
 def create_site_url_list(url, silence=False):
@@ -87,9 +95,22 @@ def consoles_main(url, dest=None, max_workers=None):
     if not url:
         url = input("輸入支援的網址: ")
     job = create_site(url, dest, max_workers=max_workers)
-    if job and job.is_url_vaildate():
-        job.start_download()
-        print("下載完成!")
+    if job is None:
+        print(f"不支援的網址: {url}")
+        return 2
+    if not job.is_url_vaildate():
+        print(f"無法解析影片: {url}")
+        return 1
+    try:
+        completed = job.start_download()
+    except Exception as exc:
+        print(f"下載錯誤: {exc}")
+        return 1
+    if completed is False:
+        print("下載未完成")
+        return 1
+    print("下載完成!")
+    return 0
 
 
 if __name__ == "__main__":

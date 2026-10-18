@@ -135,6 +135,33 @@ def test_segment_executor_receives_the_job_worker_limit(monkeypatch):
     assert seen == [2]
 
 
+def test_create_site_forwards_per_job_output_options(monkeypatch, tmp_path):
+    captured = {}
+
+    class _FakeSite:
+        @classmethod
+        def validate_url(cls, url):
+            return 'video'
+
+        def __init__(
+                self, url, savepath='', silence=False, max_workers=None,
+                resolution=None, filename_template=None):
+            captured.update(
+                resolution=resolution,
+                filename_template=filename_template)
+
+    monkeypatch.setattr(M3U8Sites, 'siteList', (_FakeSite,))
+
+    M3U8Sites.CreateSite(
+        'https://example.test/video', str(tmp_path),
+        resolution='720', filename_template='{site} {code}')
+
+    assert captured == {
+        'resolution': '720',
+        'filename_template': '{site} {code}',
+    }
+
+
 def test_site_specific_retry_rounds_are_honored(monkeypatch):
     rounds = []
 
