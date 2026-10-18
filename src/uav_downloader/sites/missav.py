@@ -4,6 +4,7 @@
 import re
 import threading
 import cloudscraper
+from urllib.parse import urlsplit, unquote
 try:
     from curl_cffi import requests as cffi_requests
     _use_cffi = True
@@ -40,6 +41,56 @@ def _unpack_js_eval(script_text):
     lookup = {to_base(i, a): (keys_str[i] if i < len(keys_str) and keys_str[i] else to_base(i, a))
               for i in range(c)}
     return re.sub(r'\b(\w+)\b', lambda m: lookup.get(m.group(0), m.group(0)), packed)
+
+
+_MISSAV_SUFFIX_TAGS = (
+    ('-uncensored-leak', '-UNCENSORED-LEAK'),
+    ('-chinese-subtitle', '-CHINESE-SUBTITLE'),
+    ('-chinese-subtitles', '-CHINESE-SUBTITLE'),
+    ('-english-subtitle', '-ENGLISH-SUBTITLE'),
+    ('-english-subtitles', '-ENGLISH-SUBTITLE'),
+    ('-reducing-mosaic', '-REDUCING-MOSAIC'),
+    ('-reduced-mosaic', '-REDUCING-MOSAIC'),
+)
+
+
+def enrich_missav_title(title: str, url_or_slug: str) -> str:
+    """Ensure MissAV titles reflect variant suffixes (e.g. -uncensored-leak) to avoid file collisions."""
+    title = str(title or '').strip()
+    if not title:
+        return title
+    raw = str(url_or_slug or '').strip()
+    if '/' in raw or ':' in raw:
+        path = unquote(urlsplit(raw).path).rstrip('/')
+        slug = path.rsplit('/', 1)[-1].casefold() if path else ''
+    else:
+        slug = raw.casefold()
+
+    for suffix, tag in _MISSAV_SUFFIX_TAGS:
+        if slug.endswith(suffix):
+            tag_clean = tag.strip('-_').upper()
+            if tag_clean in title.upper():
+                return title
+            if tag == '-UNCENSORED-LEAK' and ('無碼流出' in title or '无码流出' in title):
+                return title
+            if tag == '-CHINESE-SUBTITLE' and ('中文字幕' in title or '中字' in title or 'chinese subtitle' in title.lower()):
+                return title
+            if tag == '-ENGLISH-SUBTITLE' and ('英文字幕' in title or 'english subtitle' in title.lower()):
+                return title
+            if tag == '-REDUCING-MOSAIC' and ('破壞版' in title or '破坏版' in title or 'reducing mosaic' in title.lower()):
+                return title
+
+            base_code = slug[:-len(suffix)].rstrip('-_')
+            pat = r'^(' + re.escape(base_code).replace(r'\-', r'[-_]').replace(r'\_', r'[-_]') + r')(?=\b|[\s_-]|$)'
+            m = re.match(pat, title, re.IGNORECASE)
+            if m:
+                return m.group(1).upper() + tag + title[m.end():]
+            parts = title.split(maxsplit=1)
+            if parts and re.search(r'\d', parts[0]):
+                rest = (' ' + parts[1]) if len(parts) > 1 else ''
+                return f'{parts[0].upper()}{tag}{rest}'
+            return f'{base_code.upper()}{tag} {title}'.strip()
+    return title
 
 
 class SiteMissAV(M3U8Crawler):
@@ -113,6 +164,7 @@ class SiteMissAV(M3U8Crawler):
             soup = BeautifulSoup(htmlfile.content, 'html.parser')
             meta = soup.find('meta', property='og:title')
             self._targetName = meta.get('content', '') if meta else ''
+        self._targetName = enrich_missav_title(self._targetName, self._url)
 
         # Thumbnail from og:image
         og_image = re.search(r'og:image"\s+content="([^"]+)"', htmlfile.text)
@@ -223,6 +275,7 @@ class MissAVBrowser:
                 title_a = card.select_one('div.my-2 a, div.truncate a')
                 if title_a:
                     title_text = title_a.get_text(strip=True) or title_text
+                title_text = enrich_missav_title(title_text, video_url)
                 duration_span = card.select_one('span.absolute.bottom-1.right-1')
                 duration = duration_span.get_text(strip=True) if duration_span else ''
                 videos.append({'url': video_url, 'title': title_text, 'thumbnail': thumbnail, 'duration': duration})
