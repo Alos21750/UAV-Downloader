@@ -41,8 +41,10 @@ def _apply_jable_lang(scraper):
 
 
 class SiteJableTV(M3U8Crawler):
-    website_pattern = r'https://jable\.tv/videos/.+/'
-    website_dirname_pattern = r'https://jable\.tv/videos/(.+)/$'
+    # The captured identifier is used as a segment directory. Accept exactly
+    # one canonical slug, never path separators, dot segments or URL syntax.
+    website_pattern = r'https://jable\.tv/videos/[a-z0-9_-]+/\Z'
+    website_dirname_pattern = r'https://jable\.tv/videos/([a-z0-9_-]+)/\Z'
 
     def get_url_infos(self):
         with _make_scraper() as scraper:
@@ -73,8 +75,8 @@ class SiteJableTV(M3U8Crawler):
 
 
 class SiteJableTV_Backup(SiteJableTV):
-    website_pattern = r'https://fs1\.app/videos/.+/'
-    website_dirname_pattern = r'https://fs1\.app/videos/(.+)/$'
+    website_pattern = r'https://fs1\.app/videos/[a-z0-9_-]+/\Z'
+    website_dirname_pattern = r'https://fs1\.app/videos/([a-z0-9_-]+)/\Z'
 
 
 class JableTVList(SiteUrlList_M3U8):

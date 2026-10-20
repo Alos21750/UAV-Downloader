@@ -69,15 +69,9 @@ def enrich_missav_title(title: str, url_or_slug: str) -> str:
     for suffix, tag in _MISSAV_SUFFIX_TAGS:
         if slug.endswith(suffix):
             tag_clean = tag.strip('-_').upper()
-            if tag_clean in title.upper():
-                return title
-            if tag == '-UNCENSORED-LEAK' and ('無碼流出' in title or '无码流出' in title):
-                return title
-            if tag == '-CHINESE-SUBTITLE' and ('中文字幕' in title or '中字' in title or 'chinese subtitle' in title.lower()):
-                return title
-            if tag == '-ENGLISH-SUBTITLE' and ('英文字幕' in title or 'english subtitle' in title.lower()):
-                return title
-            if tag == '-REDUCING-MOSAIC' and ('破壞版' in title or '破坏版' in title or 'reducing mosaic' in title.lower()):
+            # The identity must survive code-only naming. A translated marker
+            # elsewhere in the full title is not enough to distinguish files.
+            if tag_clean in title.split(maxsplit=1)[0].upper():
                 return title
 
             base_code = slug[:-len(suffix)].rstrip('-_')
@@ -121,9 +115,21 @@ class SiteMissAV(M3U8Crawler):
         r'https://(?:www\.)?'
         r'(?:missav\.(?:ai|ws|live)|missav123\.com)/'
         r'(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?'
-        r'([a-zA-Z0-9][a-zA-Z0-9_-]*\d[a-zA-Z0-9_-]*)/?$'
+        r'([a-zA-Z0-9][a-zA-Z0-9_-]*)/?$'
     )
     website_dirname_pattern = website_pattern
+
+    @classmethod
+    def validate_url(cls, url):
+        # Bound work before regex and avoid overlapping quantifiers around a
+        # required digit (quadratic backtracking on invalid pasted input).
+        if not isinstance(url, str) or len(url) > 2048:
+            return None
+        slug = super().validate_url(url)
+        if (not slug or not any('0' <= char <= '9' for char in slug) or
+                re.fullmatch(r'dm\d+', slug, flags=re.I)):
+            return None
+        return slug
 
     _shared_scraper = None
     _scraper_lock = threading.Lock()

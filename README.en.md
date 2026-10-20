@@ -38,7 +38,14 @@
 
 ## Three workflows, one download core
 
-### New in v3.2.1
+### New in v3.3.0
+
+- Thai interface and [Thai manual](MANUAL.th.md), plus richer persistent queue controls: import/export, filters, pause/resume, scheduling and bounded retries.
+- [Optional Docker Web UI](docs/docker-cli.md#nas-web-queue-opt-in): authenticated persistent URL queue, progress, cancel/retry and storage-error halt; CLI remains the default.
+- **Preview ↗** beside Select opens the source's full player in your system browser without downloading. Embedded playback remains an open proposal.
+- Hardened filename templates, MissAV variant identity, URL/path validation, CSV export and storage diagnostics. Full-result scans no longer silently stop at 50 pages.
+
+### Previous: v3.2.1
 
 Browser now closes safely during startup; background UI updates run on the main thread.
 

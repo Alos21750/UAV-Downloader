@@ -104,5 +104,5 @@ def test_enrich_missav_title_adds_uncensored_leak_suffix():
 
 def test_enrich_missav_title_avoids_duplicate_suffix():
     assert enrich_missav_title('POW-093-UNCENSORED-LEAK Melcy-chan', 'pow-093-uncensored-leak') == 'POW-093-UNCENSORED-LEAK Melcy-chan'
-    assert enrich_missav_title('POW-093 梅爾西醬 [無碼流出]', 'pow-093-uncensored-leak') == 'POW-093 梅爾西醬 [無碼流出]'
+    assert enrich_missav_title('POW-093 梅爾西醬 [無碼流出]', 'pow-093-uncensored-leak') == 'POW-093-UNCENSORED-LEAK 梅爾西醬 [無碼流出]'
 

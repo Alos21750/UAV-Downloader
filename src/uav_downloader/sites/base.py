@@ -570,7 +570,7 @@ class M3U8Crawler:
             filename_template if filename_template is not None
             else config.get_filename_template())
         requested_resolution = str(
-            resolution or config.get_resolution_pref()).strip().lower()
+            resolution or get_resolution_pref()).strip().lower()
         self._resolution_pref = (
             requested_resolution
             if requested_resolution in _VALID_RESOLUTION_PREFS

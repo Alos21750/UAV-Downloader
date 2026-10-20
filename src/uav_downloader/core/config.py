@@ -2,6 +2,7 @@ import json
 import os
 import re
 import threading
+from string import Formatter
 from urllib.parse import urlsplit
 
 from uav_downloader.core.paths import product_data_dir
@@ -227,15 +228,21 @@ def normalize_filename_template(value):
     if (len(template) > 160 or re.search(r'[\x00-\x1f\x7f]', template) or
             any(char in template for char in '\\/<>:"|?*')):
         return DEFAULT_FILENAME_TEMPLATE
-    fields = re.findall(r'\{([a-zA-Z0-9_]+)\}', template)
-    if any(field not in FILENAME_TEMPLATE_FIELDS for field in fields):
-        return DEFAULT_FILENAME_TEMPLATE
-    # Reject unmatched braces and require at least one meaningful field.
     try:
+        fields = []
+        for _literal, field, specification, conversion in Formatter().parse(template):
+            if field is None:
+                continue
+            # Formatting can resolve attributes/indices even without eval.
+            # Accept only the complete, literal field names documented here.
+            if (field not in FILENAME_TEMPLATE_FIELDS or specification or
+                    conversion is not None):
+                return DEFAULT_FILENAME_TEMPLATE
+            fields.append(field)
         rendered = template.format(title='title', code='code', site='site')
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, IndexError, AttributeError):
         return DEFAULT_FILENAME_TEMPLATE
-    if not rendered.strip() or not fields:
+    if not rendered.strip() or not ({'title', 'code'} & set(fields)):
         return DEFAULT_FILENAME_TEMPLATE
     return template
 

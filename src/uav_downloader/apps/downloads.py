@@ -275,7 +275,16 @@ def export_items(items, path: str) -> None:
         with temporary.open('w', encoding='utf-8-sig', newline='') as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
             writer.writeheader()
-            writer.writerows(records)
+            # Site metadata is untrusted. Excel may evaluate a quoted CSV cell
+            # as a formula, so neutralize it in the user-facing CSV export.
+            # JSON remains lossless; internal queue persistence is separate.
+            writer.writerows({
+                key: ("'" + value if isinstance(value, str) and
+                      (value[:1] in {'=', '+', '-', '@', '\t', '\r', '\n'} or
+                       value.lstrip().startswith(('=', '+', '-', '@')))
+                      else value)
+                for key, value in record.items()
+            } for record in records)
             handle.flush()
             os.fsync(handle.fileno())
     os.replace(temporary, destination)

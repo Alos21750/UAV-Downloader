@@ -16,3 +16,27 @@ services:
       - URLS_FILE=/downloads/urls.txt
     # This is a run-to-completion job, not a long-running service:
     restart: "no"
+
+  # Opt-in only: export a random UAV_WEB_TOKEN, then
+  # docker compose --profile web up -d uav-web
+  uav-web:
+    profiles: [web]
+    image: ghcr.io/alos21750/uav-downloader:latest
+    container_name: uav-downloader-web
+    entrypoint: ["python", "-u", "-m", "uav_downloader.web"]
+    ports:
+      # Keep loopback-only; use an authenticated TLS reverse proxy or VPN.
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./downloads:/downloads
+      - uav-web-state:/state
+    environment:
+      UAV_WEB_HOST: "0.0.0.0"
+      UAV_WEB_TOKEN: "${UAV_WEB_TOKEN:-}"
+      UAV_WEB_ALLOWED_HOSTS: "${UAV_WEB_ALLOWED_HOSTS:-localhost:8765,127.0.0.1:8765}"
+    init: true
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+volumes:
+  uav-web-state:

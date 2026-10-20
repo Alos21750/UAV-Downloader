@@ -20,7 +20,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '互動式多站下載器',
-        'version_label': 'v3.2.1',
+        'version_label': 'v3.3.0',
         'by_author': '',
         'status_ready': '就緒',
         'site_label': '網站',
@@ -414,7 +414,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': 'Interactive Multi-Site Downloader',
-        'version_label': 'v3.2.1',
+        'version_label': 'v3.3.0',
         'by_author': '',
         'status_ready': 'Ready',
         'site_label': 'Site',
@@ -809,7 +809,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '交互式多站下载器',
-        'version_label': 'v3.2.1',
+        'version_label': 'v3.3.0',
         'by_author': '',
         'status_ready': '就绪',
         'site_label': '网站',
@@ -1203,7 +1203,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '対話型マルチサイトダウンローダー',
-        'version_label': 'v3.2.1',
+        'version_label': 'v3.3.0',
         'by_author': '',
         'status_ready': '準備完了',
         'site_label': 'サイト',
@@ -1607,6 +1607,9 @@ _WORKFLOW_EN = {
     'clear_selection_btn': 'Clear',
     'selecting_all_results': 'Selecting all results… page {page} · {count} found',
     'selection_all_done': 'Selected {count} unique results',
+    'selection_all_partial': 'Incomplete scan: {count} results found · {reason}',
+    'selection_scan_repeated': 'The server repeated a page; stopped safely',
+    'selection_scan_cancelled': 'Selection scan cancelled',
     'selection_preview_title': 'Review selected videos',
     'selection_preview_desc': '{count} videos · verify names, site and options before continuing',
     'selection_preview_empty': 'No videos are selected.',
@@ -1726,6 +1729,9 @@ _THAI_CORE = {
     'clear_selection_btn': 'ล้าง',
     'selecting_all_results': 'กำลังเลือกทั้งหมด… หน้า {page} · พบ {count}',
     'selection_all_done': 'เลือกผลลัพธ์ไม่ซ้ำ {count} รายการแล้ว',
+    'selection_all_partial': 'สแกนไม่ครบ: พบ {count} รายการ · {reason}',
+    'selection_scan_repeated': 'เซิร์ฟเวอร์ส่งหน้าซ้ำ จึงหยุดการสแกน',
+    'selection_scan_cancelled': 'ยกเลิกการสแกนแล้ว',
     'selection_preview_title': 'ตรวจรายการที่เลือก',
     'selection_preview_desc': '{count} รายการ · ตรวจชื่อ เว็บไซต์ และตัวเลือกก่อนดำเนินการ',
     'selection_preview_empty': 'ยังไม่ได้เลือกวิดีโอ',
@@ -1778,6 +1784,18 @@ _THAI_CORE = {
 }
 STRINGS['th'] = dict(STRINGS['en'])
 STRINGS['th'].update(_THAI_CORE)
+
+# Source-player preview is deliberately a system-browser tab, not an embedded
+# player or a promise to bypass provider access restrictions.
+for _language, _preview in {
+    'en': ('Preview ↗', 'Opened the source player in your browser. Playback depends on site access.', 'Could not open preview. Check the source URL and default browser.'),
+    'zh': ('預覽 ↗', '已在瀏覽器開啟來源播放器；播放取決於網站存取權限。', '無法開啟預覽，請檢查來源網址與預設瀏覽器。'),
+    'zh-Hans': ('预览 ↗', '已在浏览器打开来源播放器；播放取决于网站访问权限。', '无法打开预览，请检查来源网址与默认浏览器。'),
+    'ja': ('プレビュー ↗', 'ブラウザーで配信元を開きました。再生にはサイトへのアクセスが必要です。', 'プレビューを開けません。URL と既定のブラウザーを確認してください。'),
+    'th': ('ดูตัวอย่าง ↗', 'เปิดเครื่องเล่นต้นทางในเบราว์เซอร์แล้ว การเล่นขึ้นอยู่กับสิทธิ์เข้าถึงเว็บไซต์', 'เปิดตัวอย่างไม่ได้ ตรวจสอบ URL และเบราว์เซอร์เริ่มต้น'),
+}.items():
+    STRINGS[_language].update(zip(
+        ('preview_browser', 'preview_opened', 'preview_failed'), _preview))
 
 STATE_LABELS = {
     '下載中': {'en': 'Downloading', 'th': 'กำลังดาวน์โหลด', 'zh': '下載中', 'zh-Hans': '下载中', 'ja': 'ダウンロード中'},

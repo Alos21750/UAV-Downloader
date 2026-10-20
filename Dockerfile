@@ -1,4 +1,4 @@
-# UAV Downloader CLI — unified JableTV, MissAV, SupJav and Hanime1 downloader.
+# UAV Downloader CLI + opt-in authenticated NAS Web queue.
 # Pass URL(s); videos are downloaded to /downloads without a GUI.
 FROM python:3.12-slim
 
@@ -16,9 +16,11 @@ RUN pip install --no-cache-dir -r requirements-docker.txt
 COPY . .
 
 ENV DOWNLOAD_DIR=/downloads \
+    UAV_WEB_STATE_DIR=/state \
     PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1
 VOLUME ["/downloads"]
+EXPOSE 8765
 
 # URL(s) are passed as CMD args (or via URLS / URLS_FILE env)
 ENTRYPOINT ["python", "-u", "-m", "uav_downloader.cli.headless"]

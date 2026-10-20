@@ -33,6 +33,18 @@ confirmation.
 
 ## Controls
 
+### Source-player preview
+
+Each video card has **Preview ↗** beside Select. It opens the original source
+page and its full player in the default system browser, without starting a
+download or changing the queue/selection. It uses that browser's own session
+and proxy settings, not the app's proxy or clearance settings. Site access,
+availability and playback controls remain the provider's responsibility.
+This is not a Tk-embedded video player or a short trailer. The separate request
+for playback embedded inside UAV Browser remains tracked in issue #55.
+
+### Download settings
+
 - Concurrent video downloads: 1–32, with 2 as the default.
 - Segment workers per video: 1–16; individual sources may enforce a lower
   limit. MissAV uses at most 4 per video and 8 across all active MissAV videos,
@@ -42,7 +54,8 @@ confirmation.
   everything before the first Unicode whitespace and therefore also supports
   names such as `FC2-PPV-1234567` without studio-specific regular expressions.
 - Optional filename templates with the allowlisted `{title}`, `{code}`, and
-  `{site}` fields. Path separators and unsafe filename characters are rejected.
+  `{site}` fields, including at least `{title}` or `{code}` to keep identity.
+  Path separators, field traversal and unsafe filename characters are rejected.
 - Per-batch resolution and filename settings from the selection review dialog.
 - Optional download speed limit.
 - Optional daily local start time, destination free-space threshold, and

@@ -52,6 +52,7 @@ from uav_downloader.ui.translation_settings import (
     translation_failure_message,
     translation_provider_summary,
 )
+from uav_downloader.ui.preview import open_video_preview
 from uav_downloader.core.video_identity import (
     normalize_source_subtitle_evidence,
     trusted_chinese_subtitle_evidence,
@@ -718,10 +719,14 @@ class DownloadManager:
                 return
             if not job.is_url_vaildate():
                 err = getattr(job, '_last_error', None)
+                if isinstance(err, StorageWriteError):
+                    raise err  # Preserve the storage-halt path, never retry I/O.
                 if isinstance(err, MirrorsBlockedError):
                     error = ERR_BLOCKED
                 else:
                     error = str(err) if err else T('parse_failed_short')
+                if err is not None and self._schedule_transient_retry(task, error):
+                    return
                 self._complete_download(
                     task, '封鎖/解析失敗', error=error)
                 return
@@ -3567,6 +3572,15 @@ class ModernApp(ctk.CTk):
             )
             sel_btn.pack(side='right')
 
+            ctk.CTkButton(
+                bottom, text=T('preview_browser'), width=112, height=30,
+                corner_radius=CONTROL_RADIUS, fg_color='transparent',
+                border_width=1, border_color=BORDER_HOVER,
+                hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+                font=(ui_font(), 10),
+                command=lambda u=url: self._preview_video(u),
+            ).pack(side='right', padx=(0, 6))
+
             self._card_widgets[url] = {'card': card, 'sel_btn': sel_btn}
 
             # Clickable card
@@ -3630,6 +3644,15 @@ class ModernApp(ctk.CTk):
         candidate['_site'] = self._site_key
         candidate['_source_listing_url'] = self._current_base_url
         return trusted_chinese_subtitle_evidence(candidate)
+
+    def _preview_video(self, url: str):
+        """Preview through the source site's browser player, without queuing."""
+        try:
+            opened = open_video_preview(url)
+        except Exception:
+            opened = False
+        self._status_lbl.configure(
+            text=T('preview_opened' if opened else 'preview_failed'))
 
     def _toggle_select(self, url: str):
         if url in self._selected_urls:
@@ -3696,6 +3719,9 @@ class ModernApp(ctk.CTk):
             pass
 
     def _clear_selection_in_place(self):
+        scan = getattr(self, '_selection_scan_cancel', None)
+        if scan is not None:
+            scan.set()
         selected = list(self._selected_urls)
         self._selected_urls.clear()
         self._selected_videos.clear()
@@ -3746,6 +3772,14 @@ class ModernApp(ctk.CTk):
         browser = SITES[site_key]['browser']
         base_url = self._current_base_url
         build_gen = self._build_gen
+        cancel = threading.Event()
+        self._selection_scan_cancel = cancel
+
+        def _cancelled():
+            return (cancel.is_set() or self._is_closing or
+                    build_gen != self._build_gen or
+                    self._site_key != site_key or
+                    self._current_base_url != base_url)
 
         def _page_url(page):
             if site_key == 'JableTV':
@@ -3759,21 +3793,27 @@ class ModernApp(ctk.CTk):
         def _worker():
             selected: dict[str, dict] = {}
             evidence: dict[str, tuple[str, ...]] = {}
-            blocked = False
-            for page in range(1, 51):
-                if self._is_closing or build_gen != self._build_gen:
-                    self._select_all_running = False
-                    return
+            page = 1
+            reason = ''
+            fingerprints = set()
+            while not _cancelled():
                 try:
                     videos = browser.fetch_page(_page_url(page))
                 except MirrorsBlockedError:
-                    blocked = True
+                    reason = T('mirrors_blocked')
                     break
                 except Exception as exc:
                     print(f'[select all results] page {page}: {exc}', flush=True)
+                    reason = T('fetch_error')
                     break
                 if not videos:
                     break
+                fingerprint = frozenset(
+                    str(video.get('url', '')) for video in videos)
+                if fingerprint in fingerprints:
+                    reason = T('selection_scan_repeated')
+                    break
+                fingerprints.add(fingerprint)
                 before = len(selected)
                 for video in videos:
                     url = video.get('url', '')
@@ -3791,14 +3831,27 @@ class ModernApp(ctk.CTk):
                     text=T('selecting_all_results', page=p, count=n)),
                     gen=build_gen)
                 if len(selected) == before:
+                    reason = T('selection_scan_repeated')
                     break
+                page += 1
+                # Small, cancelable listing pacing; no arbitrary page ceiling.
+                for _ in range(3):
+                    if _cancelled():
+                        break
+                    time.sleep(0.1)
+
+            if _cancelled():
+                reason = T('selection_scan_cancelled')
+            self._select_all_running = False
 
             def _apply():
-                self._select_all_running = False
-                if (self._site_key != site_key or
+                if (self._is_closing or build_gen != self._build_gen or
+                        getattr(self, '_selection_scan_cancel', None) is not cancel or
+                        self._site_key != site_key or
                         self._current_base_url != base_url):
                     return
-                for url, video in selected.items():
+                # Clear selection cancels the scan, not merely its display.
+                for url, video in (() if cancel.is_set() else selected.items()):
                     self._selected_urls.add(url)
                     self._selected_videos[url] = video
                     if url in evidence:
@@ -3806,7 +3859,8 @@ class ModernApp(ctk.CTk):
                     self._set_card_selected(url, True)
                 self._update_selection_count()
                 self._status_lbl.configure(
-                    text=(T('mirrors_blocked') if blocked else
+                    text=(T('selection_all_partial', count=len(selected), reason=reason)
+                          if reason else
                           T('selection_all_done', count=len(selected))))
 
             self._ui(_apply, gen=build_gen)
@@ -4577,11 +4631,16 @@ class ModernApp(ctk.CTk):
         is_jable = bool(re.match(r'https://(?:www\.)?(?:jable\.tv|fs1\.app)/', url))
         is_supjav = bool(re.match(r'https://(?:www\.)?supjav\.com/', url))
         is_hanime1 = bool(re.match(r'https://(?:www\.)?hanime1\.me/', url))
-        max_pages = 50
+        epoch = self._dlmgr._cancel_epoch
+        fingerprints = set()
+        reason = ''
+        page = 1
 
-        for page in range(1, max_pages + 1):
-            if self._is_closing:
-                return
+        def _cancelled():
+            return (self._is_closing or gen != self._build_gen or
+                    epoch != self._dlmgr._cancel_epoch)
+
+        while not _cancelled():
             try:
                 if is_jable:
                     if page == 1:
@@ -4602,20 +4661,29 @@ class ModernApp(ctk.CTk):
                     videos = MissAVBrowser.fetch_page(page_url)
             except MirrorsBlockedError as e:
                 print(f'[crawl] page {page} blocked: {e}')
-                self._ui(lambda: self._status_lbl.configure(text=T('mirrors_blocked')),
-                         gen=gen)
-                return
+                reason = T('mirrors_blocked')
+                break
             except Exception as e:
                 print(f'[crawl] page {page} error: {e}')
+                reason = T('fetch_error')
                 break
 
+            if _cancelled():
+                break
             if not videos:
                 if page == 1:
                     print(f'[crawl] No videos found on first page: {url}')
                 break
+            fingerprint = frozenset(str(v.get('url', '')) for v in videos)
+            if fingerprint in fingerprints:
+                reason = T('selection_scan_repeated')
+                break
+            fingerprints.add(fingerprint)
 
             new_count = 0
             for v in videos:
+                if _cancelled():
+                    break
                 video_url = v.get('url', '')
                 if video_url and video_url not in seen and M3U8Sites.VaildateUrl(video_url):
                     seen.add(video_url)
@@ -4640,14 +4708,23 @@ class ModernApp(ctk.CTk):
                         video_url, dest, not_before=not_before)
 
             if new_count == 0:
+                reason = T('selection_scan_repeated')
                 break  # No new videos on this page, stop
 
             self._ui(lambda n=len(seen): self._status_lbl.configure(
                 text=T('crawling_url') + f' ({n})'), gen=gen)
+            page += 1
+            for _ in range(3):
+                if _cancelled():
+                    break
+                time.sleep(0.1)
 
         n = len(seen)
+        if _cancelled():
+            reason = T('selection_scan_cancelled')
         self._ui(lambda: self._status_lbl.configure(
-            text=T('crawl_added', n=n)), gen=gen)
+            text=(T('selection_all_partial', count=n, reason=reason)
+                  if reason else T('crawl_added', n=n))), gen=gen)
 
     def _download_all(self):
         if not self._preflight_download_destination():
