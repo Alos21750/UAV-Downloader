@@ -1,16 +1,19 @@
 #!/usr/bin/env python
 # coding: utf-8
-"""UAV Downloader CLI CLI downloader for Docker and NAS use — no GUI.
+"""UAV Downloader CLI for Docker, NAS, and local terminal use — no GUI.
 
-Downloads one or more supported URLs to $DOWNLOAD_DIR (default /downloads).
+Downloads one or more supported URLs to ``--output`` or ``$DOWNLOAD_DIR``.
+Docker sets ``DOWNLOAD_DIR=/downloads``; a normal local installation defaults
+to ``./download`` instead of trying to create a directory at the drive root.
 URLs are taken from, in order: command-line args, the $URLS / $URL env var
-(space/comma separated), and a mounted text file ($URLS_FILE, default
-/downloads/urls.txt — one URL per line, '#' comments allowed).
+(space/comma separated), and a text file ($URLS_FILE, default
+``<output>/urls.txt`` — one URL per line, '#' comments allowed).
 
 Examples:
   docker run --rm -v /nas/videos:/downloads ghcr.io/alos21750/uav-downloader https://jable.tv/videos/abc-123/
   docker run --rm -v /nas/videos:/downloads -e URLS_FILE=/downloads/urls.txt ghcr.io/alos21750/uav-downloader
 """
+import argparse
 import os
 import sys
 
@@ -31,11 +34,49 @@ from uav_downloader.core.storage import StorageWriteError
 from uav_downloader.sites import base as M3U8Crawler
 
 
-def gather_urls():
-    urls = [u for u in sys.argv[1:] if u.strip()]
+_RESOLUTIONS = ('highest', '1080', '720', '480', '360', 'lowest')
+
+
+def _configure_console_encoding():
+    """Keep redirected Windows output from crashing on localized messages."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, 'reconfigure', None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding='utf-8', errors='replace')
+            except (OSError, ValueError):
+                pass
+
+
+def get_parser():
+    parser = argparse.ArgumentParser(
+        description=(
+            'UAV Downloader CLI — download supported video URLs without a GUI'
+        )
+    )
+    parser.add_argument('urls', nargs='*', metavar='URL')
+    parser.add_argument(
+        '-o', '--output', metavar='DIR',
+        help='download directory (default: $DOWNLOAD_DIR or ./download)')
+    parser.add_argument(
+        '--resolution', choices=_RESOLUTIONS,
+        help='preferred video resolution (default: $RESOLUTION or highest)')
+    parser.add_argument(
+        '--max-workers-per-video', type=int,
+        choices=range(
+            config.MIN_WORKERS_PER_VIDEO,
+            config.MAX_WORKERS_PER_VIDEO + 1),
+        metavar='N',
+        help='maximum segment workers per video, from 1 to 16')
+    return parser
+
+
+def gather_urls(cli_urls=None, download_dir=None):
+    urls = [str(u).strip() for u in (cli_urls or ()) if str(u).strip()]
     env = (os.environ.get('URLS') or os.environ.get('URL') or '')
     urls += [u.strip() for u in env.replace(',', ' ').split() if u.strip()]
-    path = os.environ.get('URLS_FILE', os.path.join(os.environ.get('DOWNLOAD_DIR', '/downloads'), 'urls.txt'))
+    destination = download_dir or os.environ.get('DOWNLOAD_DIR') or os.path.abspath('download')
+    path = os.environ.get('URLS_FILE', os.path.join(destination, 'urls.txt'))
     if os.path.isfile(path):
         with open(path, encoding='utf-8') as fh:
             urls += [ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith('#')]
@@ -46,22 +87,47 @@ def gather_urls():
     return out
 
 
-def main():
-    dest = os.environ.get('DOWNLOAD_DIR', '/downloads')
-    os.makedirs(dest, exist_ok=True)
-    res = os.environ.get('RESOLUTION')
+def main(argv=None):
+    _configure_console_encoding()
+    args = get_parser().parse_args(argv)
+
+    dest = args.output or os.environ.get('DOWNLOAD_DIR') or os.path.abspath('download')
+    try:
+        os.makedirs(dest, exist_ok=True)
+    except OSError as exc:
+        print(f'[Storage error] Cannot create output directory {dest}: {exc}',
+              flush=True)
+        return 2
+
+    res = args.resolution or os.environ.get('RESOLUTION')
     if res:
-        try:
-            M3U8Crawler.set_resolution_pref(res)
-        except Exception:
-            pass
+        normalized_resolution = str(res).strip().lower()
+        if normalized_resolution not in _RESOLUTIONS:
+            print(
+                f'Invalid resolution {res!r}; choose one of '
+                f'{", ".join(_RESOLUTIONS)}.',
+                flush=True)
+            return 2
+        M3U8Crawler.set_resolution_pref(normalized_resolution)
 
-    max_workers = None
-    raw_workers = os.environ.get('MAX_WORKERS_PER_VIDEO')
+    max_workers = args.max_workers_per_video
+    raw_workers = (
+        os.environ.get('MAX_WORKERS_PER_VIDEO')
+        if max_workers is None else None)
     if raw_workers is not None and raw_workers.strip():
-        max_workers = config.normalize_max_workers_per_video(raw_workers)
+        try:
+            parsed_workers = int(raw_workers.strip())
+        except ValueError:
+            print('MAX_WORKERS_PER_VIDEO must be an integer from 1 to 16.',
+                  flush=True)
+            return 2
+        if not (config.MIN_WORKERS_PER_VIDEO <= parsed_workers <=
+                config.MAX_WORKERS_PER_VIDEO):
+            print('MAX_WORKERS_PER_VIDEO must be from 1 to 16.', flush=True)
+            return 2
+        max_workers = parsed_workers
 
-    urls = gather_urls()
+    urls = gather_urls(args.urls, dest)
     if not urls:
         print("no URL provided. Pass URL(s) as arguments, set the URLS env var, or add a"
               " urls.txt to the download dir.\n"
@@ -83,7 +149,11 @@ def main():
                 print(f"[跳過] 不支援的網址: {url}", flush=True); fail += 1; continue
             if not site.is_url_vaildate():
                 print(f"[失敗] 無法解析影片（版面改版 / 被 Cloudflare 阻擋 / 影片不存在）: {url}", flush=True); fail += 1; continue
-            site.start_download()
+            completed = site.start_download()
+            if completed is False:
+                print(f"[失敗] 下載未完成: {url}", flush=True)
+                fail += 1
+                continue
             print(f"[完成] {url}", flush=True); ok += 1
         except StorageWriteError as exc:
             print(f'[Storage error] {url}: {exc}', flush=True)

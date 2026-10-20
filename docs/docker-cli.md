@@ -56,9 +56,12 @@ Supported environment variables:
 After an editable or package installation:
 
 ```bash
-uav-downloader-cli "https://jable.tv/videos/example/"
+uav-downloader-cli --output ./download "https://jable.tv/videos/example/"
 uav-browser --nogui --url "https://jable.tv/videos/example/" -o ./download
 ```
 
 The first command follows the Docker-style URL and environment interface. The
-second exposes the classic arguments shared with UAV Browser.
+second exposes the classic arguments shared with UAV Browser. Run
+`uav-downloader-cli --help` for resolution and worker-limit options. A local
+CLI run defaults to `./download`; the container still defaults to `/downloads`
+through its `DOWNLOAD_DIR` environment setting.

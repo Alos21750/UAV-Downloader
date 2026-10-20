@@ -90,7 +90,6 @@ files. See the [UAV migration guide](./migration-to-uav.md).
 From source:
 
 ```bash
-python -m pip install -r requirements.txt
 python -m pip install -e .
 uav-watcher
 ```

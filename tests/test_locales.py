@@ -36,7 +36,7 @@ from uav_downloader.i18n import locales
 from uav_downloader.sites.missav import MissAVBrowser
 
 
-LANGS = ['en', 'zh', 'zh-Hans', 'ja']
+LANGS = ['en', 'th', 'zh', 'zh-Hans', 'ja']
 PLACEHOLDER_RE = re.compile(r'\{(\w+)\}')
 
 
@@ -66,6 +66,7 @@ def test_locale_placeholder_parity():
 def test_add_to_queue_locale_key_present():
     expected = {
         'en': 'Add to Queue',
+        'th': 'เพิ่มเข้า Queue',
         'zh': '加入清單',
         'zh-Hans': '加入清单',
         'ja': 'キューに追加',
@@ -136,6 +137,7 @@ def test_site_language_codes():
         'zh': ('', 'zh'),
         'zh-Hans': ('cn', 'zh'),
         'ja': ('ja', 'ja'),
+        'th': ('th', ''),
     }
     for lang, (missav_lang, supjav_lang) in expected.items():
         locales.set_lang(lang)
@@ -153,10 +155,13 @@ def test_config_prefs_keep_theme_and_language(tmp_path, monkeypatch):
     assert config.get_theme() == 'dark'
     assert config.get_ui_lang() == 'ja'
 
+    config.set_ui_lang('th')
+    assert config.get_ui_lang() == 'th'
+
     config.set_theme('light')
 
     assert config.get_theme() == 'light'
-    assert config.get_ui_lang() == 'ja'
+    assert config.get_ui_lang() == 'th'
 
 
 def test_missav_language_paths_use_empty_string_for_default(monkeypatch):

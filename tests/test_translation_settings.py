@@ -32,6 +32,10 @@ def test_default_is_fully_local_and_creates_no_file(isolated_settings):
     assert not isolated_settings.exists()
 
 
+def test_openai_default_model_is_a_supported_model_name():
+    assert settings.provider_defaults(settings.OPENAI)['model'] == 'gpt-6-luna'
+
+
 def test_provider_and_profile_normalization(isolated_settings):
     assert settings.normalize_provider("OPENAI_COMPATIBLE") == (
         settings.OPENAI_COMPATIBLE)

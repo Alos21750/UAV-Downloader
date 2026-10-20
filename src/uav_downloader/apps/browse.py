@@ -7,12 +7,14 @@ import sys
 import re
 import io
 import csv
+import json
 import time
 import shutil
 import webbrowser
 import threading
 import queue
 import concurrent.futures
+import uuid
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from typing import Optional
@@ -63,6 +65,24 @@ from uav_downloader.ui.theme import (
     browse_columns_for_width,
 )
 from uav_downloader.metadata import APP_DISPLAY_NAMES, PRODUCT_NAME, VERSION
+from uav_downloader.apps.downloads import (
+    ACTIVE_STATES,
+    DONE_STATES,
+    FAILED_STATES,
+    PAUSED_STATES,
+    QUEUED_STATES,
+    QueueAddSummary,
+    classify_download_problem,
+    export_items,
+    extract_urls,
+    filter_items,
+    format_eta,
+    load_url_file,
+    next_schedule_epoch,
+    site_name,
+    storage_preflight,
+    video_code,
+)
 
 APP_VERSION = VERSION
 
@@ -96,10 +116,14 @@ SITES = {
 _STATE_PRIORITY = {
     '下載中': 0,
     '字幕準備中': 1,
+    '字幕模型準備中': 1,
     '字幕辨識中': 2,
     '字幕翻譯中': 3,
     '準備中': 4,
     '等待中': 5,
+    '等待重試': 5,
+    '已排程': 5,
+    '已暫停': 6,
     '未完成': 6,
     '封鎖/解析失敗': 7,
     '網址錯誤': 8,
@@ -138,9 +162,11 @@ def _select_persist(items, cap):
 
 
 def _download_row_action(item):
-    """Return the retry action exposed by a download-row button."""
-    if item.state in {'準備中', '下載中'}:
-        return 'requeue'
+    """Return the primary action exposed by a download-row button."""
+    if item.state in ACTIVE_STATES or item.state in QUEUED_STATES:
+        return 'pause'
+    if item.state == '已暫停':
+        return 'resume'
     if (item.state in {'未完成', '封鎖/解析失敗', '已取消'} or
             (item.state == '已下載' and bool(item.error))):
         return 'retry'
@@ -152,11 +178,17 @@ class DownloadItem:
     __slots__ = (
         'url', 'name', 'state', 'progress', 'speed', 'error', 'dest',
         'source_subtitle_evidence', 'local', 'auto_requeues',
+        'job_id', 'site', 'resolution', 'filename_template', 'thumbnail',
+        'eta', 'error_code', 'retry_count', 'next_retry_at',
+        'not_before', 'created_at', 'updated_at',
     )
 
     def __init__(
             self, url: str, name: str = '', state: str = '', dest: str = '',
-            source_subtitle_evidence=(), local: bool = False):
+            source_subtitle_evidence=(), local: bool = False,
+            job_id: str = '', site: str = '', resolution: str = '',
+            filename_template: str = '', thumbnail: str = '',
+            not_before: float = 0, created_at: float = 0):
         self.url = url
         self.name = name or url.rstrip('/').split('/')[-1]
         self.state = state
@@ -165,6 +197,28 @@ class DownloadItem:
         self.error = ''
         self.dest = dest or ''
         self.auto_requeues = 0
+        candidate_job_id = str(job_id or '').strip()
+        self.job_id = (
+            candidate_job_id
+            if re.fullmatch(r'[A-Za-z0-9_-]{1,80}', candidate_job_id)
+            else uuid.uuid4().hex)
+        self.site = str(site or site_name(url))[:80]
+        candidate_resolution = str(
+            resolution or config.get_resolution_pref()).strip().lower()
+        self.resolution = (
+            candidate_resolution
+            if candidate_resolution in config.VALID_RESOLUTION_PREFS
+            else config.get_resolution_pref())
+        self.filename_template = config.normalize_filename_template(
+            filename_template or config.get_filename_template())
+        self.thumbnail = str(thumbnail or '')[:2048]
+        self.eta = ''
+        self.error_code = ''
+        self.retry_count = 0
+        self.next_retry_at = 0.0
+        self.not_before = max(0.0, float(not_before or 0))
+        self.created_at = float(created_at or time.time())
+        self.updated_at = self.created_at
         self.source_subtitle_evidence = trusted_chinese_subtitle_evidence({
             'url': url,
             '_source_subtitle_evidence': source_subtitle_evidence,
@@ -184,11 +238,15 @@ class _DownloadTask:
         'transfer_complete', 'transferred_bytes', 'window_bytes',
         'window_started', 'last_done', 'monitor_stop', 'monitor_thread',
         'monitor_unit',
+        'resolution', 'filename_template', 'retry_count', 'not_before',
+        'pause_requested',
     )
 
     def __init__(
             self, url: str, dest: str, epoch: int,
-            source_subtitle_evidence=()):
+            source_subtitle_evidence=(), resolution: str = '',
+            filename_template: str = '', retry_count: int = 0,
+            not_before: float = 0):
         self.url = url
         self.dest = dest
         self.epoch = epoch
@@ -209,6 +267,11 @@ class _DownloadTask:
         self.monitor_stop = threading.Event()
         self.monitor_thread = None
         self.monitor_unit = None
+        self.resolution = str(resolution or '')
+        self.filename_template = str(filename_template or '')
+        self.retry_count = max(0, int(retry_count or 0))
+        self.not_before = max(0.0, float(not_before or 0))
+        self.pause_requested = False
 
 
 class _LocalSubtitleJob:
@@ -227,11 +290,14 @@ class DownloadManager:
     """Thread-safe manager with separate download and subtitle queues."""
 
     def __init__(self, on_update=None, max_concurrent: int = DEFAULT_CONCURRENT,
-                 subtitle_mode_getter=None, slow_requeue_kbps_getter=None):
+                 subtitle_mode_getter=None, slow_requeue_kbps_getter=None,
+                 auto_retry_count_getter=None):
         self._on_update = on_update
         self._subtitle_mode_getter = subtitle_mode_getter or config.get_subtitle_pref
         self._slow_requeue_kbps_getter = (
             slow_requeue_kbps_getter or config.get_slow_requeue_kbps)
+        self._auto_retry_count_getter = (
+            auto_retry_count_getter or config.get_auto_retry_count)
         self._pending: list[_DownloadTask] = []
         self._active: dict[str, _DownloadTask] = {}
         self._subtitle_pending: list[_DownloadTask] = []
@@ -251,6 +317,8 @@ class DownloadManager:
             1, min(int(max_concurrent), MAX_CONCURRENT))
         self._prep_sem = threading.Semaphore(1)
         self._cancel_epoch = 0
+        self._schedule_timer = None
+        self._schedule_deadline = 0.0
 
     @property
     def max_concurrent(self) -> int:
@@ -264,15 +332,39 @@ class DownloadManager:
 
     def add_item(
             self, url: str, name: str = '', state: str = '', dest: str = '',
-            source_subtitle_evidence=()):
+            source_subtitle_evidence=(), *, resolution: str = '',
+            filename_template: str = '', thumbnail: str = '',
+            not_before: float = 0, job_id: str = '', site: str = '',
+            created_at: float = 0):
         with self._lock:
             if url not in self._items:
                 self._items[url] = DownloadItem(
-                    url, name, state, dest, source_subtitle_evidence)
+                    url, name, state, dest, source_subtitle_evidence,
+                    job_id=job_id, site=site, resolution=resolution,
+                    filename_template=filename_template,
+                    thumbnail=thumbnail, not_before=not_before,
+                    created_at=created_at)
             else:
                 item = self._items[url]
+                # Refresh stale/persisted labels from the card the user just
+                # selected.  Older queue entries often contained only a code,
+                # even though the current MissAV result has a useful title.
+                if name:
+                    item.name = name
                 if dest:
                     item.dest = dest
+                if resolution:
+                    candidate = str(resolution).strip().lower()
+                    if candidate in config.VALID_RESOLUTION_PREFS:
+                        item.resolution = candidate
+                if filename_template:
+                    item.filename_template = config.normalize_filename_template(
+                        filename_template)
+                if thumbnail:
+                    item.thumbnail = str(thumbnail)
+                if not_before:
+                    item.not_before = max(0.0, float(not_before))
+                item.updated_at = time.time()
                 evidence = set(item.source_subtitle_evidence)
                 evidence.update(trusted_chinese_subtitle_evidence({
                     'url': url,
@@ -282,6 +374,10 @@ class DownloadManager:
                 item.source_subtitle_evidence = (
                     normalize_source_subtitle_evidence(evidence))
             return self._items[url]
+
+    def contains(self, url: str) -> bool:
+        with self._lock:
+            return url in self._items
 
     def get_items(self) -> list[DownloadItem]:
         with self._lock:
@@ -308,6 +404,7 @@ class DownloadManager:
                 contexts.append(active_subtitle)
             for task in contexts:
                 task.cancelled.set()
+            self._arm_schedule_locked()
         self._cancel_contexts(contexts)
         if removed_subtitles:
             self._try_next_subtitle()
@@ -374,11 +471,11 @@ class DownloadManager:
             cleanup_done.set()
         return True
 
-    def enqueue(self, url: str, dest: str):
+    def enqueue(self, url: str, dest: str, not_before: float | None = None):
         start_task = None
         with self._lock:
             if self._url_inflight_locked(url):
-                return
+                return False
             item = self._items.get(url)
             if item:
                 item.dest = dest or item.dest
@@ -386,10 +483,25 @@ class DownloadManager:
                 self._items[url] = DownloadItem(url, dest=dest)
                 item = self._items[url]
             item.auto_requeues = 0  # a fresh enqueue starts a new session
+            item.retry_count = 0
+            due = (
+                item.not_before if not_before is None
+                else max(0.0, float(not_before or 0)))
+            if due <= time.time():
+                due = 0.0
+            item.not_before = due
+            item.next_retry_at = 0.0
             task = _DownloadTask(
                 url, dest, self._cancel_epoch,
-                item.source_subtitle_evidence)
-            if len(self._active) < self._max_concurrent:
+                item.source_subtitle_evidence,
+                resolution=item.resolution,
+                filename_template=item.filename_template,
+                not_before=due)
+            if due:
+                self._pending.append(task)
+                self._set_state(url, '已排程', progress=0, error='')
+                self._arm_schedule_locked()
+            elif len(self._active) < self._max_concurrent:
                 self._active[url] = task
                 start_task = task
             else:
@@ -397,6 +509,103 @@ class DownloadManager:
                 self._set_state(url, '等待中')
         if start_task is not None:
             self._start_download_thread(start_task)
+        return True
+
+    def pause(self, url: str) -> bool:
+        """Pause one queued/active item while preserving resumable chunks."""
+        contexts = []
+        with self._lock:
+            item = self._items.get(url)
+            if item is None:
+                return False
+            pending = [task for task in self._pending if task.url == url]
+            if pending:
+                self._pending = [
+                    task for task in self._pending if task.url != url]
+                for task in pending:
+                    task.pause_requested = True
+                    task.cancelled.set()
+                contexts.extend(pending)
+            subtitle_pending = [
+                task for task in self._subtitle_pending if task.url == url]
+            if subtitle_pending:
+                self._subtitle_pending = [
+                    task for task in self._subtitle_pending
+                    if task.url != url]
+                for task in subtitle_pending:
+                    task.pause_requested = True
+                    task.cancelled.set()
+                contexts.extend(subtitle_pending)
+            active = self._active.get(url)
+            if active is not None:
+                active.pause_requested = True
+                active.cancelled.set()
+                active.monitor_stop.set()
+                contexts.append(active)
+            subtitle = self._subtitle_active.get(url)
+            if subtitle is not None:
+                subtitle.pause_requested = True
+                subtitle.cancelled.set()
+                contexts.append(subtitle)
+            if not contexts:
+                if item.state in {'已下載', '未偵測到日語語音'}:
+                    return False
+                self._set_state(url, '已暫停', error='')
+                return True
+            self._set_state(url, '已暫停', error='')
+            self._arm_schedule_locked()
+        self._cancel_contexts(contexts, cleanup=False)
+        self._try_next()
+        return True
+
+    def resume(self, url: str, dest: str = '') -> bool:
+        with self._lock:
+            item = self._items.get(url)
+            if item is None or item.state not in {'已暫停', '已取消'}:
+                return False
+            item.not_before = 0.0
+            local = item.local
+            item_dest = item.dest
+        if local:
+            return self.enqueue_local_subtitles(
+                url, normalize_subtitle_mode(self._subtitle_mode_getter()))
+        return bool(self.enqueue(url, dest or item_dest))
+
+    def pause_all(self) -> int:
+        with self._lock:
+            urls = [
+                item.url for item in self._items.values()
+                if item.state in ACTIVE_STATES or item.state in QUEUED_STATES
+            ]
+        return sum(1 for url in urls if self.pause(url))
+
+    def _arm_schedule_locked(self):
+        deadlines = [
+            task.not_before for task in self._pending
+            if task.not_before > time.time() and not task.cancelled.is_set()
+        ]
+        deadline = min(deadlines) if deadlines else 0.0
+        if self._schedule_timer is not None:
+            if deadline and abs(deadline - self._schedule_deadline) < 0.5:
+                return
+            self._schedule_timer.cancel()
+            self._schedule_timer = None
+            self._schedule_deadline = 0.0
+        if not deadline:
+            return
+
+        def _wake():
+            with self._lock:
+                self._schedule_timer = None
+                self._schedule_deadline = 0.0
+            for _ in range(self._max_concurrent):
+                self._try_next()
+
+        self._schedule_deadline = deadline
+        self._schedule_timer = threading.Timer(
+            max(0.05, deadline - time.time()), _wake)
+        self._schedule_timer.daemon = True
+        self._schedule_timer.start()
 
     def enqueue_local_subtitles(self, path: str, mode: str) -> bool:
         """Queue an existing local video for subtitle generation only."""
@@ -428,6 +637,10 @@ class DownloadManager:
     def cancel_all(self, cleanup: bool = True):
         with self._lock:
             self._cancel_epoch += 1
+            if self._schedule_timer is not None:
+                self._schedule_timer.cancel()
+                self._schedule_timer = None
+                self._schedule_deadline = 0.0
             for _task, _dest, cleanup_done in self._restart_pending.values():
                 cleanup_done.set()
             self._restart_pending.clear()
@@ -471,7 +684,17 @@ class DownloadManager:
                 if self._context_cancelled(task):
                     self._complete_download(task, '已取消')
                     return
-                job = M3U8Sites.CreateSite(url, task.dest)
+                try:
+                    job = M3U8Sites.CreateSite(
+                        url, task.dest,
+                        resolution=task.resolution,
+                        filename_template=task.filename_template)
+                except TypeError as exc:
+                    # Preserve compatibility with third-party site factories
+                    # that still implement the v2 positional signature.
+                    if 'unexpected keyword argument' not in str(exc):
+                        raise
+                    job = M3U8Sites.CreateSite(url, task.dest)
                 if (
                         job is not None
                         and hasattr(job, 'add_source_subtitle_evidence')):
@@ -549,28 +772,72 @@ class DownloadManager:
             if self._context_cancelled(task):
                 self._complete_download(task, '已取消')
             elif isinstance(exc, MirrorsBlockedError):
-                self._complete_download(
-                    task, '封鎖/解析失敗', error=ERR_BLOCKED)
+                if not self._schedule_transient_retry(task, ERR_BLOCKED):
+                    self._complete_download(
+                        task, '封鎖/解析失敗', error=ERR_BLOCKED)
             else:
-                self._complete_download(task, '未完成', error=str(exc))
+                if not self._schedule_transient_retry(task, str(exc)):
+                    self._complete_download(task, '未完成', error=str(exc))
         finally:
             task.monitor_stop.set()
 
     def _try_next(self):
         task = None
         with self._lock:
-            while self._pending and len(self._active) < self._max_concurrent:
+            candidates = len(self._pending)
+            while (candidates > 0 and self._pending and
+                   len(self._active) < self._max_concurrent):
+                candidates -= 1
                 candidate = self._pending.pop(0)
                 if (candidate.cancelled.is_set() or
                         candidate.epoch != self._cancel_epoch):
                     candidate.cancelled.set()
                     self._set_state(candidate.url, '已取消')
                     continue
+                if candidate.not_before > time.time():
+                    self._pending.append(candidate)
+                    continue
                 self._active[candidate.url] = candidate
+                candidate.not_before = 0.0
+                item = self._items.get(candidate.url)
+                if item is not None:
+                    item.not_before = 0.0
+                    item.next_retry_at = 0.0
                 task = candidate
                 break
+            self._arm_schedule_locked()
         if task is not None:
             self._start_download_thread(task)
+
+    def _schedule_transient_retry(self, task: _DownloadTask, error: str) -> bool:
+        problem = classify_download_problem(error, '未完成')
+        with self._lock:
+            item = self._items.get(task.url)
+            retry_limit = max(0, int(self._auto_retry_count_getter()))
+            if (not problem.retryable or item is None or
+                    self._active.get(task.url) is not task or
+                    task.retry_count >= retry_limit or
+                    self._context_cancelled_locked(task)):
+                return False
+            self._active.pop(task.url, None)
+            retry_count = task.retry_count + 1
+            delay = min(60.0, float(2 ** retry_count))
+            due = time.time() + delay
+            item.retry_count = retry_count
+            item.next_retry_at = due
+            item.not_before = due
+            replacement = _DownloadTask(
+                task.url, task.dest, self._cancel_epoch,
+                item.source_subtitle_evidence,
+                resolution=item.resolution,
+                filename_template=item.filename_template,
+                retry_count=retry_count, not_before=due)
+            self._pending.append(replacement)
+            self._set_state(
+                task.url, '等待重試', progress=0, error=error)
+            self._arm_schedule_locked()
+        self._try_next()
+        return True
 
     def _queue_subtitle(self, task: _DownloadTask, mode: str) -> bool:
         with self._lock:
@@ -739,14 +1006,19 @@ class DownloadManager:
                 item = self._items[task.url]
                 replacement = _DownloadTask(
                     task.url, restart[1], self._cancel_epoch,
-                    item.source_subtitle_evidence)
+                    item.source_subtitle_evidence,
+                    resolution=item.resolution,
+                    filename_template=item.filename_template)
                 self._pending.insert(0, replacement)
                 self._set_state(
                     task.url, '等待中', progress=0, error='')
             else:
                 self._restart_pending.pop(task.url, None)
+                if task.pause_requested:
+                    state, progress, error = '已暫停', -1, ''
                 if context_cancelled and state != '已取消':
-                    state, progress, error = '已取消', -1, None
+                    if not task.pause_requested:
+                        state, progress, error = '已取消', -1, None
                 self._set_state(
                     task.url, state, progress=progress, error=error)
         self._try_next()
@@ -756,7 +1028,9 @@ class DownloadManager:
         with self._lock:
             if self._subtitle_active.get(task.url) is not task:
                 return
-            if self._context_cancelled_locked(task) and state != '已取消':
+            if task.pause_requested:
+                state, progress, error = '已暫停', -1, ''
+            elif self._context_cancelled_locked(task) and state != '已取消':
                 state, progress, error = '已取消', -1, None
             self._set_state(
                 task.url, state, progress=progress, error=error)
@@ -801,10 +1075,18 @@ class DownloadManager:
                     item.progress = progress
                 if error is not None:
                     item.error = error
+                    item.error_code = classify_download_problem(
+                        error, state).code
                 elif state not in ('未完成', '封鎖/解析失敗'):
                     item.error = ''
+                    item.error_code = ''
                 if state != '下載中':
                     item.speed = ''
+                    item.eta = ''
+                if state in DONE_STATES:
+                    item.retry_count = 0
+                    item.next_retry_at = 0.0
+                item.updated_at = time.time()
 
     def _on_progress(self, url: str, done: int, total: int, speed_bps: float):
         if total <= 0:
@@ -841,6 +1123,13 @@ class DownloadManager:
             task.prev_total = total
             task.last_done = done
             task.transfer_complete = total > 0 and done >= total
+            item = self._items.get(task.url)
+            if (item is not None and done > 0 and total > done and
+                    task.download_started is not None):
+                elapsed = max(0.0, now - task.download_started)
+                item.eta = format_eta(elapsed * (total - done) / done)
+            elif item is not None and total > 0 and done >= total:
+                item.eta = ''
             job = task.job
             if getattr(job, '_progress_unit', None) == 'bytes':
                 task.transferred_bytes = float(done)
@@ -976,12 +1265,19 @@ class DownloadManager:
             w = csv.writer(f)
             w.writerow([
                 '狀態', '名稱', '進度', '速度', '網址', '目標',
-                '字幕來源證據',
+                '字幕來源證據', '工作 ID', '網站', '解析度',
+                '檔名範本', '縮圖', '錯誤', '錯誤代碼',
+                '重試次數', '排程時間', '建立時間', '更新時間',
             ])
             for item in items:
                 w.writerow([item.state, item.name, f'{item.progress}%',
                             item.speed, item.url, item.dest,
-                            '|'.join(item.source_subtitle_evidence)])
+                            '|'.join(item.source_subtitle_evidence),
+                            item.job_id, item.site, item.resolution,
+                            item.filename_template, item.thumbnail,
+                            item.error, item.error_code, item.retry_count,
+                            item.not_before, item.created_at,
+                            item.updated_at])
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
@@ -999,18 +1295,43 @@ class DownloadManager:
                         state = row.get('狀態', '')
                         if state in (
                                 '下載中', '準備中', '等待中',
-                                '字幕準備中', '字幕辨識中', '字幕翻譯中'):
+                                '等待重試', '已排程', '字幕準備中',
+                                '字幕模型準備中', '字幕辨識中',
+                                '字幕翻譯中'):
                             state = '未完成'
+                        def _number(name, default=0.0):
+                            try:
+                                return float(row.get(name, default) or default)
+                            except (TypeError, ValueError):
+                                return float(default)
                         item = self.add_item(
                             url, row.get('名稱', ''), state,
                             row.get('目標', ''),
-                            row.get('字幕來源證據', ''))
+                            row.get('字幕來源證據', ''),
+                            resolution=row.get('解析度', ''),
+                            filename_template=row.get('檔名範本', ''),
+                            thumbnail=row.get('縮圖', ''),
+                            job_id=row.get('工作 ID', ''),
+                            site=row.get('網站', ''),
+                            created_at=_number('建立時間'))
                         progress = (row.get('進度', '') or '').rstrip('%')
                         try:
                             item.progress = int(float(progress))
                         except (TypeError, ValueError):
                             pass
                         item.speed = row.get('速度', '') or ''
+                        item.error = row.get('錯誤', '') or ''
+                        item.error_code = (
+                            row.get('錯誤代碼', '') or
+                            classify_download_problem(
+                                item.error, item.state).code)
+                        try:
+                            item.retry_count = max(
+                                0, int(row.get('重試次數', 0) or 0))
+                        except (TypeError, ValueError):
+                            item.retry_count = 0
+                        item.updated_at = _number(
+                            '更新時間', item.created_at)
             # Keep load memory bounded after the safety read limit. Python 3.7+
             # dict insertion order is the recency proxy for terminal items.
             kept = _select_persist(self.get_items(), MAX_PERSIST_ROWS)
@@ -1056,7 +1377,7 @@ def fetch_page_data(browser_cls, url: str) -> dict:
         raise
     except Exception as e:
         print(f'[瀏覽錯誤] {e}')
-        return {'videos': []}
+        return {'videos': [], 'error': str(e)}
 
 
 # ── Thumbnail loader ────────────────────────────────────────────────
@@ -1187,7 +1508,10 @@ class ModernApp(ctk.CTk):
         self.minsize(980, 680)
         self.configure(fg_color=BG_DARK)
 
-        self._dest = dest
+        self._dest = (
+            config.get_download_directory()
+            if dest == 'download' and config.get_download_directory()
+            else dest)
         self._url_input = url
         self._rebuilding = False
 
@@ -1199,7 +1523,12 @@ class ModernApp(ctk.CTk):
         self._has_next = True
         self._videos: list[dict] = []
         self._selected_urls: set = set()
+        # Keep the complete card metadata in insertion order.  A set alone
+        # loses both the displayed title and the order in which pages were
+        # selected, which made MissAV queues look unrelated to the grid.
+        self._selected_videos: dict[str, dict] = {}
         self._selected_source_subtitle_evidence: dict[str, tuple[str, ...]] = {}
+        self._select_all_running = False
         self._sidebar_expanded: dict[str, bool] = {}
         self._hanime_filter_state = {
             'query': '', 'genre': '', 'sort': '', 'date': '',
@@ -1217,12 +1546,15 @@ class ModernApp(ctk.CTk):
         self._browse_empty_message = ''
         self._card_widgets: dict = {}  # url -> {card, sel_btn}
         self._dl_rows: dict = {}   # url -> {row, state_lbl, name_lbl, pb, pct, spd, remove}
+        self._dl_filter = 'all'
+        self._batch_was_busy = False
+        self._batch_notified = True
         self._dl_empty_lbl = None
         self._dl_footer_lbl = None
         self._dl_drain_id = None
         self._dl_gen = 0
         self._thumb_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-        self._speed_mbps = 0.0
+        self._speed_mbps = config.get_speed_limit_mbps()
         self._download_autosave_ticks = 0
         self._last_download_save_sig = None
         self._update_info = None
@@ -1253,6 +1585,8 @@ class ModernApp(ctk.CTk):
 
         from uav_downloader.sites.base import set_resolution_pref
         set_resolution_pref(config.get_resolution_pref())
+        from uav_downloader.sites.base import speed_limiter
+        speed_limiter.set_limit(self._speed_mbps)
 
         self._build_ui()
         self.bind('<Configure>', self._on_root_resize, add='+')
@@ -1852,6 +2186,8 @@ class ModernApp(ctk.CTk):
             self._dl_gen += 1
             self._categories = []
             self._selected_urls.clear()
+            self._selected_videos.clear()
+            self._selected_source_subtitle_evidence.clear()
             self._dl_empty_lbl = None
             self._videos = []
             self._browse_blocked = False
@@ -2006,7 +2342,7 @@ class ModernApp(ctk.CTk):
         tab = self._tab_frames['browse']
 
         # ── Two-level workspace toolbar ─────────────────────────────
-        top = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0, height=108)
+        top = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0, height=112)
         top.pack(fill='x')
         top.pack_propagate(False)
 
@@ -2068,22 +2404,39 @@ class ModernApp(ctk.CTk):
             actions, text=f'0 {T("selected")}', text_color=TEXT_SEC,
             font=(ui_font(), 11, 'bold'))
         self._sel_lbl.pack(side='left')
-        ctk.CTkButton(actions, text=T('download_selected'), command=self._download_selected,
+        ctk.CTkButton(actions, text=T('download_selected'),
+                      command=lambda: self._review_selected(True),
                       width=128, height=34, corner_radius=CONTROL_RADIUS,
                       fg_color=ACCENT, hover_color=ACCENT_HOVER,
                       text_color=WHITE, font=(ui_font(), 11, 'bold')).pack(
                           side='right', padx=(8, 0))
-        ctk.CTkButton(actions, text=T('add_to_queue'), command=self._add_selected_to_queue,
+        ctk.CTkButton(actions, text=T('add_to_queue'),
+                      command=lambda: self._review_selected(False),
                       width=104, height=34, corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER,
                       text_color=TEXT_PRI, font=(ui_font(), 11)).pack(side='right')
-        ctk.CTkButton(actions, text=T('select_all_btn'), command=self._select_all_on_page,
+        ctk.CTkButton(actions, text=T('select_all_results_btn'),
+                      command=self._select_all_results,
+                      width=134, height=34, corner_radius=CONTROL_RADIUS,
+                      fg_color='transparent', border_width=1,
+                      border_color=BORDER_HOVER,
+                      hover_color=BG_CARD_HOVER,
+                      text_color=TEXT_PRI, font=(ui_font(), 10)).pack(
+                          side='right', padx=(0, 8))
+        ctk.CTkButton(actions, text=T('select_page_btn'), command=self._select_all_on_page,
                       width=92, height=34, corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER,
                       text_color=TEXT_PRI, font=(ui_font(), 11)).pack(
                           side='right', padx=(0, 8))
+        ctk.CTkButton(actions, text=T('clear_selection_btn'),
+                      command=self._clear_selection_in_place,
+                      width=62, height=34, corner_radius=CONTROL_RADIUS,
+                      fg_color='transparent', border_width=0,
+                      hover_color=BG_CARD_HOVER,
+                      text_color=TEXT_DIM, font=(ui_font(), 10)).pack(
+                          side='right', padx=(0, 4))
 
         # ── Content area: sidebar + grid ────────────────────────────
         content = ctk.CTkFrame(tab, fg_color=BG_DARK, corner_radius=0)
@@ -2227,6 +2580,24 @@ class ModernApp(ctk.CTk):
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
                       command=self._subtitle_local_files).pack(side='left')
+        ctk.CTkButton(
+            local_actions, text=T('import_urls'), width=112, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+            command=self._import_urls_file).pack(side='left', padx=(8, 0))
+        ctk.CTkButton(
+            local_actions, text=T('paste_urls'), width=104, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+            command=self._paste_urls).pack(side='left', padx=(8, 0))
+        ctk.CTkButton(
+            local_actions, text=T('export_queue'), width=92, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+            command=self._export_queue).pack(side='left', padx=(8, 0))
 
         speed = ctk.CTkFrame(bar, fg_color='transparent')
         speed.grid(row=0, column=1, pady=10)
@@ -2244,11 +2615,17 @@ class ModernApp(ctk.CTk):
 
         destructive = ctk.CTkFrame(bar, fg_color='transparent')
         destructive.grid(row=0, column=2, padx=(8, 16), pady=10, sticky='e')
+        ctk.CTkButton(destructive, text=T('pause_all'), width=88, height=38,
+                      corner_radius=CONTROL_RADIUS,
+                      fg_color='transparent', border_width=1,
+                      border_color=BORDER_HOVER,
+                      hover_color=BG_CARD_HOVER, text_color=WARNING,
+                      command=self._dlmgr.pause_all).pack(side='left')
         ctk.CTkButton(destructive, text=T('cancel_all'), width=88, height=38,
                       corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER, text_color=ERROR_C,
-                      command=self._cancel_all).pack(side='left')
+                      command=self._cancel_all).pack(side='left', padx=(8, 0))
         ctk.CTkButton(destructive, text=T('clear_list'), width=70, height=38,
                       corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
@@ -2257,6 +2634,32 @@ class ModernApp(ctk.CTk):
 
         # Separator under action bar
         ctk.CTkFrame(tab, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
+
+        filter_bar = ctk.CTkFrame(
+            tab, fg_color=BG_SECTION, corner_radius=0, height=48)
+        filter_bar.pack(fill='x')
+        filter_bar.pack_propagate(False)
+        self._dl_filter_labels = {
+            'all': T('queue_filter_all'),
+            'active': T('queue_filter_active'),
+            'queued': T('queue_filter_queued'),
+            'failed': T('queue_filter_failed'),
+            'done': T('queue_filter_done'),
+            'paused': T('queue_filter_paused'),
+        }
+        self._dl_filter_var = ctk.StringVar(
+            value=self._dl_filter_labels[self._dl_filter])
+        ctk.CTkSegmentedButton(
+            filter_bar, values=list(self._dl_filter_labels.values()),
+            variable=self._dl_filter_var,
+            command=self._on_download_filter_change,
+            height=32, corner_radius=CONTROL_RADIUS,
+            fg_color=BG_INPUT, selected_color=ACCENT,
+            selected_hover_color=ACCENT_HOVER,
+            unselected_color=BG_INPUT,
+            unselected_hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI, font=(ui_font(), 10, 'bold')).pack(
+                side='left', padx=16, pady=8)
 
         # ── Download list ───────────────────────────────────────────
         self._dl_scroll = ctk.CTkScrollableFrame(
@@ -2514,6 +2917,112 @@ class ModernApp(ctk.CTk):
             dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
         ctk.CTkLabel(
             grp, text=T('filename_mode_desc'), text_color=TEXT_DIM,
+            font=(ui_font(), 10), wraplength=620,
+            justify='left', anchor='w').pack(
+                anchor='w', padx=(136, 20), pady=(0, 10))
+
+        row_template = ctk.CTkFrame(grp, fg_color='transparent')
+        row_template.pack(fill='x', padx=20, pady=(8, 2))
+        ctk.CTkLabel(
+            row_template, text=T('filename_template_setting'),
+            text_color=TEXT_PRI, font=(ui_font(), 12, 'bold'),
+            width=116, anchor='w').pack(side='left')
+        self._filename_template_var = ctk.StringVar(
+            value=config.get_filename_template())
+        template_entry = ctk.CTkEntry(
+            row_template, textvariable=self._filename_template_var,
+            height=34, corner_radius=8, fg_color=BG_INPUT,
+            border_color=BORDER, text_color=TEXT_PRI)
+        template_entry.pack(side='left', fill='x', expand=True, padx=10)
+        template_entry.bind('<Return>', self._on_filename_template_change)
+        template_entry.bind('<FocusOut>', self._on_filename_template_change)
+        ctk.CTkLabel(
+            grp, text=T('filename_template_desc'), text_color=TEXT_DIM,
+            font=(ui_font(), 10), wraplength=620,
+            justify='left', anchor='w').pack(
+                anchor='w', padx=(136, 20), pady=(0, 10))
+
+        row_schedule = ctk.CTkFrame(grp, fg_color='transparent')
+        row_schedule.pack(fill='x', padx=20, pady=(8, 2))
+        ctk.CTkLabel(
+            row_schedule, text=T('download_schedule_setting'),
+            text_color=TEXT_PRI, font=(ui_font(), 12, 'bold'),
+            width=116, anchor='w').pack(side='left')
+        self._download_schedule_var = ctk.StringVar(
+            value=config.get_download_schedule())
+        schedule_entry = ctk.CTkEntry(
+            row_schedule, textvariable=self._download_schedule_var,
+            width=100, height=34, corner_radius=8, fg_color=BG_INPUT,
+            border_color=BORDER, text_color=TEXT_PRI,
+            placeholder_text='HH:MM', justify='center')
+        schedule_entry.pack(side='left', padx=10)
+        schedule_entry.bind('<Return>', self._on_download_schedule_change)
+        schedule_entry.bind('<FocusOut>', self._on_download_schedule_change)
+        ctk.CTkLabel(
+            grp, text=T('download_schedule_desc'), text_color=TEXT_DIM,
+            font=(ui_font(), 10), wraplength=620,
+            justify='left', anchor='w').pack(
+                anchor='w', padx=(136, 20), pady=(0, 10))
+
+        row_safety = ctk.CTkFrame(grp, fg_color='transparent')
+        row_safety.pack(fill='x', padx=20, pady=(8, 2))
+        ctk.CTkLabel(
+            row_safety, text=T('minimum_free_setting'),
+            text_color=TEXT_PRI, font=(ui_font(), 12, 'bold'),
+            width=116, anchor='w').pack(side='left')
+        self._minimum_free_var = ctk.StringVar(
+            value=str(config.get_minimum_free_gb()))
+        minimum_entry = ctk.CTkEntry(
+            row_safety, textvariable=self._minimum_free_var,
+            width=80, height=34, corner_radius=8, fg_color=BG_INPUT,
+            border_color=BORDER, text_color=TEXT_PRI, justify='center')
+        minimum_entry.pack(side='left', padx=10)
+        minimum_entry.bind('<Return>', self._on_minimum_free_change)
+        minimum_entry.bind('<FocusOut>', self._on_minimum_free_change)
+        ctk.CTkLabel(
+            row_safety, text='GB', text_color=TEXT_DIM,
+            font=(ui_font(), 10)).pack(side='left')
+        ctk.CTkLabel(
+            grp, text=T('minimum_free_desc'), text_color=TEXT_DIM,
+            font=(ui_font(), 10), wraplength=620,
+            justify='left', anchor='w').pack(
+                anchor='w', padx=(136, 20), pady=(0, 10))
+
+        row_retry = ctk.CTkFrame(grp, fg_color='transparent')
+        row_retry.pack(fill='x', padx=20, pady=(8, 2))
+        ctk.CTkLabel(
+            row_retry, text=T('auto_retry_setting'), text_color=TEXT_PRI,
+            font=(ui_font(), 12, 'bold'), width=116,
+            anchor='w').pack(side='left')
+        self._auto_retry_var = ctk.StringVar(
+            value=str(config.get_auto_retry_count()))
+        retry_entry = ctk.CTkEntry(
+            row_retry, textvariable=self._auto_retry_var,
+            width=80, height=34, corner_radius=8, fg_color=BG_INPUT,
+            border_color=BORDER, text_color=TEXT_PRI, justify='center')
+        retry_entry.pack(side='left', padx=10)
+        retry_entry.bind('<Return>', self._on_auto_retry_change)
+        retry_entry.bind('<FocusOut>', self._on_auto_retry_change)
+        ctk.CTkLabel(
+            grp, text=T('auto_retry_desc'), text_color=TEXT_DIM,
+            font=(ui_font(), 10), wraplength=620,
+            justify='left', anchor='w').pack(
+                anchor='w', padx=(136, 20), pady=(0, 10))
+
+        row_notify = ctk.CTkFrame(grp, fg_color='transparent')
+        row_notify.pack(fill='x', padx=20, pady=(8, 2))
+        ctk.CTkLabel(
+            row_notify, text=T('notify_complete_setting'),
+            text_color=TEXT_PRI, font=(ui_font(), 12, 'bold'),
+            width=116, anchor='w').pack(side='left')
+        self._notify_complete_var = ctk.BooleanVar(
+            value=config.get_notify_on_complete())
+        ctk.CTkSwitch(
+            row_notify, text='', variable=self._notify_complete_var,
+            command=self._on_notify_complete_change,
+            progress_color=ACCENT).pack(side='left', padx=10)
+        ctk.CTkLabel(
+            grp, text=T('notify_complete_desc'), text_color=TEXT_DIM,
             font=(ui_font(), 10), wraplength=SETTINGS_INLINE_HELP_WRAP,
             justify='left', anchor='w').pack(
                 anchor='w', padx=(136, 20), pady=(0, 10))
@@ -2872,6 +3381,8 @@ class ModernApp(ctk.CTk):
     def _load_page(self):
         if not self._current_base_url:
             return
+        if getattr(self, '_status_lbl', None) is not None:
+            self._status_lbl.configure(text=T('loading_browse'))
         self._page_req += 1
         my_req = self._page_req
         my_gen = self._build_gen
@@ -2892,20 +3403,31 @@ class ModernApp(ctk.CTk):
             try:
                 data = fetch_page_data(browser, url)
                 videos = data.get('videos', [])
+                error = data.get('error', '')
             except MirrorsBlockedError:
                 blocked = True
                 videos = []
+                error = ''
             self._ui(
-                lambda: self._apply_page(my_req, videos, page_snapshot, blocked, my_gen),
+                lambda: self._apply_page(
+                    my_req, videos, page_snapshot, blocked, my_gen, error),
                 gen=my_gen)
 
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _apply_page(self, req: int, videos: list[dict], page_snapshot: int,
-                    blocked: bool = False, gen: int | None = None):
+                    blocked: bool = False, gen: int | None = None,
+                    error: str = ''):
         if self._is_closing or req != self._page_req:
             return
         if gen is not None and gen != self._build_gen:
+            return
+        if error:
+            self._page = self._last_loaded_page
+            self._has_next = False
+            self._browse_empty_message = f'{T("fetch_error")} · {error[:160]}'
+            self._page_lbl.configure(text=T('page_n', n=self._page))
+            self._status_lbl.configure(text=self._browse_empty_message)
             return
         if not videos and page_snapshot > 1 and not blocked:
             self._page = self._last_loaded_page
@@ -2914,7 +3436,9 @@ class ModernApp(ctk.CTk):
             return
         self._videos = videos
         self._browse_blocked = blocked
-        self._browse_empty_message = ''
+        self._browse_empty_message = (
+            f'{T("fetch_error")} · {error[:160]}' if error
+            else '')
         self._has_next = bool(videos)
         if videos:
             self._last_loaded_page = page_snapshot
@@ -2923,6 +3447,9 @@ class ModernApp(ctk.CTk):
         self._refresh_grid()
         _crumb("apply_page: grid refreshed")
         self._page_lbl.configure(text=T('page_n', n=self._page))
+        self._status_lbl.configure(
+            text=(T('mirrors_blocked') if blocked else
+                  self._browse_empty_message or T('status_ready')))
 
     def _video_version_badge(self, url: str, title: str):
         url_l = (url or '').lower()
@@ -3107,14 +3634,16 @@ class ModernApp(ctk.CTk):
     def _toggle_select(self, url: str):
         if url in self._selected_urls:
             self._selected_urls.discard(url)
+            self._selected_videos.pop(url, None)
             self._selected_source_subtitle_evidence.pop(url, None)
         else:
             self._selected_urls.add(url)
             video = next(
                 (item for item in self._videos
-                 if item.get('url', '') == url),
+                if item.get('url', '') == url),
                 {'url': url},
             )
+            self._selected_videos[url] = dict(video)
             evidence = self._source_subtitle_evidence_for_video(video)
             if evidence:
                 self._selected_source_subtitle_evidence[url] = evidence
@@ -3140,8 +3669,11 @@ class ModernApp(ctk.CTk):
 
     def _update_selection_count(self):
         n = len(self._selected_urls)
+        page_selected = sum(
+            1 for video in self._videos
+            if video.get('url', '') in self._selected_urls)
         self._sel_lbl.configure(
-            text=f'{n} {T("selected")}',
+            text=T('selection_count', selected=n, page=page_selected),
             text_color=ACCENT if n else TEXT_SEC)
 
     def _set_card_selected(self, url: str, is_sel: bool):
@@ -3166,6 +3698,7 @@ class ModernApp(ctk.CTk):
     def _clear_selection_in_place(self):
         selected = list(self._selected_urls)
         self._selected_urls.clear()
+        self._selected_videos.clear()
         self._selected_source_subtitle_evidence.clear()
         for url in selected:
             self._set_card_selected(url, False)
@@ -3195,11 +3728,90 @@ class ModernApp(ctk.CTk):
             url = v.get('url', '')
             if url:
                 self._selected_urls.add(url)
+                # Assignment refreshes metadata without changing the original
+                # insertion order when a selected card is visited again.
+                self._selected_videos[url] = dict(v)
                 evidence = self._source_subtitle_evidence_for_video(v)
                 if evidence:
                     self._selected_source_subtitle_evidence[url] = evidence
                 self._set_card_selected(url, True)
         self._update_selection_count()
+
+    def _select_all_results(self):
+        """Fetch and select every unique result from the current listing."""
+        if self._select_all_running or not self._current_base_url:
+            return
+        self._select_all_running = True
+        site_key = self._site_key
+        browser = SITES[site_key]['browser']
+        base_url = self._current_base_url
+        build_gen = self._build_gen
+
+        def _page_url(page):
+            if site_key == 'JableTV':
+                if page <= 1:
+                    return base_url
+                if '?' in base_url:
+                    return f'{base_url}&from={page}'
+                return f'{base_url.rstrip("/")}/?from={page}'
+            return browser.page_url(base_url, page)
+
+        def _worker():
+            selected: dict[str, dict] = {}
+            evidence: dict[str, tuple[str, ...]] = {}
+            blocked = False
+            for page in range(1, 51):
+                if self._is_closing or build_gen != self._build_gen:
+                    self._select_all_running = False
+                    return
+                try:
+                    videos = browser.fetch_page(_page_url(page))
+                except MirrorsBlockedError:
+                    blocked = True
+                    break
+                except Exception as exc:
+                    print(f'[select all results] page {page}: {exc}', flush=True)
+                    break
+                if not videos:
+                    break
+                before = len(selected)
+                for video in videos:
+                    url = video.get('url', '')
+                    if not url or not M3U8Sites.VaildateUrl(url):
+                        continue
+                    selected.setdefault(url, dict(video))
+                    candidate = dict(video)
+                    candidate['_site'] = site_key
+                    candidate['_source_listing_url'] = base_url
+                    source = trusted_chinese_subtitle_evidence(candidate)
+                    if source:
+                        evidence[url] = source
+                count = len(selected)
+                self._ui(lambda p=page, n=count: self._status_lbl.configure(
+                    text=T('selecting_all_results', page=p, count=n)),
+                    gen=build_gen)
+                if len(selected) == before:
+                    break
+
+            def _apply():
+                self._select_all_running = False
+                if (self._site_key != site_key or
+                        self._current_base_url != base_url):
+                    return
+                for url, video in selected.items():
+                    self._selected_urls.add(url)
+                    self._selected_videos[url] = video
+                    if url in evidence:
+                        self._selected_source_subtitle_evidence[url] = evidence[url]
+                    self._set_card_selected(url, True)
+                self._update_selection_count()
+                self._status_lbl.configure(
+                    text=(T('mirrors_blocked') if blocked else
+                          T('selection_all_done', count=len(selected))))
+
+            self._ui(_apply, gen=build_gen)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _hanime_filters_active(self) -> bool:
         return any(
@@ -3262,6 +3874,7 @@ class ModernApp(ctk.CTk):
         self._browse_blocked = False
         self._browse_empty_message = ''
         self._selected_urls.clear()
+        self._selected_videos.clear()
         self._selected_source_subtitle_evidence.clear()
         self._update_selection_count()
         self._search_var.set(state.get('query', ''))
@@ -3553,6 +4166,7 @@ class ModernApp(ctk.CTk):
         self._sync_hanime_filter_button_visibility()
         self._categories.clear()
         self._selected_urls.clear()
+        self._selected_videos.clear()
         self._selected_source_subtitle_evidence.clear()
         self._update_selection_count()
         self._rebuild_sidebar()
@@ -3572,6 +4186,7 @@ class ModernApp(ctk.CTk):
         self._browse_blocked = False
         self._browse_empty_message = ''
         self._selected_urls.clear()
+        self._selected_videos.clear()
         self._selected_source_subtitle_evidence.clear()
         self._update_selection_count()
         self._load_page()
@@ -3603,6 +4218,7 @@ class ModernApp(ctk.CTk):
         self._browse_blocked = False
         self._browse_empty_message = ''
         self._selected_urls.clear()
+        self._selected_videos.clear()
         self._selected_source_subtitle_evidence.clear()
         self._update_selection_count()
         self._load_page()
@@ -3615,6 +4231,7 @@ class ModernApp(ctk.CTk):
         self._browse_blocked = False
         self._browse_empty_message = ''
         self._selected_urls.clear()
+        self._selected_videos.clear()
         self._selected_source_subtitle_evidence.clear()
         self._update_selection_count()
         self._cat_var.set(f'🏷 {name}')
@@ -3675,42 +4292,256 @@ class ModernApp(ctk.CTk):
         self._rebuild_sidebar()
 
     # ── Download actions ─────────────────────────────────────────────
-    def _add_selected_to_queue(self):
-        dest = self._dest_var.get() or 'download'
-        for url in list(self._selected_urls):
-            if M3U8Sites.VaildateUrl(url):
-                self._dlmgr.add_item(
-                    url, state='等待中', dest=dest,
-                    source_subtitle_evidence=(
-                        self._selected_source_subtitle_evidence.get(
-                            url, ())))
-        n = len(self._selected_urls)
-        self._clear_selection_in_place()
-        print(f'已加入 {n} 部到清單')
+    def _review_selected(self, start_download: bool = False):
+        ordered = list(self._selected_videos) or list(self._selected_urls)
+        if not ordered:
+            self._status_lbl.configure(text=T('selection_preview_empty'))
+            return
+        popup = ctk.CTkToplevel(self)
+        popup.title(T('selection_preview_title'))
+        popup.geometry('760x620')
+        popup.minsize(620, 460)
+        popup.transient(self)
+        popup.configure(fg_color=BG_DARK)
 
-    def _download_selected(self):
+        header = ctk.CTkFrame(popup, fg_color=BG_SECTION, corner_radius=0)
+        header.pack(fill='x')
+        ctk.CTkLabel(
+            header, text=T('selection_preview_title'), text_color=TEXT_PRI,
+            font=(ui_font(), 17, 'bold')).pack(
+                anchor='w', padx=20, pady=(16, 2))
+        ctk.CTkLabel(
+            header, text=T('selection_preview_desc', count=len(ordered)),
+            text_color=TEXT_DIM, font=(ui_font(), 10)).pack(
+                anchor='w', padx=20, pady=(0, 14))
+
+        options = ctk.CTkFrame(popup, fg_color=BG_CARD)
+        options.pack(fill='x', padx=16, pady=12)
+        resolution_var = ctk.StringVar(value=self._resolution_label())
+        template_var = ctk.StringVar(value=config.get_filename_template())
+        ctk.CTkLabel(
+            options, text=T('selection_preview_resolution'),
+            text_color=TEXT_SEC, font=(ui_font(), 10, 'bold')).grid(
+                row=0, column=0, padx=(14, 8), pady=12, sticky='w')
+        ctk.CTkOptionMenu(
+            options, values=self._resolution_values(),
+            variable=resolution_var, width=140, height=32,
+            fg_color=BG_INPUT, button_color=BORDER_HOVER,
+            button_hover_color=ACCENT,
+            dropdown_fg_color=BG_CARD).grid(
+                row=0, column=1, padx=(0, 18), pady=12, sticky='w')
+        ctk.CTkLabel(
+            options, text=T('selection_preview_template'),
+            text_color=TEXT_SEC, font=(ui_font(), 10, 'bold')).grid(
+                row=0, column=2, padx=(0, 8), pady=12, sticky='w')
+        template_entry = ctk.CTkEntry(
+            options, textvariable=template_var, height=32,
+            fg_color=BG_INPUT, border_color=BORDER,
+            text_color=TEXT_PRI)
+        template_entry.grid(
+            row=0, column=3, padx=(0, 14), pady=12, sticky='ew')
+        options.grid_columnconfigure(3, weight=1)
+
+        listing = ctk.CTkScrollableFrame(
+            popup, fg_color=BG_DARK, corner_radius=0,
+            scrollbar_button_color=BORDER)
+        listing.pack(fill='both', expand=True, padx=16)
+        choices = {
+            url: ctk.BooleanVar(value=True) for url in ordered
+        }
+        for url in ordered[:200]:
+            video = self._selected_videos.get(url, {})
+            enabled = choices[url]
+            row = ctk.CTkFrame(
+                listing, fg_color=BG_CARD, corner_radius=8,
+                border_width=1, border_color=BORDER_CARD)
+            row.pack(fill='x', pady=4)
+            ctk.CTkCheckBox(
+                row, text='', variable=enabled, width=24,
+                fg_color=ACCENT, hover_color=ACCENT_HOVER).pack(
+                    side='left', padx=(12, 6), pady=10)
+            labels = ctk.CTkFrame(row, fg_color='transparent')
+            labels.pack(side='left', fill='x', expand=True, pady=8)
+            title = str(video.get('title') or url.rstrip('/').split('/')[-1])
+            ctk.CTkLabel(
+                labels, text=title, text_color=TEXT_PRI,
+                font=(ui_font(), 10, 'bold'), anchor='w').pack(fill='x')
+            ctk.CTkLabel(
+                labels,
+                text=f'{site_name(url)} · {video_code(url, title)} · {url}',
+                text_color=TEXT_DIM, font=('Consolas', 8),
+                anchor='w').pack(fill='x', pady=(2, 0))
+        if len(ordered) > 200:
+            ctk.CTkLabel(
+                listing,
+                text=T('selection_preview_more', count=len(ordered) - 200),
+                text_color=TEXT_DIM, font=(ui_font(), 10)).pack(
+                    anchor='w', padx=12, pady=10)
+
+        footer = ctk.CTkFrame(popup, fg_color=BG_HEADER, corner_radius=0)
+        footer.pack(fill='x', pady=(12, 0))
+
+        def _commit(download):
+            keep = {url for url, variable in choices.items() if variable.get()}
+            for url in list(self._selected_urls):
+                if url not in keep:
+                    self._selected_urls.discard(url)
+                    self._selected_videos.pop(url, None)
+                    self._selected_source_subtitle_evidence.pop(url, None)
+            if not keep:
+                popup.destroy()
+                self._update_selection_count()
+                return
+            if download and not self._preflight_download_destination():
+                return
+            resolution = self._resolution_pref_from_label(
+                resolution_var.get())
+            template = config.normalize_filename_template(
+                template_var.get())
+            due = next_schedule_epoch(config.get_download_schedule())
+            if download:
+                self._download_selected(
+                    resolution, template, not_before=due)
+            else:
+                self._add_selected_to_queue(resolution, template)
+            popup.destroy()
+
+        ctk.CTkButton(
+            footer, text=T('selection_preview_cancel'), width=96,
+            height=36, fg_color='transparent', border_width=1,
+            border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
+            text_color=TEXT_SEC, command=popup.destroy).pack(
+                side='left', padx=16, pady=12)
+        secondary_text = (
+            T('selection_preview_add') if start_download
+            else T('selection_preview_download'))
+        secondary_action = (False if start_download else True)
+        ctk.CTkButton(
+            footer, text=secondary_text, width=132, height=36,
+            fg_color='transparent', border_width=1,
+            border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI,
+            command=lambda: _commit(secondary_action)).pack(
+                side='right', padx=(0, 8), pady=12)
+        primary_text = (
+            T('selection_preview_download') if start_download
+            else T('selection_preview_add'))
+        ctk.CTkButton(
+            footer, text=primary_text, width=142, height=36,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=WHITE,
+            command=lambda: _commit(start_download)).pack(
+                side='right', padx=(0, 8), pady=12)
+        popup.grab_set()
+        popup.focus_force()
+
+    def _preflight_download_destination(self) -> bool:
+        minimum = config.get_minimum_free_gb()
+        result = storage_preflight(
+            self._dest_var.get() or 'download',
+            minimum_free_bytes=int(minimum * 1024 ** 3))
+        if result.ok:
+            config.set_download_directory(result.path)
+            return True
+        if result.error == 'low_space':
+            message = T(
+                'disk_low_space', free=f'{result.free_bytes / 1024 ** 3:.2f}',
+                minimum=f'{minimum:.2f}')
+        else:
+            message = T('disk_preflight_failed', error=result.error)
+        self._status_lbl.configure(text=message)
+        messagebox.showerror(T('open_folder_failed_title'), message)
+        return False
+
+    def _queue_selected(
+            self, *, start_download: bool, resolution: str = '',
+            filename_template: str = '', not_before: float = 0):
         dest = self._dest_var.get() or 'download'
-        for url in list(self._selected_urls):
+        requested = added = duplicates = unsupported = started = 0
+        ordered = list(self._selected_videos) or list(self._selected_urls)
+        for url in ordered:
+            requested += 1
             if M3U8Sites.VaildateUrl(url):
+                video = self._selected_videos.get(url, {})
+                contains = getattr(self._dlmgr, 'contains', None)
+                existed = bool(contains(url)) if callable(contains) else False
                 self._dlmgr.add_item(
-                    url, state='等待中', dest=dest,
+                    url, name=str(video.get('title') or ''),
+                    state='等待中', dest=dest,
                     source_subtitle_evidence=(
                         self._selected_source_subtitle_evidence.get(
-                            url, ())))
-                self._dlmgr.enqueue(url, dest)
-        n = len(self._selected_urls)
+                            url, ())),
+                    resolution=resolution,
+                    filename_template=filename_template,
+                    thumbnail=str(video.get('thumbnail') or ''),
+                    site=self._site_key)
+                if existed:
+                    duplicates += 1
+                else:
+                    added += 1
+                if start_download:
+                    try:
+                        accepted = self._dlmgr.enqueue(
+                            url, dest, not_before=not_before)
+                    except TypeError:
+                        accepted = self._dlmgr.enqueue(url, dest)
+                    if accepted is not False:
+                        started += 1
+            else:
+                unsupported += 1
+                print(f'[queue] unsupported selected URL: {url}')
         self._clear_selection_in_place()
-        print(f'{n} 部開始下載')
+        return QueueAddSummary(
+            requested=requested, added=added, duplicates=duplicates,
+            unsupported=unsupported, started=started)
+
+    def _show_queue_summary(self, summary: QueueAddSummary, started=False):
+        key = 'queue_started_summary' if started else 'queue_summary'
+        text = T(
+            key, added=summary.added, started=summary.started,
+            duplicates=summary.duplicates,
+            unsupported=summary.unsupported)
+        label = getattr(self, '_status_lbl', None)
+        if label is not None:
+            try:
+                label.configure(text=text)
+            except Exception:
+                pass
+        print(text, flush=True)
+
+    def _add_selected_to_queue(
+            self, resolution: str = '', filename_template: str = ''):
+        summary = ModernApp._queue_selected(
+            self, start_download=False, resolution=resolution,
+            filename_template=filename_template)
+        ModernApp._show_queue_summary(self, summary, started=False)
+        return summary
+
+    def _download_selected(
+            self, resolution: str = '', filename_template: str = '',
+            not_before: float = 0):
+        summary = ModernApp._queue_selected(
+            self, start_download=True, resolution=resolution,
+            filename_template=filename_template, not_before=not_before)
+        ModernApp._show_queue_summary(self, summary, started=True)
+        return summary
 
     def _download_url(self):
         url = self._dl_url_var.get().strip()
         if not url:
             return
+        if not self._preflight_download_destination():
+            return
+        resolution = config.get_resolution_pref()
+        filename_template = config.get_filename_template()
+        due = next_schedule_epoch(config.get_download_schedule())
         # Direct video URL
         if M3U8Sites.VaildateUrl(url):
             dest = self._dest_var.get() or 'download'
-            self._dlmgr.add_item(url, state='等待中', dest=dest)
-            self._dlmgr.enqueue(url, dest)
+            self._dlmgr.add_item(
+                url, state='等待中', dest=dest, resolution=resolution,
+                filename_template=filename_template)
+            self._dlmgr.enqueue(url, dest, not_before=due)
             self._dl_url_var.set('')
             return
         # Listing / actress / category URL — crawl all videos
@@ -3718,8 +4549,10 @@ class ModernApp(ctk.CTk):
             self._dl_url_var.set('')
             self._status_lbl.configure(text=T('crawling_url'))
             dest = self._dest_var.get() or 'download'
-            threading.Thread(target=self._crawl_listing, args=(url, dest),
-                             daemon=True).start()
+            threading.Thread(
+                target=self._crawl_listing,
+                args=(url, dest, resolution, filename_template, due),
+                daemon=True).start()
             return
         self._status_lbl.configure(text=T('url_not_supported'))
         print(T('url_not_supported') + f': {url}')
@@ -3735,7 +4568,9 @@ class ModernApp(ctk.CTk):
                 bool(re.match(r'https://(?:www\.)?supjav\.com/', url)) or
                 bool(re.match(r'https://(?:www\.)?hanime1\.me/', url)))
 
-    def _crawl_listing(self, url: str, dest: str):
+    def _crawl_listing(
+            self, url: str, dest: str, resolution: str = '',
+            filename_template: str = '', not_before: float = 0):
         """Crawl a listing URL across all pages; add every video to the queue."""
         gen = self._build_gen
         seen: set[str] = set()
@@ -3796,8 +4631,13 @@ class ModernApp(ctk.CTk):
                     self._dlmgr.add_item(
                         video_url, name=name, state='等待中', dest=dest,
                         source_subtitle_evidence=(
-                            trusted_chinese_subtitle_evidence(candidate)))
-                    self._dlmgr.enqueue(video_url, dest)
+                            trusted_chinese_subtitle_evidence(candidate)),
+                        resolution=resolution,
+                        filename_template=filename_template,
+                        thumbnail=str(v.get('thumbnail') or ''),
+                        site=candidate['_site'])
+                    self._dlmgr.enqueue(
+                        video_url, dest, not_before=not_before)
 
             if new_count == 0:
                 break  # No new videos on this page, stop
@@ -3810,20 +4650,29 @@ class ModernApp(ctk.CTk):
             text=T('crawl_added', n=n)), gen=gen)
 
     def _download_all(self):
+        if not self._preflight_download_destination():
+            return
+        resolution = config.get_resolution_pref()
+        filename_template = config.get_filename_template()
+        due = next_schedule_epoch(config.get_download_schedule())
         # If the URL field has a listing URL, crawl it first
         url = self._dl_url_var.get().strip()
         if url:
             if M3U8Sites.VaildateUrl(url):
                 dest = self._dest_var.get() or 'download'
-                self._dlmgr.add_item(url, state='等待中', dest=dest)
-                self._dlmgr.enqueue(url, dest)
+                self._dlmgr.add_item(
+                    url, state='等待中', dest=dest, resolution=resolution,
+                    filename_template=filename_template)
+                self._dlmgr.enqueue(url, dest, not_before=due)
                 self._dl_url_var.set('')
             elif self._is_listing_url(url):
                 self._dl_url_var.set('')
                 self._status_lbl.configure(text=T('crawling_url'))
                 dest = self._dest_var.get() or 'download'
-                threading.Thread(target=self._crawl_listing, args=(url, dest),
-                                 daemon=True).start()
+                threading.Thread(
+                    target=self._crawl_listing,
+                    args=(url, dest, resolution, filename_template, due),
+                    daemon=True).start()
                 return
         dest = self._dest_var.get() or 'download'
         count = 0
@@ -3836,10 +4685,72 @@ class ModernApp(ctk.CTk):
             if item.state in (
                     '已下載', '未偵測到日語語音', '下載中', '準備中'):
                 continue
-            self._dlmgr.enqueue(item.url, item.dest or dest)
-            count += 1
+            if self._dlmgr.enqueue(
+                    item.url, item.dest or dest, not_before=due):
+                count += 1
         if count:
             print(f'已加入 {count} 個下載任務')
+
+    def _import_urls(self, urls) -> QueueAddSummary:
+        dest = self._dest_var.get() or 'download'
+        requested = added = duplicates = unsupported = 0
+        for url in urls:
+            requested += 1
+            if not M3U8Sites.VaildateUrl(url):
+                unsupported += 1
+                continue
+            if self._dlmgr.contains(url):
+                duplicates += 1
+                continue
+            self._dlmgr.add_item(
+                url, state='等待中', dest=dest,
+                resolution=config.get_resolution_pref(),
+                filename_template=config.get_filename_template(),
+                site=site_name(url))
+            added += 1
+        summary = QueueAddSummary(
+            requested=requested, added=added, duplicates=duplicates,
+            unsupported=unsupported)
+        text = T(
+            'import_complete', added=added, duplicates=duplicates,
+            unsupported=unsupported)
+        self._status_lbl.configure(text=text)
+        self._refresh_downloads(schedule=False)
+        return summary
+
+    def _import_urls_file(self):
+        path = filedialog.askopenfilename(filetypes=[
+            ('URL files', '*.txt *.csv *.json'),
+            ('Text', '*.txt'), ('CSV', '*.csv'), ('JSON', '*.json'),
+            ('All files', '*.*'),
+        ])
+        if not path:
+            return
+        try:
+            self._import_urls(load_url_file(path))
+        except (OSError, UnicodeError, ValueError, csv.Error, json.JSONDecodeError) as exc:
+            messagebox.showerror(T('import_failed'), str(exc))
+
+    def _paste_urls(self):
+        try:
+            text = self.clipboard_get()
+        except tk.TclError as exc:
+            messagebox.showerror(T('import_failed'), str(exc))
+            return
+        self._import_urls(extract_urls(text))
+
+    def _export_queue(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension='.csv',
+            filetypes=[('CSV', '*.csv'), ('JSON', '*.json')],
+            initialfile='uav-downloads.csv')
+        if not path:
+            return
+        try:
+            export_items(self._dlmgr.get_items(), path)
+            self._status_lbl.configure(text=T('export_complete'))
+        except (OSError, ValueError, TypeError) as exc:
+            messagebox.showerror(T('export_failed'), str(exc))
 
     def _subtitle_local_files(self):
         """Generate subtitles for videos that are already on disk."""
@@ -3883,12 +4794,65 @@ class ModernApp(ctk.CTk):
         item.speed = ''
         item.error = ''
         item.auto_requeues = 0
+        item.retry_count = 0
         self._dlmgr.enqueue(url, dest)
 
+    def _handle_download_action(self, url: str):
+        item = next((i for i in self._dlmgr.get_items() if i.url == url), None)
+        if item is None:
+            return
+        action = _download_row_action(item)
+        if action == 'pause':
+            self._dlmgr.pause(url)
+        elif action == 'resume':
+            self._dlmgr.resume(url, item.dest or self._dest_var.get())
+        elif action == 'retry':
+            self._retry_download(url)
+
+    def _on_download_filter_change(self, label):
+        reverse = {value: key for key, value in self._dl_filter_labels.items()}
+        self._dl_filter = reverse.get(label, 'all')
+        self._dl_gen += 1
+        for widgets in self._dl_rows.values():
+            try:
+                widgets['row'].destroy()
+            except Exception:
+                pass
+        self._dl_rows.clear()
+        self._refresh_downloads(schedule=False)
+
+    def _filtered_download_items(self, items):
+        return filter_items(items, self._dl_filter)
+
+    def _notify_batch_complete(self):
+        if not config.get_notify_on_complete() or self._is_closing:
+            return
+        try:
+            self._status_lbl.configure(text=T('batch_complete'))
+        except (AttributeError, tk.TclError):
+            pass
+        try:
+            if os.name == 'nt':
+                import winsound
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            else:
+                self.bell()
+        except Exception:
+            pass
+
     def _cancel_all(self):
+        if ((self._dlmgr.active_count or self._dlmgr.pending_count or
+             self._dlmgr.subtitle_active_count or
+             self._dlmgr.subtitle_pending_count) and
+                not messagebox.askyesno(
+                    T('cancel_all'), T('cancel_all_confirm'))):
+            return
         self._dlmgr.cancel_all()
 
     def _clear_queue(self):
+        if self._dlmgr.get_items() and not messagebox.askyesno(
+                T('clear_list'), T('clear_queue_confirm')):
+            return
         self._dlmgr.clear_all()
         self._dl_gen += 1
         self._last_download_save_sig = None
@@ -3979,6 +4943,7 @@ class ModernApp(ctk.CTk):
         if val == T('unlimited') or not val[:1].isdigit():
             self._speed_mbps = 0
             speed_limiter.set_limit(0)
+            config.set_speed_limit_mbps(0)
             return
         try:
             mbps = float(val.split()[0])
@@ -3986,6 +4951,7 @@ class ModernApp(ctk.CTk):
             return
         self._speed_mbps = mbps
         speed_limiter.set_limit(mbps)
+        config.set_speed_limit_mbps(mbps)
 
     def _on_res_change(self, val):
         from uav_downloader.sites.base import set_resolution_pref
@@ -3997,6 +4963,33 @@ class ModernApp(ctk.CTk):
         mode = config.set_filename_mode(
             self._filename_mode_from_label(val))
         self._filename_mode_var.set(self._filename_mode_label(mode))
+
+    def _on_filename_template_change(self, _event=None):
+        value = config.set_filename_template(
+            self._filename_template_var.get())
+        self._filename_template_var.set(value)
+
+    def _on_download_schedule_change(self, _event=None):
+        try:
+            value = config.set_download_schedule(
+                self._download_schedule_var.get())
+        except ValueError:
+            value = config.get_download_schedule()
+        self._download_schedule_var.set(value)
+
+    def _on_minimum_free_change(self, _event=None):
+        value = config.set_minimum_free_gb(
+            self._minimum_free_var.get())
+        self._minimum_free_var.set(str(value))
+
+    def _on_auto_retry_change(self, _event=None):
+        value = config.set_auto_retry_count(
+            self._auto_retry_var.get())
+        self._auto_retry_var.set(str(value))
+
+    def _on_notify_complete_change(self):
+        config.set_notify_on_complete(
+            self._notify_complete_var.get())
 
     def _on_subtitle_change(self, val):
         config.set_subtitle_pref(self._subtitle_pref_from_label(val))
@@ -4055,6 +5048,7 @@ class ModernApp(ctk.CTk):
         d = filedialog.askdirectory()
         if d:
             self._dest_var.set(d)
+            config.set_download_directory(d)
 
     def _open_dest_folder(self):
         import subprocess, platform
@@ -4110,18 +5104,21 @@ class ModernApp(ctk.CTk):
     _STATE_COLORS = {
         '下載中': ACCENT, '準備中': WARNING, '等待中': WARNING,
         '字幕準備中': ACCENT, '字幕辨識中': ACCENT,
-        '字幕翻譯中': ACCENT,
+        '字幕模型準備中': ACCENT, '字幕翻譯中': ACCENT,
         '已下載': SUCCESS, '未偵測到日語語音': TEXT_SEC,
         '未完成': WARNING, '已取消': TEXT_DIM,
         '網址錯誤': ERROR_C, '封鎖/解析失敗': ERROR_C,
+        '等待重試': WARNING, '已排程': ACCENT, '已暫停': TEXT_DIM,
     }
     _STATE_BACKGROUNDS = {
         '下載中': ACCENT_DIM, '準備中': WARNING_DIM, '等待中': WARNING_DIM,
         '字幕準備中': ACCENT_DIM, '字幕辨識中': ACCENT_DIM,
-        '字幕翻譯中': ACCENT_DIM,
+        '字幕模型準備中': ACCENT_DIM, '字幕翻譯中': ACCENT_DIM,
         '已下載': SUCCESS_DIM, '未偵測到日語語音': BG_BADGE,
         '未完成': WARNING_DIM, '已取消': BG_BADGE,
         '網址錯誤': ERROR_DIM, '封鎖/解析失敗': ERROR_DIM,
+        '等待重試': WARNING_DIM, '已排程': ACCENT_DIM,
+        '已暫停': BG_BADGE,
     }
 
     def _sync_dl_footer(self, hidden: int):
@@ -4180,7 +5177,8 @@ class ModernApp(ctk.CTk):
                 or getattr(self, '_dl_scroll', None) is None):
             return
         try:
-            items = self._dlmgr.get_items()
+            all_items = self._dlmgr.get_items()
+            items = self._filtered_download_items(all_items)
             visible = _visible_window(items, MAX_VISIBLE_ROWS)
             visible_set = {i.url for i in visible}
 
@@ -4215,7 +5213,8 @@ class ModernApp(ctk.CTk):
                     pass
             return
         try:
-            items = self._dlmgr.get_items()
+            all_items = self._dlmgr.get_items()
+            items = self._filtered_download_items(all_items)
             visible = _visible_window(items, MAX_VISIBLE_ROWS)
             visible_set = {i.url for i in visible}
 
@@ -4232,7 +5231,9 @@ class ModernApp(ctk.CTk):
             if not items:
                 if self._dl_empty_lbl is None:
                     self._dl_empty_lbl = ctk.CTkLabel(
-                        self._dl_scroll, text=T('dl_list_empty'),
+                        self._dl_scroll,
+                        text=(T('queue_filter_empty') if all_items
+                              else T('dl_list_empty')),
                         text_color=TEXT_DIM,
                         font=(ui_font(), 13))
                     self._dl_empty_lbl.pack(pady=40)
@@ -4266,12 +5267,19 @@ class ModernApp(ctk.CTk):
                     'subtitle_queue_status',
                     active=subtitle_active, pending=subtitle_pending))
             done = sum(
-                1 for i in items
+                1 for i in all_items
                 if i.state in {'已下載', '未偵測到日語語音'})
             if done:
                 parts.append(f'{state_label("已下載")} {done}')
             self._status_lbl.configure(text='  |  '.join(parts) if parts else T('status_ready'))
-            self._autosave_downloads(items)
+            self._autosave_downloads(all_items)
+            busy = bool(a or p or subtitle_active or subtitle_pending)
+            if busy:
+                self._batch_was_busy = True
+                self._batch_notified = False
+            elif self._batch_was_busy and not self._batch_notified:
+                self._batch_notified = True
+                self._notify_batch_complete()
         except Exception as e:
             print(f'[download refresh failed] {e}', flush=True)
         finally:
@@ -4288,7 +5296,9 @@ class ModernApp(ctk.CTk):
         self._download_autosave_ticks = 0
         sig = tuple((
             i.url, i.name, i.state, i.progress, i.dest,
-            i.source_subtitle_evidence,
+            i.source_subtitle_evidence, i.resolution,
+            i.filename_template, i.error, i.error_code,
+            i.retry_count, i.not_before,
         ) for i in items)
         if sig == self._last_download_save_sig:
             return
@@ -4321,6 +5331,16 @@ class ModernApp(ctk.CTk):
                 text_color=color, font=(ui_font(), 10, 'bold'))
             state_lbl.pack(fill='both', expand=True, padx=6)
 
+            thumb_holder = ctk.CTkFrame(
+                row, width=88, height=50, corner_radius=6,
+                fg_color=BG_SIDEBAR)
+            thumb_holder.pack(side='left', padx=(0, 10), pady=10)
+            thumb_holder.pack_propagate(False)
+            thumb_lbl = ctk.CTkLabel(
+                thumb_holder, text='', text_color=TEXT_DIM,
+                font=(ui_font(), 8))
+            thumb_lbl.pack(fill='both', expand=True)
+
             remove_btn = ctk.CTkButton(
                 row, text='✕', width=32, height=32,
                 corner_radius=CONTROL_RADIUS,
@@ -4330,13 +5350,22 @@ class ModernApp(ctk.CTk):
                 command=lambda u=item.url: self._dlmgr.remove_item(u))
             remove_btn.pack(side='right', padx=(6, 14))
 
+            folder_btn = ctk.CTkButton(
+                row, text='▣', width=32, height=32,
+                corner_radius=CONTROL_RADIUS,
+                fg_color='transparent', border_width=1,
+                border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
+                text_color=TEXT_SEC, font=('Consolas', 11),
+                command=lambda u=item.url: self._open_item_folder(u))
+            folder_btn.pack(side='right', padx=(2, 0))
+
             retry_btn = ctk.CTkButton(
                 row, text='', width=82, height=32,
                 corner_radius=CONTROL_RADIUS,
                 fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                 hover_color=BG_CARD_HOVER,
                 text_color=ACCENT, font=(ui_font(), 10, 'bold'),
-                command=lambda u=item.url: self._retry_download(u))
+                command=lambda u=item.url: self._handle_download_action(u))
 
             metrics = ctk.CTkFrame(row, fg_color='transparent')
             metrics.pack(side='right', padx=(6, 2))
@@ -4362,8 +5391,11 @@ class ModernApp(ctk.CTk):
             name_lbl.pack(fill='x', anchor='w')
             detail_lbl = ctk.CTkLabel(
                 text_stack, text=item.url, text_color=TEXT_DIM,
-                font=('Consolas', 9), anchor='w')
+                font=('Consolas', 9), anchor='w', cursor='hand2')
             detail_lbl.pack(fill='x', anchor='w', pady=(3, 0))
+            detail_lbl.bind(
+                '<Button-1>',
+                lambda _event, u=item.url: self._copy_job_diagnostics(u))
 
             widgets = {
                 'row': row, 'state_holder': state_holder,
@@ -4371,11 +5403,14 @@ class ModernApp(ctk.CTk):
                 'detail_lbl': detail_lbl, 'metrics': metrics,
                 'pb': pb, 'pct_lbl': pct_lbl, 'spd_lbl': spd_lbl,
                 'retry_btn': retry_btn, '_before_remove': remove_btn,
+                'folder_btn': folder_btn,
+                'thumb_lbl': thumb_lbl,
                 'pb_visible': False, 'pct_visible': False, 'spd_visible': False,
                 'retry_visible': False,
                 'last_retry_action': None,
                 'last_state': None, 'last_name': None, 'last_detail': None,
                 'last_progress': -1, 'last_speed': None,
+                'last_thumbnail': None,
             }
             self._update_dl_row(widgets, item)
             return widgets
@@ -4389,6 +5424,11 @@ class ModernApp(ctk.CTk):
 
     def _update_dl_row(self, w: dict, item: DownloadItem):
         """Update an existing row's fields in place without rebuilding widgets."""
+        if item.thumbnail and w['last_thumbnail'] != item.thumbnail:
+            w['last_thumbnail'] = item.thumbnail
+            self._load_download_thumb_async(
+                item.thumbnail, w['thumb_lbl'], self._build_gen,
+                item.site)
         # State text + color
         if w['last_state'] != item.state:
             color = self._STATE_COLORS.get(item.state, TEXT_SEC)
@@ -4407,11 +5447,21 @@ class ModernApp(ctk.CTk):
 
         # Name and supporting detail (error or source URL) are separate levels.
         display_name = item.name or item.url
-        detail = item.url
+        resolution = item.resolution or config.get_resolution_pref()
+        detail = T(
+            'job_details', site=item.site or site_name(item.url),
+            code=video_code(item.url, display_name), resolution=resolution)
         detail_color = TEXT_DIM
         if item.error and item.state in (
                 '未完成', '封鎖/解析失敗', '已下載', '下載中'):
-            err_text = T('blocked_vpn_hint') if item.error == ERR_BLOCKED else item.error
+            if item.error == ERR_BLOCKED:
+                err_text = T('blocked_vpn_hint')
+            elif item.error_code:
+                err_text = T(f'problem_{item.error_code}')
+                if item.error and item.error not in err_text:
+                    err_text = f'{err_text} · {item.error}'
+            else:
+                err_text = item.error
             err = err_text.replace('\n', ' ').strip()
             if len(err) > 110:
                 err = err[:107] + '...'
@@ -4433,9 +5483,12 @@ class ModernApp(ctk.CTk):
         retry_action = _download_row_action(item)
         if w['last_retry_action'] != retry_action:
             if retry_action:
-                label = T(
-                    'requeue_short' if retry_action == 'requeue'
-                    else 'retry_short')
+                labels = {
+                    'pause': 'pause_short',
+                    'resume': 'resume_short',
+                    'retry': 'retry_short',
+                }
+                label = T(labels.get(retry_action, 'retry_short'))
                 try:
                     w['retry_btn'].configure(text=f'↻ {label}')
                 except Exception:
@@ -4453,7 +5506,8 @@ class ModernApp(ctk.CTk):
 
         # Progress bar: show only while downloading
         is_downloading = (item.state in {
-            '下載中', '字幕準備中', '字幕辨識中', '字幕翻譯中'
+            '下載中', '字幕準備中', '字幕模型準備中',
+            '字幕辨識中', '字幕翻譯中'
         } and item.progress > 0)
         if is_downloading:
             if not w['pb_visible']:
@@ -4479,19 +5533,88 @@ class ModernApp(ctk.CTk):
                 w['pct_visible'] = False
 
         # Speed
-        if is_downloading and item.speed:
+        if is_downloading and (item.speed or item.eta):
             if not w['spd_visible']:
                 w['spd_lbl'].pack(side='left', padx=4)
                 w['spd_visible'] = True
-            if w['last_speed'] != item.speed:
-                w['spd_lbl'].configure(text=item.speed)
-                w['last_speed'] = item.speed
+            metric = item.speed
+            if item.eta:
+                metric = f'{metric} · {T("eta_label", eta=item.eta)}'.strip(' ·')
+            if w['last_speed'] != metric:
+                w['spd_lbl'].configure(text=metric, width=150)
+                w['last_speed'] = metric
         else:
             if w['spd_visible']:
                 try: w['spd_lbl'].pack_forget()
                 except Exception: pass
                 w['spd_visible'] = False
                 w['last_speed'] = None
+
+    def _load_download_thumb_async(
+            self, url: str, label, build_gen: int, site_key: str = ''):
+        def _worker():
+            image = _fetch_thumbnail(url, site_key)
+            if image is None:
+                return
+
+            def _apply():
+                if self._is_closing or build_gen != self._build_gen:
+                    return
+                try:
+                    if not label.winfo_exists():
+                        return
+                    ctk_image = ctk.CTkImage(
+                        light_image=image, dark_image=image, size=(80, 45))
+                    label.configure(image=ctk_image, text='')
+                    label._ctk_img_ref = ctk_image
+                except Exception:
+                    pass
+
+            self._ui(_apply, gen=build_gen)
+
+        try:
+            self._thumb_executor.submit(_worker)
+        except RuntimeError:
+            pass
+
+    def _copy_job_diagnostics(self, url: str):
+        item = next((candidate for candidate in self._dlmgr.get_items()
+                     if candidate.url == url), None)
+        if item is None:
+            return
+        details = {
+            'job_id': item.job_id,
+            'site': item.site,
+            'code': video_code(item.url, item.name),
+            'state': state_label(item.state),
+            'progress': item.progress,
+            'url': item.url,
+            'destination': item.dest,
+            'resolution': item.resolution,
+            'filename_template': item.filename_template,
+            'error_code': item.error_code,
+            'error': item.error,
+            'retry_count': item.retry_count,
+        }
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(json.dumps(
+                details, ensure_ascii=False, indent=2))
+            self._status_lbl.configure(text=T('copy_diagnostics'))
+        except tk.TclError:
+            pass
+
+    def _open_item_folder(self, url: str):
+        item = next((candidate for candidate in self._dlmgr.get_items()
+                     if candidate.url == url), None)
+        if item is None:
+            return
+        current = self._dest_var.get()
+        try:
+            self._dest_var.set(item.dest or current)
+            self._open_dest_folder()
+        finally:
+            self._dest_var.set(current)
 
     # ── Clipboard monitor (main-thread safe) ─────────────────────────
     def _clipboard_poll(self):
@@ -4507,15 +5630,11 @@ class ModernApp(ctk.CTk):
             clp = self.clipboard_get()
             if clp != self._clp_text:
                 self._clp_text = clp
-                for m in re.finditer(r'https?://\S+', clp):
-                    url = m.group(0).rstrip('.,;)\'"')
-                    if len(url) > 2048:      # no real video URL is this long; bounds validation cost
-                        continue
-                    if M3U8Sites.VaildateUrl(url):
-                        existing = {i.url for i in self._dlmgr.get_items()}
-                        if url not in existing:
-                            self._dlmgr.add_item(url)
-                            print(f'[剪貼簿] {url}')
+                urls = extract_urls(clp)
+                if urls and getattr(self, '_dl_url_var', None) is not None:
+                    # Clipboard monitoring is a convenience hint only.  It no
+                    # longer mutates the persistent queue without a click.
+                    self._dl_url_var.set(urls[0])
         except (tk.TclError, Exception):
             pass
         finally:
@@ -4544,7 +5663,10 @@ class ModernApp(ctk.CTk):
         try:
             with self._dlmgr._lock:
                 for item in self._dlmgr._items.values():
-                    if item.state in ('準備中', '下載中', '等待中'):
+                    if item.state in (
+                            '準備中', '下載中', '等待中', '等待重試',
+                            '已排程', '字幕準備中', '字幕辨識中',
+                            '字幕翻譯中'):
                         item.state = '未完成'
                         item.speed = ''
                 self._dlmgr.save_csv(CSV_PATH)

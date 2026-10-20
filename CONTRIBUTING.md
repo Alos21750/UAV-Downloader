@@ -6,14 +6,14 @@ sites and CDNs can change independently of the application.
 
 ## Development setup
 
-Use Python 3.10 or newer; release builds use Python 3.12.10.
+Use Python 3.12 or newer; release builds use Python 3.12.10. This matches the
+minimum Python version supported by the pinned NumPy dependency.
 
 ```bash
 git clone https://github.com/Alos21750/UAV-Downloader.git
 cd UAV-Downloader
 python -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m pip install -e .
+.venv\Scripts\python -m pip install -e ".[dev]"
 .venv\Scripts\python -m pytest tests -q
 ```
 

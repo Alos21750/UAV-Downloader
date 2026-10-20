@@ -66,3 +66,19 @@ def test_full_title_mode_remains_the_backward_compatible_default(
     crawler = _crawler(tmp_path, monkeypatch, title, 'full-title')
 
     assert crawler.target_name() == title
+
+
+def test_filename_template_supports_allowlisted_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        config, 'get_filename_template', lambda: '{site} {code} {title}')
+    crawler = _crawler(
+        tmp_path, monkeypatch, 'ABCD-123 A complete title', 'full-title')
+
+    assert crawler.target_name() == (
+        'example.test ABCD-123 ABCD-123 A complete title')
+
+
+def test_invalid_filename_template_falls_back_to_title():
+    assert config.normalize_filename_template('../{title}') == '{title}'
+    assert config.normalize_filename_template('{unknown}') == '{title}'
+    assert config.normalize_filename_template('literal-only') == '{title}'

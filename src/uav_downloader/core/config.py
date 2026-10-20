@@ -36,6 +36,8 @@ CF_OVERRIDES = {}
 VALID_RESOLUTION_PREFS = {'highest', 'lowest', '1080', '720', '480', '360'}
 VALID_SUBTITLE_PREFS = {'none', 'ja', 'en', 'zh', 'all'}
 VALID_FILENAME_MODES = {'full-title', 'code-only'}
+DEFAULT_FILENAME_TEMPLATE = '{title}'
+FILENAME_TEMPLATE_FIELDS = frozenset({'title', 'code', 'site'})
 VALID_RECOGNITION_QUALITIES = {'auto', 'quality', 'balanced', 'fast'}
 DEFAULT_DOWNLOAD_CONCURRENCY = 2
 MIN_DOWNLOAD_CONCURRENCY = 1
@@ -47,6 +49,11 @@ MAX_WORKERS_PER_VIDEO = 16
 DEFAULT_SLOW_REQUEUE_KBPS = 0
 MIN_SLOW_REQUEUE_KBPS = 0
 MAX_SLOW_REQUEUE_KBPS = 100000
+DEFAULT_MINIMUM_FREE_GB = 0.5
+MAX_MINIMUM_FREE_GB = 1024.0
+DEFAULT_AUTO_RETRY_COUNT = 2
+MAX_AUTO_RETRY_COUNT = 10
+MAX_SPEED_LIMIT_MBPS = 10000.0
 VALID_PROXY_SCHEMES = {
     'http', 'https', 'socks4', 'socks4a', 'socks5', 'socks5h',
 }
@@ -116,14 +123,14 @@ def get_ui_lang():
     code = _load_prefs().get('lang')
     if isinstance(code, str):
         code = code.strip()
-        if code in {'en', 'zh', 'zh-Hans', 'ja'}:
+        if code in {'en', 'zh', 'zh-Hans', 'ja', 'th'}:
             return code
     return None
 
 
 def set_ui_lang(code):
     code = (code or '').strip()
-    if code not in {'en', 'zh', 'zh-Hans', 'ja'}:
+    if code not in {'en', 'zh', 'zh-Hans', 'ja', 'th'}:
         code = 'en'
     try:
         with _prefs_lock:
@@ -212,6 +219,178 @@ def set_filename_mode(value):
     except Exception:
         pass
     return mode
+
+
+def normalize_filename_template(value):
+    """Validate a conservative filename template used by new jobs."""
+    template = str(value or '').strip() or DEFAULT_FILENAME_TEMPLATE
+    if (len(template) > 160 or re.search(r'[\x00-\x1f\x7f]', template) or
+            any(char in template for char in '\\/<>:"|?*')):
+        return DEFAULT_FILENAME_TEMPLATE
+    fields = re.findall(r'\{([a-zA-Z0-9_]+)\}', template)
+    if any(field not in FILENAME_TEMPLATE_FIELDS for field in fields):
+        return DEFAULT_FILENAME_TEMPLATE
+    # Reject unmatched braces and require at least one meaningful field.
+    try:
+        rendered = template.format(title='title', code='code', site='site')
+    except (KeyError, ValueError):
+        return DEFAULT_FILENAME_TEMPLATE
+    if not rendered.strip() or not fields:
+        return DEFAULT_FILENAME_TEMPLATE
+    return template
+
+
+def get_filename_template():
+    return normalize_filename_template(
+        _load_prefs().get('filename_template'))
+
+
+def set_filename_template(value):
+    template = normalize_filename_template(value)
+    try:
+        with _prefs_lock:
+            prefs = _load_prefs()
+            prefs['filename_template'] = template
+            _save_prefs(prefs)
+    except Exception:
+        pass
+    return template
+
+
+def normalize_download_schedule(value):
+    schedule = str(value or '').strip()
+    if not schedule:
+        return ''
+    if not re.fullmatch(r'(?:[01]?\d|2[0-3]):[0-5]\d', schedule):
+        return ''
+    hour, minute = schedule.split(':', 1)
+    return f'{int(hour):02d}:{minute}'
+
+
+def get_download_schedule():
+    return normalize_download_schedule(
+        _load_prefs().get('download_schedule'))
+
+
+def set_download_schedule(value):
+    raw = str(value or '').strip()
+    schedule = normalize_download_schedule(raw)
+    if raw and not schedule:
+        raise ValueError('Schedule must use HH:MM')
+    with _prefs_lock:
+        prefs = _load_prefs()
+        prefs['download_schedule'] = schedule
+        _save_prefs(prefs)
+    return schedule
+
+
+def normalize_minimum_free_gb(value):
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        parsed = DEFAULT_MINIMUM_FREE_GB
+    return max(0.0, min(parsed, MAX_MINIMUM_FREE_GB))
+
+
+def get_minimum_free_gb():
+    return normalize_minimum_free_gb(
+        _load_prefs().get('minimum_free_gb'))
+
+
+def set_minimum_free_gb(value):
+    normalized = normalize_minimum_free_gb(value)
+    with _prefs_lock:
+        prefs = _load_prefs()
+        prefs['minimum_free_gb'] = normalized
+        _save_prefs(prefs)
+    return normalized
+
+
+def normalize_auto_retry_count(value):
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        parsed = DEFAULT_AUTO_RETRY_COUNT
+    return max(0, min(parsed, MAX_AUTO_RETRY_COUNT))
+
+
+def get_auto_retry_count():
+    return normalize_auto_retry_count(
+        _load_prefs().get('auto_retry_count'))
+
+
+def set_auto_retry_count(value):
+    normalized = normalize_auto_retry_count(value)
+    with _prefs_lock:
+        prefs = _load_prefs()
+        prefs['auto_retry_count'] = normalized
+        _save_prefs(prefs)
+    return normalized
+
+
+def get_notify_on_complete():
+    value = _load_prefs().get('notify_on_complete', True)
+    if isinstance(value, str):
+        return value.strip().lower() not in {'0', 'false', 'no', 'off', ''}
+    return bool(value)
+
+
+def set_notify_on_complete(value):
+    if isinstance(value, str):
+        normalized = value.strip().lower() not in {
+            '0', 'false', 'no', 'off', '',
+        }
+    else:
+        normalized = bool(value)
+    with _prefs_lock:
+        prefs = _load_prefs()
+        prefs['notify_on_complete'] = normalized
+        _save_prefs(prefs)
+    return normalized
+
+
+def normalize_speed_limit_mbps(value):
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        parsed = 0.0
+    return max(0.0, min(parsed, MAX_SPEED_LIMIT_MBPS))
+
+
+def get_speed_limit_mbps():
+    return normalize_speed_limit_mbps(
+        _load_prefs().get('speed_limit_mbps'))
+
+
+def set_speed_limit_mbps(value):
+    normalized = normalize_speed_limit_mbps(value)
+    with _prefs_lock:
+        prefs = _load_prefs()
+        prefs['speed_limit_mbps'] = normalized
+        _save_prefs(prefs)
+    return normalized
+
+
+def get_download_directory():
+    value = _load_prefs().get('download_directory')
+    if isinstance(value, str):
+        value = value.strip()
+        if value and len(value) <= 32767 and not re.search(
+                r'[\x00-\x1f\x7f]', value):
+            return value
+    return ''
+
+
+def set_download_directory(value):
+    path = str(value or '').strip()
+    if (not path or len(path) > 32767 or
+            re.search(r'[\x00-\x1f\x7f]', path)):
+        return get_download_directory()
+    with _prefs_lock:
+        prefs = _load_prefs()
+        prefs['download_directory'] = path
+        _save_prefs(prefs)
+    return path
 
 
 def _normalize_recognition_quality(value):

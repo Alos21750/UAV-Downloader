@@ -53,8 +53,9 @@ def main():
         url_arg = av_recommand() or ""   # None (site changed/blocked) -> empty, not a crash
 
     if args.nogui:
-        M3U8Sites.consoles_main(
+        result = M3U8Sites.consoles_main(
             url_arg, args.output, args.max_workers_per_video)
+        return 0 if result is None else int(result)
     elif _USE_MODERN:
         _gui_main(url_arg, args.output)
     else:

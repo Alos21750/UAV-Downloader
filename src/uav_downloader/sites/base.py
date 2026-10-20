@@ -96,6 +96,23 @@ def _apply_filename_mode(value, mode):
     return name.split(maxsplit=1)[0]
 
 
+def _apply_filename_template(value, dirname, url, template):
+    """Render the allowlisted filename template without permitting paths."""
+    normalized = config.normalize_filename_template(template)
+    title = _sanitize_filename(value)
+    first = title.split(maxsplit=1)[0] if title else ''
+    code = first if re.search(r'\d', first) else str(dirname or first)
+    host = (urlsplit(str(url or '')).hostname or '').lower()
+    site = (
+        'MissAV' if 'missav' in host else
+        'JableTV' if host in {'jable.tv', 'www.jable.tv', 'fs1.app'} else
+        'SupJav' if 'supjav' in host else
+        'Hanime1' if 'hanime1' in host else host
+    )
+    rendered = normalized.format(title=title, code=code, site=site)
+    return _sanitize_filename(re.sub(r'\s+', ' ', rendered).strip())
+
+
 def _utf16_units(value):
     return len(value.encode('utf-16-le')) // 2
 
@@ -509,7 +526,9 @@ class M3U8Crawler:
         if result: return result.group(1)
         return None
 
-    def __init__(self, url, savepath="", silence=False, max_workers=None):
+    def __init__(
+            self, url, savepath="", silence=False, max_workers=None,
+            resolution=None, filename_template=None):
         self.silence = silence
         self._tsList = []
         self._key_content = None   # raw bytes of AES key
@@ -547,6 +566,15 @@ class M3U8Crawler:
             self._segment_retry_base_delay,
             float(getattr(self, 'segment_retry_max_delay', 6.0)))
         self._filename_mode = config.get_filename_mode()
+        self._filename_template = config.normalize_filename_template(
+            filename_template if filename_template is not None
+            else config.get_filename_template())
+        requested_resolution = str(
+            resolution or config.get_resolution_pref()).strip().lower()
+        self._resolution_pref = (
+            requested_resolution
+            if requested_resolution in _VALID_RESOLUTION_PREFS
+            else 'highest')
         self._progress_callback = None   # (downloaded, total, speed_bps) -> None
         self._speed_lock = threading.Lock()
         self._bytes_downloaded = 0
@@ -568,8 +596,13 @@ class M3U8Crawler:
             if self.is_url_vaildate():
                 if self._targetName:
                     self._targetName = _sanitize_filename(self._targetName)
-                    self._targetName = _apply_filename_mode(
-                        self._targetName, self._filename_mode)
+                    if self._filename_template == config.DEFAULT_FILENAME_TEMPLATE:
+                        self._targetName = _apply_filename_mode(
+                            self._targetName, self._filename_mode)
+                    else:
+                        self._targetName = _apply_filename_template(
+                            self._targetName, self._dirName, self._url,
+                            self._filename_template)
                     if len(self._dirName) > 80:
                         self._dirName = self._dirName[:80]
                         self._temp_folder = os.path.join(self._dest_folder, self._dirName)
@@ -689,7 +722,7 @@ class M3U8Crawler:
         m3u8obj = self._load_m3u8(self._m3u8url)
         if len(m3u8obj.playlists) > 0:
             # Pick variant based on resolution preference
-            best = select_variant(m3u8obj.playlists, _resolution_pref)
+            best = select_variant(m3u8obj.playlists, self._resolution_pref)
             if best:
                 m3u8obj, downloadurl = self._getm3u8PlayList(best.uri)
 

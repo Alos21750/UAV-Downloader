@@ -19,7 +19,6 @@ from uav_downloader.core import config
 from uav_downloader.i18n import sites as site_i18n
 from uav_downloader.sites.base import (
     MirrorsBlockedError,
-    get_resolution_pref,
     request_headers,
 )
 from uav_downloader.sites.supjav import SiteSupJav
@@ -404,7 +403,10 @@ class SiteHanime1(SiteSupJav):
                     sources = _extract_sources(BeautifulSoup(
                         download_response.content, 'html.parser'))
 
-        selected = _select_source(sources, get_resolution_pref())
+        # Resolution belongs to this crawler/job.  Reading the process-wide
+        # preference here made queued Hanime1 jobs ignore the value captured
+        # by the review dialog and race with later settings changes.
+        selected = _select_source(sources, self._resolution_pref)
         if not selected:
             raise Exception('此 Hanime1 影片目前沒有可用的 MP4 下載來源')
         title = _extract_title(soup)

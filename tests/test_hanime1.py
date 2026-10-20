@@ -224,7 +224,7 @@ def test_hanime1_page_and_search_urls_preserve_filters_and_encode_values():
         'https://hanime1.me/search?query=A+B%26%E4%B8%AD%E6%96%87')
 
 
-def test_hanime1_get_url_infos_primes_session_and_uses_fresh_signed_source(monkeypatch):
+def test_hanime1_get_url_infos_uses_per_job_resolution(monkeypatch):
     calls = []
 
     class Response:
@@ -250,9 +250,11 @@ def test_hanime1_get_url_infos_primes_session_and_uses_fresh_signed_source(monke
             return False
 
     monkeypatch.setattr(hanime_mod, '_make_scraper', lambda: Session())
-    monkeypatch.setattr(hanime_mod, 'get_resolution_pref', lambda: '720')
+    monkeypatch.setattr(
+        hanime_mod.config, 'get_resolution_pref', lambda: 'highest')
 
-    crawler = SiteHanime1('https://hanime1.me/watch?v=42', silence=True)
+    crawler = SiteHanime1(
+        'https://hanime1.me/watch?v=42', silence=True, resolution='720')
 
     assert calls == ['https://hanime1.me/', 'https://hanime1.me/watch?v=42']
     assert crawler.is_url_vaildate()
@@ -260,6 +262,10 @@ def test_hanime1_get_url_infos_primes_session_and_uses_fresh_signed_source(monke
     assert crawler._direct_url.endswith('42-720p.mp4?secure=mid')
     assert crawler._direct_referer == 'https://hanime1.me/watch?v=42'
     assert crawler._imageUrl.endswith('42l.jpg?secure=thumb')
+
+    second = SiteHanime1(
+        'https://hanime1.me/watch?v=42', silence=True, resolution='480')
+    assert second._direct_url.endswith('42-480p.mp4?secure=low')
 
 
 def test_hanime1_is_registered_for_cli_and_gui_site_creation(monkeypatch):

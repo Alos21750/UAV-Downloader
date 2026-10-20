@@ -13,8 +13,10 @@ JableTV.csv
 main.spec
 __pycache__/
 .pytest_cache/
+.ruff_cache/
 *.egg-info/
 .venv/
+uv.lock
 .Jable_smalltool/
 .alos-watch/
 .uav-watcher/

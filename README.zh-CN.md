@@ -144,12 +144,11 @@ Hanime1 支持官方 `watch?v=` 网址、站内搜索、分页，以及可组合
 
 ## 从源代码运行
 
-需要 **Python 3.10+** 与 Tk。旧 README 中的 Python 3.8+ 已不符合当前源代码的语法要求。
+需要 **Python 3.12+** 与 Tk；这与当前固定版本的 NumPy 最低要求一致。
 
 ```bash
 git clone https://github.com/Alos21750/UAV-Downloader.git
 cd UAV-Downloader
-python -m pip install -r requirements.txt
 python -m pip install -e .
 
 # 完整 GUI
