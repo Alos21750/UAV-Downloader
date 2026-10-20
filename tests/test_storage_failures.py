@@ -17,6 +17,50 @@ def test_storage_open_classifies_open_failure(monkeypatch, tmp_path):
             pass
 
 
+@pytest.mark.parametrize(('code', 'hint'), [
+    (errno.ENOENT, 'path is missing or unavailable'),
+    (errno.ENOSPC, 'Free space'),
+    (errno.EACCES, 'permission'),
+    (errno.ENOTDIR, 'not a directory'),
+    (errno.EIO, 'device health'),
+])
+def test_storage_error_explains_errno_and_keeps_path_and_cause(code, hint):
+    path = r'D:\Downloads\video.mp4.part'
+    cause = OSError(code, 'underlying failure', path)
+    error = StorageWriteError(path, cause, operation='open for writing')
+    message = str(error)
+    assert hint in message
+    assert message.index('open for writing') < message.index(path)
+    assert message.index(path) < message.index('underlying failure')
+    assert error.path == path
+    assert error.filename == path
+    assert error.cause is cause
+    assert error.errno == code
+
+
+def test_missing_download_directory_is_storage_error_with_actionable_hint(tmp_path):
+    missing = tmp_path / 'removed-download-directory' / 'video.mp4.part'
+    with pytest.raises(StorageWriteError) as caught:
+        with storage_open(missing, 'wb'):
+            pytest.fail('missing destination must not open')
+    assert caught.value.operation == 'open for writing'
+    assert 'path is missing or unavailable' in str(caught.value)
+    assert 'choose an existing writable download folder' in str(caught.value)
+    assert not missing.parent.exists()  # Do not silently recreate an offline mount.
+
+
+def test_storage_write_failure_identifies_operation(monkeypatch, tmp_path):
+    def fail_write(data):
+        raise OSError(errno.EIO, 'device offline')
+    fake = types.SimpleNamespace(write=fail_write, close=lambda: None)
+    monkeypatch.setattr('builtins.open', lambda *a, **kw: fake)
+    with pytest.raises(StorageWriteError) as caught:
+        with storage_open(tmp_path / 'video.part', 'wb') as target:
+            target.write(b'video')
+    assert caught.value.operation == 'write'
+    assert 'device offline' in str(caught.value)
+
+
 def test_storage_open_does_not_classify_network_errors(tmp_path):
     with pytest.raises(ConnectionError) as caught:
         with storage_open(tmp_path / 'video.part', 'wb'):
