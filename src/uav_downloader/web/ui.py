@@ -41,21 +41,37 @@ function node(tag, text, className) {const element=document.createElement(tag); 
 function render(data) {
   $("halted").hidden=!data.halted;
   const container=$("jobs"), fragment=document.createDocumentFragment();
+  const openLogs=new Set(), active=document.activeElement;
+  let focusedJob=null, focusedControl=null;
+  for(const card of container.querySelectorAll(".job")) {
+    if(card.querySelector("details").open)openLogs.add(card.dataset.jobId);
+    if(card.contains(active)) {focusedJob=card.dataset.jobId;focusedControl=active.dataset.control;}
+  }
   if(!data.jobs.length) fragment.append(node("p",say("佇列是空的。加入影片網址即可開始。","Your queue is empty. Add a video URL to begin."),"hint"));
   for(const job of data.jobs) {
     const card=node("article",undefined,"job"), head=node("div",undefined,"job-head");
+    card.dataset.jobId=job.id;
     const title=node("p",job.url,"job-url"), label=labels[job.status]||[job.status,job.status];
     head.append(title,node("span",label[language==="zh"?0:1],"status "+job.status));card.append(head);
     const progress=node("progress");progress.max=job.total||1;if(job.total)progress.value=Math.min(job.done,job.total);else if(job.status!=="running")progress.value=job.status==="completed"?1:0;card.append(progress);
     const count=job.total ? Math.floor(job.done)+" / "+Math.floor(job.total)+" "+job.unit : say("等待來源或進度","Waiting for source/progress");
     card.append(node("p",count+" · "+(job.speed_bps/1048576).toFixed(2)+" MiB/s · "+job.resolution,"meta"));
     const actions=node("div",undefined,"actions");
-    if(["pending","running"].includes(job.status)) {const button=node("button",say("取消","Cancel"));button.onclick=()=>action("/api/cancel",{id:job.id});actions.append(button);}
-    if(["failed","cancelled","interrupted","completed"].includes(job.status)) {const button=node("button",say("重試","Retry"));button.onclick=()=>action("/api/retry",{id:job.id});actions.append(button);}
+    if(["pending","running"].includes(job.status)) {const button=node("button",say("取消","Cancel"));button.dataset.control="cancel";button.onclick=()=>action("/api/cancel",{id:job.id});actions.append(button);}
+    if(["failed","cancelled","interrupted","completed"].includes(job.status)) {const button=node("button",say("重試","Retry"));button.dataset.control="retry";button.onclick=()=>action("/api/retry",{id:job.id});actions.append(button);}
     card.append(actions);
-    const details=node("details");details.append(node("summary",say("事件紀錄","Event log")),node("pre",job.logs.join("\n")));card.append(details);fragment.append(card);
+    const details=node("details"), summary=node("summary",say("事件紀錄","Event log"));
+    details.open=openLogs.has(job.id);summary.dataset.control="log";
+    details.append(summary,node("pre",job.logs.join("\n")));card.append(details);fragment.append(card);
   }
   container.replaceChildren(fragment);
+  if(focusedJob) {
+    const card=Array.from(container.querySelectorAll(".job")).find(item=>item.dataset.jobId===focusedJob);
+    if(card) {
+      const target=Array.from(card.querySelectorAll("[data-control]")).find(item=>item.dataset.control===focusedControl);
+      (target||card.querySelector("summary")).focus({preventScroll:true});
+    }
+  }
 }
 async function refresh() { clearTimeout(timer);if(!token)return;try{render(await api("/api/queue"));}catch(error){notice(error.message);}finally{if(token)timer=setTimeout(refresh,2000);}}
 async function action(path,body) {if(busy)return;busy=true;try{await api(path,body);notice("");await refresh();}catch(error){notice(error.message);}finally{busy=false;}}
