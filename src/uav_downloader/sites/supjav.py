@@ -172,6 +172,61 @@ def _valid_hls_url(value):
     return value if value and urlsplit(value).path.lower().endswith('.m3u8') else None
 
 
+def _extract_fc2stream_links(html_text, embed_url):
+    """Read FST's static links map in the order selected by its player.
+
+    The first source is often a relative high-quality URL; looking only for an
+    absolute .m3u8 silently picks a lower-quality mirror. A declared HLS source
+    may also use .txt or no extension. Only JSON data and the known links.hlsN
+    OR expression are understood here: remote JavaScript is never executed.
+    """
+    if not _public_https_url(embed_url):
+        return None
+    for script in re.findall(r'<script\b[^>]*>(.*?)</script\s*>', html_text,
+                             re.DOTALL | re.IGNORECASE):
+        if 'eval(function' in script:
+            try:
+                script = _unpack_js_eval(script)
+            except (ValueError, IndexError, OverflowError):
+                continue
+        if not script:
+            continue
+        for assignment in re.finditer(r'\b(?:var|let|const)\s+links\s*=\s*', script):
+            try:
+                links, end = json.JSONDecoder().raw_decode(script, assignment.end())
+            except (ValueError, RecursionError):
+                continue
+            if not isinstance(links, dict):
+                continue
+            # Require a literal first source, and use its OR-chain rather than
+            # dictionary insertion order or a hardcoded quality assumption.
+            for source in re.finditer(
+                    r'''(?:\bsources|["']sources["'])\s*:\s*\[\s*\{([^{}]*)\}''',
+                    script[end:]):
+                fields = source.group(1)
+                selection = re.search(
+                    r'''(?:^|,)\s*(?:file|["']file["'])\s*:\s*'''
+                    r'(links\.hls[234](?:\s*\|\|\s*links\.hls[234])*)\s*(?=,|$)',
+                    fields)
+                if not selection:
+                    continue
+                hls_type = re.search(
+                    r'''(?:^|,)\s*(?:type|["']type["'])\s*:\s*["']hls["']\s*(?=,|$)''',
+                    fields, re.IGNORECASE)
+                for key in re.findall(r'links\.(hls[234])', selection.group(1)):
+                    value = links.get(key)
+                    if not isinstance(value, str) or not value.strip():
+                        continue
+                    try:
+                        value = urljoin(embed_url, html.unescape(value.replace('\\/', '/')).strip())
+                    except ValueError:
+                        continue
+                    value = _public_https_url(value) if hls_type else _valid_hls_url(value)
+                    if value:
+                        return value
+    return None
+
+
 def _fetch_embed(scraper, url, referer):
     """Validate each HTTP redirect before fetching it; cap provider hops."""
     for _ in range(6):
@@ -337,6 +392,10 @@ class SiteSupJav(M3U8Crawler):
             return _extract_voe_m3u8(response.text), source_headers
         if name == 'TV':
             return _valid_hls_url(_extract_m3u8(response.text)), {'Referer': 'https://supjav.com/'}
+        if name == 'FST':
+            media_url = _extract_fc2stream_links(response.text, embed_url)
+            if media_url:
+                return media_url, source_headers
         return _valid_hls_url(_extract_packed_m3u8(response.text)), source_headers
 
     def get_url_infos(self):
@@ -742,19 +801,25 @@ class SupJavBrowser:
 
     @classmethod
     def fetch_page(cls, url):
+        def _is_empty_search(soup):
+            # An actual empty search is not the same as an empty response,
+            # gateway error, consent page, or a changed listing template.
+            return bool(soup.select_one('body.search-no-results, section.no-results'))
+
         def _validate(resp):
+            if not 200 <= resp.status_code < 300:
+                return False
             s = BeautifulSoup(resp.content, 'html.parser')
-            return bool(s.select('div.post a[href*=".html"]'))
+            return bool(s.select('div.post a[href*=".html"]')) or _is_empty_search(s)
         resp, host, reason = fetch_with_mirrors(cls._get_scraper(), url, 'supjav', _validate)
         if reason == 'blocked':
             raise MirrorsBlockedError(url)
         if reason != 'ok':
-            return []
-        try:
-            soup = BeautifulSoup(resp.content, 'html.parser')
-            return _parse_videos(soup)
-        except Exception:
-            return []
+            raise RuntimeError(
+                'SupJav returned an unrecognized listing page. '
+                'Check the network/proxy and Cloudflare settings, then retry.')
+        soup = BeautifulSoup(resp.content, 'html.parser')
+        return _parse_videos(soup)
 
     @classmethod
     def page_url(cls, base, page):

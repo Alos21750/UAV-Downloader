@@ -38,6 +38,12 @@
 
 ## Three workflows, one download core
 
+### Fixed in v3.3.1
+
+- SupJav FST follows the player's source priority, including relative URLs and explicitly HLS-typed non-`.m3u8` URLs. Actual quality still depends on the provider.
+- Invalid pages no longer appear as empty search results; an invalid saved-settings response allows the normal request fallback to continue. Genuine Cloudflare blocks remain visible errors, not guaranteed bypasses.
+- Watcher marks listing failures as incomplete for retry instead of incorrectly completing the first scan; healthy sites continue processing.
+
 ### New in v3.3.0
 
 - Thai interface and [Thai manual](MANUAL.th.md), plus richer persistent queue controls: import/export, filters, pause/resume, scheduling and bounded retries.

@@ -1222,13 +1222,9 @@ class SmallToolWorker:
     def _fetch_page_for_site(self, site_name: str, url: str) -> list:
         """Fetch a listing page using the appropriate browser for the site."""
         browser = SITES[site_name]['browser']
-        try:
-            return browser.fetch_page(url)
-        except MirrorsBlockedError:
-            raise
-        except Exception as e:
-            self._log(f'  [ERR] fetch failed: {e}')
-            return []
+        # The scan loop distinguishes a real empty page from a failed request.
+        # Converting failures to [] would incorrectly complete the first scan.
+        return browser.fetch_page(url)
 
     def _category_fetch_url(self, site_name: str, cat_name: str, cat_url: str) -> str:
         if site_name == 'MissAV':
@@ -1316,6 +1312,7 @@ class SmallToolWorker:
 
         all_new_videos = []
         scan_blocked = False
+        scan_failed = False
         scan_had_success = False
 
         for target in _targets_for_scan(targets, version_preference):
@@ -1373,6 +1370,12 @@ class SmallToolWorker:
                 except MirrorsBlockedError:
                     scan_blocked = True
                     self._log(f'  [BLOCKED] Cloudflare blocked all mirrors: {page_url}')
+                    break
+                except StorageWriteError:
+                    raise
+                except Exception as exc:
+                    scan_failed = True
+                    self._log(f'  [ERR] {site_name} listing fetch failed: {exc}')
                     break
                 scan_had_success = True
                 if not videos:
@@ -1540,7 +1543,7 @@ class SmallToolWorker:
 
         if not all_new_videos:
             self._log(f'No new videos found.')
-            if scan_blocked or not scan_had_success:
+            if scan_blocked or scan_failed or not scan_had_success:
                 self._log('[WARN] Scan incomplete — will retry before marking first run done.')
                 return False
             cfg['first_run_done'] = True
@@ -1573,7 +1576,7 @@ class SmallToolWorker:
 
         if not all_new_videos:
             self._log('No new videos remain after cross-site deduplication.')
-            if scan_blocked or not scan_had_success:
+            if scan_blocked or scan_failed or not scan_had_success:
                 self._log('[WARN] Scan incomplete — will retry before marking first run done.')
                 return False
             cfg['first_run_done'] = True
@@ -1636,7 +1639,7 @@ class SmallToolWorker:
         if subtitle_incomplete:
             self._log(f'[WARN] {T("subtitle_retry_pending")}')
             return False
-        if scan_blocked or not scan_had_success:
+        if scan_blocked or scan_failed or not scan_had_success:
             self._log('[WARN] Scan incomplete — first run flag not updated.')
             return False
         cfg['first_run_done'] = True

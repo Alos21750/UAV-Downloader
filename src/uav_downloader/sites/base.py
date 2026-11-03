@@ -173,7 +173,8 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
     Order: original host (if allowlisted) -> sticky active host -> remaining mirrors (dedup, order-preserving).
     Per host: 1 retry on transport error; skip CF interstitials; reject redirects that land off the allowlist.
     HTTP 429 on a site listed in config.RATE_LIMIT_WAITS is waited out and retried on the same host.
-    validate(resp)->bool gates content success. headers_factory(host)->dict gives per-host headers (e.g. Referer).
+    validate(resp)->bool gates each trial (including the override/plain fallback),
+    not just the final response for a host. headers_factory(host)->dict gives per-host headers (e.g. Referer).
     Returns (resp, host, reason): 'ok' (validated) | 'empty' (a real non-interstitial page was seen but none validated)
     | 'blocked' (every attempt was interstitial / transport failure)."""
     mirrors = config.MIRRORS.get(site_key) or [urlsplit(url).netloc]
@@ -199,7 +200,6 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
             ck = {'cf_clearance': ov['cookie']} if ov.get('cookie') else None
             trials.append((h2, ck))
         trials.append((base_hdrs, None))
-        resp = None
         rate_limit_waits = list(config.RATE_LIMIT_WAITS.get(site_key, ()))
         for hdrs, cookies in trials:
             r = None
@@ -220,29 +220,22 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
             if r is None:
                 continue
             if _is_cf_interstitial(r):
-                resp = r
                 continue
-            resp = r
-            break
-        if resp is None:
-            continue
-        if _is_cf_interstitial(resp):
-            continue
-        try:
-            final_host = urlsplit(str(resp.url)).netloc
-        except Exception:
-            final_host = host
-        if final_host and final_host not in mirrors:  # redirected off the allowlist -> distrust
-            continue
-        saw_real = True
-        try:
-            ok = validate(resp)
-        except Exception:
-            ok = False
-        if ok:
-            with _active_host_lock:
-                _active_host[site_key] = host
-            return resp, host, 'ok'
+            try:
+                final_host = urlsplit(str(r.url)).netloc
+            except Exception:
+                final_host = host
+            if final_host and final_host not in mirrors:  # redirected off the allowlist -> distrust
+                continue
+            saw_real = True
+            try:
+                ok = validate(r)
+            except Exception:
+                ok = False
+            if ok:
+                with _active_host_lock:
+                    _active_host[site_key] = host
+                return r, host, 'ok'
     return None, None, ('empty' if saw_real else 'blocked')
 
 # ── Global speed limiter (token bucket) ──────────────────────────
