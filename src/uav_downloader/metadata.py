@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 PRODUCT_NAME = "UAV Downloader"
-VERSION = "3.3.1"
+VERSION = "3.4.0"
 COMPANY_NAME = "ALOS (Alos21750)"
 GITHUB_REPOSITORY = "Alos21750/UAV-Downloader"
 LEGACY_GITHUB_REPOSITORIES = (
@@ -47,7 +47,7 @@ _RELEASE_ASSETS = {
     ),
 }
 
-FEATURED_SITES = ("JableTV", "MissAV", "SupJav", "Hanime1")
+FEATURED_SITES = ("JableTV", "MissAV", "SupJav", "Hanime1", "Huangguo")
 
 
 def release_asset_candidates(channel: str) -> tuple[str, ...]:

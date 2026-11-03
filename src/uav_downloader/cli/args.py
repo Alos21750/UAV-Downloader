@@ -10,8 +10,8 @@ import re
 def get_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "UAV Downloader — JableTV, MissAV, SupJav and "
-            "Hanime1"
+            "UAV Downloader — JableTV, MissAV, SupJav, "
+            "Hanime1 and Huangguo"
         )
     )
     # store_true, not type=bool: argparse's bool("False") is truthy, so `--nogui False`
@@ -19,7 +19,7 @@ def get_parser():
     parser.add_argument("--random", action='store_true',
                         help="Download a random recommended video")
     parser.add_argument("--url", type=str, default="",
-                        help="Supported JableTV, MissAV, SupJav or Hanime1 URL")
+                        help="Supported JableTV, MissAV, SupJav, Hanime1 or Huangguo video URL")
     parser.add_argument("--nogui", action='store_true',
                         help="Disable GUI mode")
     parser.add_argument(

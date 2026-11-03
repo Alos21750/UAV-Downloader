@@ -9,6 +9,7 @@ from uav_downloader.i18n.locales import T
 from uav_downloader.sites.jabletv import JableTVBrowser
 from uav_downloader.sites.missav import MissAVBrowser
 from uav_downloader.sites.supjav import SupJavBrowser
+from uav_downloader.sites.huangguo import HuangguoBrowser
 from uav_downloader.sites.hanime1 import (
     HANIME1_FILTER_DATES,
     HANIME1_FILTER_DURATIONS,
@@ -242,11 +243,20 @@ for _group_id, _tags in HANIME1_FILTER_TAG_GROUPS:
     ))
 
 
+HUANGGUO_GROUPS = [
+    _group('categories', 'Categories', [
+        _target('category:' + url.rstrip('/').rsplit('/', 1)[-1], name, url)
+        for name, url in HuangguoBrowser.CATEGORIES
+    ]),
+]
+
+
 SITES = {
     'JableTV': {'browser': JableTVBrowser, 'groups': JABLE_GROUPS},
     'MissAV': {'browser': MissAVBrowser, 'groups': MISSAV_GROUPS},
     'SupJav': {'browser': SupJavBrowser, 'groups': SUPJAV_GROUPS},
     'Hanime1': {'browser': Hanime1Browser, 'groups': HANIME1_GROUPS},
+    'Huangguo': {'browser': HuangguoBrowser, 'groups': HUANGGUO_GROUPS},
 }
 
 

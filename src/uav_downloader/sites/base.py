@@ -103,7 +103,11 @@ def _apply_filename_template(value, dirname, url, template):
     first = title.split(maxsplit=1)[0] if title else ''
     code = first if re.search(r'\d', first) else str(dirname or first)
     host = (urlsplit(str(url or '')).hostname or '').lower()
+    is_huangguo = host in {'huangguoai.com', 'www.huangguoai.com'}
+    if is_huangguo:
+        code = str(dirname or first)
     site = (
+        'Huangguo' if is_huangguo else
         'MissAV' if 'missav' in host else
         'JableTV' if host in {'jable.tv', 'www.jable.tv', 'fs1.app'} else
         'SupJav' if 'supjav' in host else
@@ -676,8 +680,12 @@ class M3U8Crawler:
         """Merged headers for m3u8 and segment requests."""
         return {**headers, **self._extra_headers}
 
+    def _media_get(self, url, timeout=20):
+        """Transport hook for sites needing per-resource/redirect header scope."""
+        return _http_get(url, self._m3u8_headers(), timeout=timeout)
+
     def _load_m3u8(self, url):
-        resp = _http_get(url, self._m3u8_headers(), timeout=20)
+        resp = self._media_get(url, timeout=20)
         status = getattr(resp, 'status_code', 0)
         if status != 200:
             if _is_cf_block_resp(resp):
@@ -694,30 +702,22 @@ class M3U8Crawler:
             raise Exception(f"m3u8 內容無效（可能被阻擋或改版）: {url}")
         return m3u8.loads(text, uri=str(getattr(resp, 'url', url)))
 
-    def _getm3u8PlayList(self, uri):
-        if uri.startswith(('http://', 'https://', '//')):
-            playListUrl = urljoin(self._m3u8url, uri)
-        else:
-            m3u8urlPath = self._m3u8url.split('/')
-            if uri.startswith('/'): m3u8urlPath = m3u8urlPath[:3]
-            else: m3u8urlPath.pop(-1)
-            baseurl = '/'.join(m3u8urlPath)
-            playListUrl = baseurl + '/' + uri.lstrip('/')
+    def _getm3u8PlayList(self, uri, base_url=None):
+        playListUrl = urljoin(base_url or self._m3u8url, uri)
         m3u8obj = self._load_m3u8(playListUrl)
-        variantBase = playListUrl.rsplit('/', 1)[0] + '/'
+        # _load_m3u8 gives the parser the final response URL, so base_uri
+        # follows CDN redirects instead of the original requested location.
+        variantBase = getattr(m3u8obj, 'base_uri', None) or urljoin(playListUrl, '.')
         return m3u8obj, variantBase
 
     def _create_m3u8(self):
-        m3u8urlList = self._m3u8url.split('/')
-        m3u8urlList.pop(-1)
-        downloadurl = '/'.join(m3u8urlList) + '/'
-
         m3u8obj = self._load_m3u8(self._m3u8url)
+        downloadurl = getattr(m3u8obj, 'base_uri', None) or urljoin(self._m3u8url, '.')
         if len(m3u8obj.playlists) > 0:
             # Pick variant based on resolution preference
             best = select_variant(m3u8obj.playlists, self._resolution_pref)
             if best:
-                m3u8obj, downloadurl = self._getm3u8PlayList(best.uri)
+                m3u8obj, downloadurl = self._getm3u8PlayList(best.uri, downloadurl)
 
         # Extract key info (store bytes + IV, not a cipher - cipher is NOT thread-safe)
         self._key_content = None
@@ -725,10 +725,8 @@ class M3U8Crawler:
         self._key_iv = None
         for key in m3u8obj.keys:
             if key and key.uri:
-                m3u8_key_uri = key.uri
-                if not m3u8_key_uri.startswith('http'):
-                    m3u8_key_uri = downloadurl + m3u8_key_uri
-                resp = _http_get(m3u8_key_uri, self._m3u8_headers(), timeout=15)
+                m3u8_key_uri = urljoin(downloadurl, key.uri)
+                resp = self._media_get(m3u8_key_uri, timeout=15)
                 blocked = _is_cf_block_resp(resp)
                 if resp.status_code != 200 or blocked:
                     if blocked:
@@ -745,12 +743,7 @@ class M3U8Crawler:
         # Build segment URL list
         self._tsList = []
         for seg in m3u8obj.segments:
-            uri = seg.uri
-            if uri.startswith('https://') or uri.startswith('http://'):
-                tsUrl = uri
-            else:
-                tsUrl = downloadurl + uri
-            self._tsList.append(tsUrl)
+            self._tsList.append(urljoin(downloadurl, seg.uri))
         if not self._tsList:
             raise Exception("m3u8 無有效片段（可能被阻擋或改版）")
 
@@ -956,7 +949,7 @@ class M3U8Crawler:
             return True
 
         try:
-            response = _http_get(url, self._m3u8_headers(), timeout=25)
+            response = self._media_get(url, timeout=25)
             if response.status_code != 200:
                 return False
             content_ts = response.content
@@ -1064,7 +1057,7 @@ class M3U8Crawler:
         if not self.is_target_image_exist():
             self._create_dest_folder()
             try:
-                response = _http_get(self._imageUrl, self._m3u8_headers(), timeout=15)
+                response = self._media_get(self._imageUrl, timeout=15)
                 if response.status_code != 200:
                     return None
                 with storage_open(self._get_image_savename(), 'wb') as fs:

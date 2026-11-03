@@ -2,7 +2,7 @@
 
 UAV Browser is the interactive Windows application in UAV Downloader. It is
 designed for people who want to search, inspect, select, and
-queue individual videos from JableTV, MissAV, SupJav, and Hanime1.
+queue individual videos from JableTV, MissAV, SupJav, Hanime1, and Huangguo.
 
 ## Typical workflow
 
@@ -11,6 +11,9 @@ queue individual videos from JableTV, MissAV, SupJav, and Hanime1.
    On Hanime1, Full filters can combine keywords, 9 genres, 9 sort modes,
    6 published-date ranges, 8 duration ranges, and multiple selections from
    the complete 240-tag catalog.
+   Huangguo offers AI short-drama and animated-drama categories; listing cards
+   expand into the actual episode links provided by the site. Pasting a video
+   URL queues only that episode (the series root is episode 1).
 3. Select the current page, select cards across pages, or select every unique
    result from the current search/listing.
 4. Review the selection, remove unwanted cards, and choose a resolution and

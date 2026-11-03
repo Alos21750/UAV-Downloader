@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
-"""UAV Browser: interactive JableTV, MissAV, SupJav, and Hanime1 GUI."""
+"""UAV Browser: interactive multi-site video downloader GUI."""
 
 import os
 import sys
@@ -33,6 +33,7 @@ from uav_downloader.core.ssl import SharedSSLAdapter, get_shared_ssl_context
 from uav_downloader.sites.jabletv import JableTVBrowser
 from uav_downloader.sites.missav import MissAVBrowser
 from uav_downloader.sites.supjav import SupJavBrowser
+from uav_downloader.sites.huangguo import HuangguoBrowser
 from uav_downloader.sites.hanime1 import (
     HANIME1_FILTER_TAG_GROUPS,
     Hanime1Browser,
@@ -111,6 +112,7 @@ SITES = {
     'MissAV': {'browser': MissAVBrowser},
     'SupJav': {'browser': SupJavBrowser},
     'Hanime1': {'browser': Hanime1Browser},
+    'Huangguo': {'browser': HuangguoBrowser},
 }
 
 
@@ -3301,7 +3303,7 @@ class ModernApp(ctk.CTk):
                      font=(ui_font(), 15, 'bold')).pack(anchor='w')
         ctk.CTkLabel(
             about_body,
-            text='UAV Browser  ·  JableTV / MissAV / SupJav / Hanime1',
+            text='UAV Browser  ·  ' + ' / '.join(SITES),
                      text_color=ACCENT,
                      font=(ui_font(), 12)).pack(anchor='w', pady=(6, 0))
 
@@ -4259,6 +4261,8 @@ class ModernApp(ctk.CTk):
             self._hanime_filter_state['query'] = q
             self._apply_hanime_filter_state()
             return
+        elif self._site_key == 'Huangguo':
+            self._current_base_url = HuangguoBrowser.search_url(q)
         else:
             lang = T('missav_lang')
             eq = quote(q, safe='')
@@ -4613,6 +4617,8 @@ class ModernApp(ctk.CTk):
 
     def _is_listing_url(self, url: str) -> bool:
         """Check if URL is a supported listing/category/actress page."""
+        if HuangguoBrowser.is_listing_url(url):
+            return True
         if re.match(r'https://(?:www\.)?supjav\.com/(?:(?:zh|ja)/)?\d+\.html$', url):
             return False
         if SiteHanime1.validate_url(url):
@@ -4631,6 +4637,7 @@ class ModernApp(ctk.CTk):
         is_jable = bool(re.match(r'https://(?:www\.)?(?:jable\.tv|fs1\.app)/', url))
         is_supjav = bool(re.match(r'https://(?:www\.)?supjav\.com/', url))
         is_hanime1 = bool(re.match(r'https://(?:www\.)?hanime1\.me/', url))
+        is_huangguo = HuangguoBrowser.is_listing_url(url)
         epoch = self._dlmgr._cancel_epoch
         fingerprints = set()
         reason = ''
@@ -4656,6 +4663,9 @@ class ModernApp(ctk.CTk):
                 elif is_hanime1:
                     page_url = Hanime1Browser.page_url(url, page)
                     videos = Hanime1Browser.fetch_page(page_url)
+                elif is_huangguo:
+                    page_url = HuangguoBrowser.page_url(url, page)
+                    videos = HuangguoBrowser.fetch_page(page_url)
                 else:
                     page_url = MissAVBrowser.page_url(url, page)
                     videos = MissAVBrowser.fetch_page(page_url)
@@ -4694,6 +4704,7 @@ class ModernApp(ctk.CTk):
                         'JableTV' if is_jable
                         else 'SupJav' if is_supjav
                         else 'Hanime1' if is_hanime1
+                        else 'Huangguo' if is_huangguo
                         else 'MissAV')
                     candidate['_source_listing_url'] = url
                     self._dlmgr.add_item(

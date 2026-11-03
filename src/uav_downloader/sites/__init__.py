@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import hanime1, jabletv, missav, supjav
+from . import hanime1, huangguo, jabletv, missav, supjav
 from .legacy import sites_91porn, sites_javdb
 
 
@@ -12,6 +12,7 @@ FEATURED_SITE_CLASSES = (
     missav.SiteMissAV,
     supjav.SiteSupJav,
     hanime1.SiteHanime1,
+    huangguo.SiteHuangguo,
 )
 
 LEGACY_URL_ONLY_SITE_CLASSES = (

@@ -13,7 +13,7 @@ with an intent: selected feeds, rankings, categories, tags, or makers. It keeps
 that selection, scans it on schedule, and only downloads candidates that pass
 the configured date and version rules.
 
-The current registry exposes grouped targets for all four supported sites:
+The current registry exposes grouped targets for all five supported sites:
 
 | Site | Selectable targets | Examples |
 |---|---:|---|
@@ -21,6 +21,13 @@ The current registry exposes grouped targets for all four supported sites:
 | MissAV | 102 | feeds, categories, tags, makers |
 | SupJav | 10 | feeds, rankings, primary categories |
 | Hanime1 | 272 | feeds, 9 genres, 6 date ranges, 8 durations, all 240 tags |
+| Huangguo | 2 | AI short dramas, AI animated dramas |
+
+Huangguo uses the site's **series update date**, not a separately verified
+publication date for each episode. Unknown dates are skipped. Each episode has
+its own site-scoped identity, so new episodes do not collide with previously
+downloaded episodes or similarly named series. Per-site date and folder
+overrides work the same way as for other sites.
 
 ## Set it up once
 

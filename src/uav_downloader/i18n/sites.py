@@ -133,6 +133,12 @@ TAGS = {
 
 
 CATEGORY_I18N = {
+    'https://huangguoai.com/ai-duanju/': {
+        'en': 'AI Short Dramas', 'zh': 'AI 短劇', 'zh-Hans': 'AI 短剧',
+        'ja': 'AI ショートドラマ', 'th': 'ละครสั้น AI'},
+    'https://huangguoai.com/ai-manju/': {
+        'en': 'AI Animated Dramas', 'zh': 'AI 漫劇', 'zh-Hans': 'AI 漫剧',
+        'ja': 'AI アニメ', 'th': 'แอนิเมชัน AI'},
     'https://jable.tv/latest-updates/': {'en': 'Latest', 'zh': '最近更新', 'zh-Hans': '最近更新', 'ja': '最新更新'},
     'https://jable.tv/hot/': {'en': 'Popular', 'zh': '熱門影片', 'zh-Hans': '热门视频', 'ja': '人気動画'},
     'https://jable.tv/new-release/': {'en': 'New', 'zh': '新片上架', 'zh-Hans': '新片上架', 'ja': '新作'},

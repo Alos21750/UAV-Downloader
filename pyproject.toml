@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uav-downloader"
-version = "3.3.1"
-description = "JableTV, MissAV, SupJav and Hanime1 downloader with unattended automation and local AI subtitles"
+version = "3.4.0"
+description = "JableTV, MissAV, SupJav, Hanime1 and Huangguo downloader with unattended automation and local AI subtitles"
 readme = "README.en.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -33,6 +33,7 @@ keywords = [
   "missav",
   "supjav",
   "hanime1",
+  "huangguo",
   "video-downloader",
   "av-downloader",
   "jav-downloader",

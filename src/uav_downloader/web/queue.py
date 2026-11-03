@@ -48,7 +48,8 @@ def validate_job(raw):
             'jable.tv', 'fs1.app', 'jablet.com', 'jablet.tv', 'supjav.com',
             'missav.ws', 'missav.ai', 'missav.com', 'missav.live',
             'missav123.com', 'missav888.com', 'missav789.com',
-            'hanime1.me', 'www.hanime1.me'))
+            'hanime1.me', 'www.hanime1.me',
+            'huangguoai.com', 'www.huangguoai.com'))
     except (ValueError, TypeError):
         allowed = host_allowed = False
     if not allowed or not host_allowed:

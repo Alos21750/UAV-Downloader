@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from uav_downloader.core.video_identity import huangguo_video_code
+
 
 URL_RE = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
 TERMINAL_STATES = frozenset({
@@ -115,11 +117,15 @@ def site_name(url: str) -> str:
         return 'SupJav'
     if 'hanime1' in host:
         return 'Hanime1'
+    if host in {'huangguoai.com', 'www.huangguoai.com'}:
+        return 'Huangguo'
     return host or 'Local'
 
 
 def video_code(url: str, title: str = '') -> str:
     """Return a concise code for secondary row metadata."""
+    if site_name(url) == 'Huangguo':
+        return huangguo_video_code(url)
     first = str(title or '').strip().split(maxsplit=1)
     if first and re.search(r'\d', first[0]):
         return first[0]

@@ -21,7 +21,10 @@ SOURCE_PRIORITY = {
     'MissAV': 1,
     'SupJav': 2,
     'Hanime1': 3,
+    'Huangguo': 4,
 }
+
+_HUANGGUO_HOSTS = frozenset({'huangguoai.com', 'www.huangguoai.com'})
 
 # These tokens are deliberately closed and small because they are persisted by
 # the UAV Browser queue. They mean that the source version itself already carries
@@ -92,7 +95,34 @@ def site_from_url(url: str) -> str:
         return 'SupJav'
     if host == 'hanime1.me' or host.endswith('.hanime1.me'):
         return 'Hanime1'
+    if host in _HUANGGUO_HOSTS:
+        return 'Huangguo'
     return ''
+
+
+def huangguo_video_code(url: str) -> str:
+    """Site-scoped identity: a drama title must never become a JAV code.
+
+    The root video page is the site's canonical first episode. All other
+    episode numbers remain distinct even when their display titles match.
+    Keep this URL gate aligned with SiteHuangguo's public-video validator.
+    """
+    if (not isinstance(url, str) or len(url) > 2048 or
+            any(ord(char) < 33 or ord(char) == 127 for char in url) or
+            any(char in url for char in ('\\', '?', '#'))):
+        return ''
+    try:
+        parsed = urlsplit(url)
+        if (parsed.scheme != 'https' or parsed.hostname not in _HUANGGUO_HOSTS
+                or parsed.username is not None or parsed.password is not None
+                or parsed.port not in (None, 443)):
+            return ''
+        match = re.fullmatch(r'/video/([1-9][0-9]*)(?:/ep-([1-9][0-9]*))?/?', parsed.path)
+    except (TypeError, ValueError):
+        return ''
+    if not match:
+        return ''
+    return f'huangguo-{match.group(1)}-ep-{match.group(2) or "1"}'
 
 
 def normalize_source_subtitle_evidence(value) -> tuple[str, ...]:
@@ -322,12 +352,18 @@ def canonical_code(text: str) -> str:
 
 
 def video_code(video: dict) -> str:
+    url = video.get('url', '')
+    derived_site = site_from_url(url)
+    claimed_site = video.get('_site') or video.get('site')
+    if derived_site == 'Huangguo' or claimed_site == 'Huangguo':
+        # Persisted metadata can contain an old title-derived code. Recompute
+        # from the concrete episode URL before consulting any stored value.
+        return huangguo_video_code(url)
     stored = str(video.get('_code') or video.get('code') or '').strip()
     if stored:
         return stored.casefold()
 
-    site = video.get('_site') or video.get('site') or site_from_url(
-        video.get('url', ''))
+    site = claimed_site or derived_site
     if site in {'JableTV', 'MissAV'}:
         slug = _strip_version_suffixes(url_slug(video.get('url', '')))
         code = canonical_code(slug)

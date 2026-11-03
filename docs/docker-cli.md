@@ -14,9 +14,14 @@ Features: persistent URL queue, live segment/byte progress and event logs,
 retry/cancel, per-job quality, 1–16 segment workers and a speed cap in MiB/s.
 There is exactly **one active video**. Download destination is the administrator's
 mounted `/downloads`; users cannot choose arbitrary server paths or browse files.
-Only maintained JableTV/MissAV/SupJav/Hanime1 HTTPS video URLs are accepted.
+Only maintained JableTV/MissAV/SupJav/Hanime1/Huangguo HTTPS video URLs are accepted.
 Site blocking and unavailable provider streams still apply; this does not bypass
 Cloudflare or add support for arbitrary media URLs.
+
+Huangguo URLs identify one public episode (the series root means episode 1),
+not an automatic full-series batch. Public MPEG-TS HLS sources are supported;
+private player sources and fragmented-MP4 HLS are not. Encrypted thumbnails
+are not downloaded. This adds no Chinese speech-recognition model.
 
 Generate a **new random secret** (at least 32 URL-safe characters), put it in
 `UAV_WEB_TOKEN`, then enable the Compose profile. Do not reuse an API credential.
