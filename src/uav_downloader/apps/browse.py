@@ -1375,12 +1375,13 @@ class DownloadManager:
 
 
 # ── Browse helper ────────────────────────────────────────────────────
-def fetch_page_data(browser_cls, url: str) -> dict:
+def fetch_page_data(browser_cls, url: str, *, cancel_check=None) -> dict:
     """Fetch video list from a category/search URL. Returns dict with videos list."""
     try:
-        videos = browser_cls.fetch_page(url)
+        videos = (browser_cls.fetch_page(url, cancel_check=cancel_check)
+                  if browser_cls is HuangguoBrowser else browser_cls.fetch_page(url))
         return {'videos': videos}
-    except MirrorsBlockedError:
+    except (MirrorsBlockedError, concurrent.futures.CancelledError):
         raise
     except Exception as e:
         print(f'[瀏覽錯誤] {e}')
@@ -3408,9 +3409,13 @@ class ModernApp(ctk.CTk):
         def _fetch():
             blocked = False
             try:
-                data = fetch_page_data(browser, url)
+                data = fetch_page_data(browser, url, cancel_check=lambda: (
+                    self._is_closing or my_req != self._page_req
+                    or my_gen != self._build_gen))
                 videos = data.get('videos', [])
                 error = data.get('error', '')
+            except concurrent.futures.CancelledError:
+                return
             except MirrorsBlockedError:
                 blocked = True
                 videos = []
@@ -3432,7 +3437,12 @@ class ModernApp(ctk.CTk):
         if error:
             self._page = self._last_loaded_page
             self._has_next = False
+            self._browse_blocked = False
             self._browse_empty_message = f'{T("fetch_error")} · {error[:160]}'
+            # Replace stale CF placeholders, but keep successfully loaded cards
+            # when only the next-page request failed.
+            if not self._videos:
+                self._refresh_grid()
             self._page_lbl.configure(text=T('page_n', n=self._page))
             self._status_lbl.configure(text=self._browse_empty_message)
             return
@@ -3800,7 +3810,12 @@ class ModernApp(ctk.CTk):
             fingerprints = set()
             while not _cancelled():
                 try:
-                    videos = browser.fetch_page(_page_url(page))
+                    videos = (browser.fetch_page(_page_url(page), cancel_check=_cancelled)
+                              if site_key == 'Huangguo'
+                              else browser.fetch_page(_page_url(page)))
+                except concurrent.futures.CancelledError:
+                    reason = T('selection_scan_cancelled')
+                    break
                 except MirrorsBlockedError:
                     reason = T('mirrors_blocked')
                     break
@@ -4665,10 +4680,13 @@ class ModernApp(ctk.CTk):
                     videos = Hanime1Browser.fetch_page(page_url)
                 elif is_huangguo:
                     page_url = HuangguoBrowser.page_url(url, page)
-                    videos = HuangguoBrowser.fetch_page(page_url)
+                    videos = HuangguoBrowser.fetch_page(page_url, cancel_check=_cancelled)
                 else:
                     page_url = MissAVBrowser.page_url(url, page)
                     videos = MissAVBrowser.fetch_page(page_url)
+            except concurrent.futures.CancelledError:
+                reason = T('selection_scan_cancelled')
+                break
             except MirrorsBlockedError as e:
                 print(f'[crawl] page {page} blocked: {e}')
                 reason = T('mirrors_blocked')

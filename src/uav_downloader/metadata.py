@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 PRODUCT_NAME = "UAV Downloader"
-VERSION = "3.4.0"
+VERSION = "3.5.0"
 COMPANY_NAME = "ALOS (Alos21750)"
 GITHUB_REPOSITORY = "Alos21750/UAV-Downloader"
 LEGACY_GITHUB_REPOSITORIES = (

@@ -17,3 +17,5 @@ Supporting references:
 - [Windows download verification](../WINDOWS_SECURITY.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Security policy](../SECURITY.md)
+- [HGhub design and license review](./hghub-review.md)
+- [2026-11-10 issue/PR audit](./maintenance/2026-11-10-issue-audit.md)

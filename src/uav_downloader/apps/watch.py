@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import re
+from concurrent.futures import CancelledError
 from itertools import count
 from dataclasses import dataclass
 from datetime import date, datetime, timezone, timedelta
@@ -1224,8 +1225,11 @@ class SmallToolWorker:
     def _fetch_huangguo_video_date(self, vurl: str) -> tuple[Optional[datetime], str]:
         """Never infer a series/episode date from its title or numeric URL."""
         try:
-            date_text = SITES['Huangguo']['browser'].fetch_video_date(vurl)
+            date_text = SITES['Huangguo']['browser'].fetch_video_date(
+                vurl, cancel_check=self._stop.is_set)
             return self._parse_huangguo_listing_date(date_text), date_text
+        except CancelledError:
+            raise
         except Exception as exc:
             return None, f'ERR:{type(exc).__name__}'
 
@@ -1242,6 +1246,8 @@ class SmallToolWorker:
         browser = SITES[site_name]['browser']
         # The scan loop distinguishes a real empty page from a failed request.
         # Converting failures to [] would incorrectly complete the first scan.
+        if site_name == 'Huangguo':
+            return browser.fetch_page(url, cancel_check=self._stop.is_set)
         return browser.fetch_page(url)
 
     def _category_fetch_url(self, site_name: str, cat_name: str, cat_url: str) -> str:
@@ -1385,6 +1391,8 @@ class SmallToolWorker:
                 self._log(f'  Page {page}: {page_url}')
                 try:
                     videos = self._fetch_page_for_site(site_name, page_url)
+                except CancelledError:
+                    return False
                 except MirrorsBlockedError:
                     scan_blocked = True
                     self._log(f'  [BLOCKED] Cloudflare blocked all mirrors: {page_url}')
@@ -1531,10 +1539,14 @@ class SmallToolWorker:
                                 vurl)
                             time.sleep(PER_VIDEO_FETCH_DELAY_SEC)
                         if site_name == 'Huangguo' and video_dt is None:
-                            video_dt, rel_text = self._fetch_huangguo_video_date(vurl)
+                            try:
+                                video_dt, rel_text = self._fetch_huangguo_video_date(vurl)
+                            except CancelledError:
+                                return False
                             if rel_text.startswith('ERR:'):
                                 scan_failed = True
-                            time.sleep(PER_VIDEO_FETCH_DELAY_SEC)
+                            if self._stop.wait(PER_VIDEO_FETCH_DELAY_SEC):
+                                return False
                         if video_dt is None:
                             self._log(f'    [SKIP] no confirmed date ({rel_text!r}): {vurl}')
                             consecutive_skips += 1
@@ -2115,6 +2127,9 @@ class SmallToolApp(ctk.CTk):
             'categories_collapsed': categories_collapsed,
             'settings_expanded': self._settings_expanded,
             'activity_visible': activity_visible,
+            'category_site': self._active_category_site(),
+            'category_filter': (self._category_filter_var.get()
+                                if hasattr(self, '_category_filter_var') else ''),
         }
 
     def _restore_ui_state(self, snapshot: dict):
@@ -2140,6 +2155,12 @@ class SmallToolApp(ctk.CTk):
             var.set(False)
         self._restore_target_checks(snapshot['selected_targets'])
         self._sync_select_all_vars()
+        if self.__dict__.get('_category_tab_names'):
+            site = snapshot.get('category_site')
+            if site in self._category_tab_names:
+                self._category_tabview.set(self._category_tab_names[site])
+            self._category_filter_var.set(snapshot.get('category_filter', ''))
+            self._on_category_tab_changed()
 
         running = snapshot['running']
         self._start_btn.configure(state='disabled' if running else 'normal')
@@ -2162,6 +2183,7 @@ class SmallToolApp(ctk.CTk):
             set_lang(code)
             config.set_ui_lang(code)
             self._build_gen += 1
+            self._cancel_category_work()
 
             for child in self.winfo_children():
                 try:
@@ -2808,88 +2830,8 @@ class SmallToolApp(ctk.CTk):
             border_color=BORDER, border_width=1,
             text_color=TEXT_PRI, font=(font_family, 10))
         filter_entry.pack(side='left')
-        self._category_filter_var.trace_add('write', self._filter_targets)
-
-        tabview = ctk.CTkTabview(
-            selection, fg_color='transparent', corner_radius=0,
-            segmented_button_fg_color=BG_INPUT,
-            segmented_button_selected_color=ACCENT,
-            segmented_button_selected_hover_color=ACCENT_HOVER,
-            segmented_button_unselected_color=BG_INPUT,
-            segmented_button_unselected_hover_color=BG_CARD_HOVER,
-            text_color=TEXT_PRI, border_width=0)
-        tabview.pack(fill='both', expand=True, padx=10, pady=(0, 10))
-        self._category_tabview = tabview
-
-        for site_name, site_info in SITES.items():
-            tab_name = f'{site_name}  {len(list(iter_targets(site_name)))}'
-            tabview.add(tab_name)
-            tab = tabview.tab(tab_name)
-            tab.configure(fg_color='transparent')
-            inner = ctk.CTkScrollableFrame(
-                tab, fg_color='transparent', corner_radius=0,
-                scrollbar_button_color=BORDER,
-                scrollbar_button_hover_color=BORDER_HOVER)
-            inner.pack(fill='both', expand=True)
-
-            for group in site_info['groups']:
-                group_frame = ctk.CTkFrame(
-                    inner, fg_color=BG_SECTION, corner_radius=8,
-                    border_width=1, border_color=BORDER_CARD)
-                group_frame.pack(fill='x', padx=4, pady=5)
-
-                group_header = ctk.CTkFrame(group_frame, fg_color='transparent')
-                group_header.pack(fill='x', padx=12, pady=(9, 5))
-                ctk.CTkLabel(
-                    group_header,
-                    text=f'{group_label(group)}  {len(group["targets"])}',
-                    text_color=TEXT_PRI, font=(font_family, 11, 'bold')).pack(
-                        side='left')
-
-                all_key = f'{site_name}|__group__|{group["id"]}'
-                all_var = tk.BooleanVar(value=False)
-                self._check_vars[all_key] = all_var
-                ctk.CTkCheckBox(
-                    group_header, text=T('st_select_all'), variable=all_var,
-                    width=110, height=24, checkbox_width=18, checkbox_height=18,
-                    corner_radius=4, border_width=1,
-                    fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                    border_color=BORDER_HOVER, checkmark_color=WHITE,
-                    text_color=ACCENT, font=(font_family, 10, 'bold'),
-                    command=lambda sn=site_name, gid=group['id']:
-                        self._toggle_select_group(sn, gid),
-                ).pack(side='right')
-
-                cat_grid = ctk.CTkFrame(group_frame, fg_color='transparent')
-                cat_grid.pack(fill='x', padx=10, pady=(0, 10))
-                for col in range(3):
-                    cat_grid.grid_columnconfigure(col, weight=1)
-                group_widgets = []
-                filter_items = []
-                for i, target in enumerate(group['targets']):
-                    label = target_label(target)
-                    key = selection_key(site_name, target['id'])
-                    var = tk.BooleanVar(value=False)
-                    self._check_vars[key] = var
-                    cb = ctk.CTkCheckBox(
-                        cat_grid, text=label, variable=var,
-                        height=26, checkbox_width=17, checkbox_height=17,
-                        corner_radius=4, border_width=1,
-                        fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                        border_color=BORDER_HOVER, checkmark_color=WHITE,
-                        text_color=TEXT_SEC, font=(font_family, 10),
-                        command=lambda sn=site_name, gid=group['id']:
-                            self._sync_group_select(sn, gid))
-                    row, col = divmod(i, self._category_columns)
-                    cb.grid(row=row, column=col, sticky='w', padx=6, pady=3)
-                    self._target_widgets.append((cb, label.casefold()))
-                    group_widgets.append(cb)
-                    filter_items.append((cb, label.casefold()))
-                self._category_groups.append(group_widgets)
-                self._filter_groups.append({
-                    'frame': group_frame,
-                    'items': filter_items,
-                })
+        self._category_filter_var.trace_add('write', self._schedule_category_filter)
+        self._build_category_tabs(selection, font_family)
 
         # ── Control row ─────────────────────────────────────────────
         ctrl = ctk.CTkFrame(main, fg_color='transparent')
@@ -3273,6 +3215,161 @@ class SmallToolApp(ctk.CTk):
         popup.after(40, popup.grab_set)
 
     # ── Selection helpers ────────────────────────────────────────────
+    def _build_category_tabs(self, parent, font_family):
+        """Keep all selection variables, but construct only visited tab widgets."""
+        self._category_font = font_family
+        self._category_tab_names = {}
+        self._category_site_views = {}
+        self._category_build_after_id = None
+        self._category_filter_after_id = None
+        self._category_render_epoch = 0
+        tabview = ctk.CTkTabview(
+            parent, fg_color='transparent', corner_radius=0,
+            segmented_button_fg_color=BG_INPUT,
+            segmented_button_selected_color=ACCENT,
+            segmented_button_selected_hover_color=ACCENT_HOVER,
+            segmented_button_unselected_color=BG_INPUT,
+            segmented_button_unselected_hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI, border_width=0,
+            command=self._on_category_tab_changed)
+        tabview.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        self._category_tabview = tabview
+        for site_name, site_info in SITES.items():
+            tab_name = f'{site_name}  {len(list(iter_targets(site_name)))}'
+            self._category_tab_names[site_name] = tab_name
+            tabview.add(tab_name)
+            tabview.tab(tab_name).configure(fg_color='transparent')
+            for group in site_info['groups']:
+                self._check_vars[f'{site_name}|__group__|{group["id"]}'] = (
+                    tk.BooleanVar(master=self, value=False))
+                for target in group['targets']:
+                    self._check_vars[selection_key(site_name, target['id'])] = (
+                        tk.BooleanVar(master=self, value=False))
+        self._on_category_tab_changed()
+
+    def _active_category_site(self):
+        names = self.__dict__.get('_category_tab_names', {})
+        if not names:
+            return None
+        selected = self._category_tabview.get()
+        return next((site for site, label in names.items() if label == selected), None)
+
+    def _cancel_category_work(self):
+        self._category_render_epoch = self.__dict__.get('_category_render_epoch', 0) + 1
+        for name in ('_category_build_after_id', '_category_filter_after_id'):
+            handle = self.__dict__.get(name)
+            if handle is not None:
+                try:
+                    self.after_cancel(handle)
+                except (tk.TclError, RuntimeError):
+                    pass
+            setattr(self, name, None)
+
+    def _on_category_tab_changed(self):
+        self._cancel_category_work()
+        if self._is_closing:
+            return
+        site = self._active_category_site()
+        if site is None:
+            return
+        if site not in self._category_site_views:
+            self._category_site_views[site] = {
+                'iterator': self._iter_category_widgets(site), 'complete': False}
+        self._filter_targets()
+        if not self._category_site_views[site]['complete']:
+            gen, epoch = self._build_gen, self._category_render_epoch
+            self._category_build_after_id = self.after(
+                1, lambda: self._run_category_build_batch(site, gen, epoch))
+
+    def _run_category_build_batch(self, site, gen, epoch):
+        if (self._is_closing or gen != self._build_gen or
+                epoch != self._category_render_epoch or site != self._active_category_site()):
+            return
+        self._category_build_after_id = None
+        view = self._category_site_views[site]
+        deadline = time.monotonic() + 0.008
+        for _ in range(8):
+            try:
+                next(view['iterator'])
+            except StopIteration:
+                view['complete'] = True
+                break
+            if time.monotonic() >= deadline:
+                break
+        self._filter_targets()
+        if not view['complete']:
+            self._category_build_after_id = self.after(
+                1, lambda: self._run_category_build_batch(site, gen, epoch))
+
+    def _iter_category_widgets(self, site_name):
+        inner = ctk.CTkScrollableFrame(
+            self._category_tabview.tab(self._category_tab_names[site_name]),
+            fg_color='transparent', corner_radius=0,
+            scrollbar_button_color=BORDER, scrollbar_button_hover_color=BORDER_HOVER)
+        inner.pack(fill='both', expand=True)
+        for group in SITES[site_name]['groups']:
+            group_frame = ctk.CTkFrame(
+                inner, fg_color=BG_SECTION, corner_radius=8,
+                border_width=1, border_color=BORDER_CARD)
+            group_frame.pack(fill='x', padx=4, pady=5)
+            group_header = ctk.CTkFrame(group_frame, fg_color='transparent')
+            group_header.pack(fill='x', padx=12, pady=(9, 5))
+            ctk.CTkLabel(
+                group_header, text=f'{group_label(group)}  {len(group["targets"])}',
+                text_color=TEXT_PRI, font=(self._category_font, 11, 'bold')).pack(side='left')
+            ctk.CTkCheckBox(
+                group_header, text=T('st_select_all'),
+                variable=self._check_vars[f'{site_name}|__group__|{group["id"]}'],
+                width=110, height=24, checkbox_width=18, checkbox_height=18,
+                corner_radius=4, border_width=1, fg_color=ACCENT,
+                hover_color=ACCENT_HOVER, border_color=BORDER_HOVER,
+                checkmark_color=WHITE, text_color=ACCENT,
+                font=(self._category_font, 10, 'bold'),
+                command=lambda sn=site_name, gid=group['id']:
+                    self._toggle_select_group(sn, gid)).pack(side='right')
+            cat_grid = ctk.CTkFrame(group_frame, fg_color='transparent')
+            cat_grid.pack(fill='x', padx=10, pady=(0, 10))
+            for col in range(3):
+                cat_grid.grid_columnconfigure(col, weight=1)
+            group_widgets, filter_items = [], []
+            self._category_groups.append(group_widgets)
+            self._filter_groups.append({
+                'site': site_name, 'frame': group_frame, 'items': filter_items})
+            yield
+            for index, target in enumerate(group['targets']):
+                label = target_label(target)
+                cb = ctk.CTkCheckBox(
+                    cat_grid, text=label,
+                    variable=self._check_vars[selection_key(site_name, target['id'])],
+                    height=26, checkbox_width=17, checkbox_height=17,
+                    corner_radius=4, border_width=1, fg_color=ACCENT,
+                    hover_color=ACCENT_HOVER, border_color=BORDER_HOVER,
+                    checkmark_color=WHITE, text_color=TEXT_SEC,
+                    font=(self._category_font, 10),
+                    command=lambda sn=site_name, gid=group['id']:
+                        self._sync_group_select(sn, gid))
+                row, col = divmod(index, self._category_columns)
+                cb.grid(row=row, column=col, sticky='w', padx=6, pady=3)
+                self._target_widgets.append((cb, label.casefold()))
+                group_widgets.append(cb)
+                filter_items.append((cb, label.casefold()))
+                yield
+
+    def _schedule_category_filter(self, *_args):
+        handle = self.__dict__.get('_category_filter_after_id')
+        if handle is not None:
+            try:
+                self.after_cancel(handle)
+            except tk.TclError:
+                pass
+        gen = self._build_gen
+        def apply_filter():
+            if self._is_closing or gen != self._build_gen:
+                return
+            self._category_filter_after_id = None
+            self._filter_targets()
+        self._category_filter_after_id = self.after(120, apply_filter)
+
     def _toggle_categories(self):
         if self._settings_expanded:
             self._set_settings_expanded(False)
@@ -3324,8 +3421,11 @@ class SmallToolApp(ctk.CTk):
 
     def _filter_targets(self, *_args):
         query = self._category_filter_var.get().strip().casefold()
+        active_site = self._active_category_site()
         visibility = []
         for group in self._filter_groups:
+            if active_site and group.get('site', active_site) != active_site:
+                continue
             group_matches = False
             for widget, label in group['items']:
                 try:
@@ -4254,6 +4354,7 @@ class SmallToolApp(ctk.CTk):
     def _on_close(self):
         self._is_closing = True
         self._build_gen += 1
+        self._cancel_category_work()
         for popup_name in (
                 '_schedule_popup', '_site_settings_popup',
                 '_calendar_popup'):

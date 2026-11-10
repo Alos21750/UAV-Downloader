@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uav-downloader"
-version = "3.4.0"
+version = "3.5.0"
 description = "JableTV, MissAV, SupJav, Hanime1 and Huangguo downloader with unattended automation and local AI subtitles"
 readme = "README.en.md"
 requires-python = ">=3.12"

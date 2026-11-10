@@ -201,16 +201,16 @@ def test_getm3u8_playlist_handles_absolute_and_relative_variants(monkeypatch):
         )
 
     monkeypatch.setattr(crawler_mod, '_http_get', fake_http_get)
-    monkeypatch.setattr(crawler_mod.m3u8, 'loads', lambda *a, **k: object())
+    monkeypatch.setattr(crawler_mod.m3u8, 'loads', lambda *a, **k: types.SimpleNamespace())
 
     dummy = DummyCrawler()
     _, variant_base = dummy._getm3u8PlayList('https://hls4.turbosplayer.com/file/u/master.m3u8')
     assert loaded[-1] == 'https://hls4.turbosplayer.com/file/u/master.m3u8'
-    assert variant_base == 'https://hls4.turbosplayer.com/file/u/'
+    assert variant_base == 'https://hls4.turbosplayer.com/file/u/master.m3u8'
 
     _, variant_base = dummy._getm3u8PlayList('variant/master.m3u8')
     assert loaded[-1] == 'https://cdn1.turboviplay.com/data1/x/variant/master.m3u8'
-    assert variant_base == 'https://cdn1.turboviplay.com/data1/x/variant/'
+    assert variant_base == 'https://cdn1.turboviplay.com/data1/x/variant/master.m3u8'
 
 
 def test_is_cf_block_resp_detects_only_cloudflare_blocks():

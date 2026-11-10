@@ -165,8 +165,8 @@ def _swap_host(url, host):
 def _is_cf_interstitial(resp):
     # Fast reject for Cloudflare block pages. NOTE: 'challenge-platform' also appears on
     # SUCCESSFUL missav pages -- never use it as a marker. Content success is decided by validate().
-    if resp.status_code in (403, 429, 503):
-        return True
+    # Status alone is not evidence: a proxy can refuse CONNECT, and an origin
+    # behind Cloudflare can return an ordinary 403, 429, or 503 response.
     if 'challenge' in resp.headers.get('cf-mitigated', '').lower():
         return True
     head = resp.content[:3000].lower()
@@ -180,7 +180,9 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
     validate(resp)->bool gates each trial (including the override/plain fallback),
     not just the final response for a host. headers_factory(host)->dict gives per-host headers (e.g. Referer).
     Returns (resp, host, reason): 'ok' (validated) | 'empty' (a real non-interstitial page was seen but none validated)
-    | 'blocked' (every attempt was interstitial / transport failure)."""
+    | 'blocked' (challenge evidence, without a different failure explaining it).
+    Transport, HTTP, and off-allowlist redirect failures raise a sanitized
+    RuntimeError instead of masquerading as Cloudflare or empty results."""
     mirrors = config.MIRRORS.get(site_key) or [urlsplit(url).netloc]
     orig = urlsplit(url).netloc
     with _active_host_lock:
@@ -192,6 +194,10 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
     if not order:
         order = list(mirrors)
     saw_real = False
+    saw_challenge = False
+    saw_transport_failure = False
+    saw_untrusted_redirect = False
+    http_failures = set()
     for host in order:
         target = _swap_host(url, host)
         base_hdrs = dict(headers_factory(host) or {}) if headers_factory else {}
@@ -222,14 +228,20 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
                     continue
                 break
             if r is None:
+                saw_transport_failure = True
                 continue
             if _is_cf_interstitial(r):
+                saw_challenge = True
                 continue
             try:
                 final_host = urlsplit(str(r.url)).netloc
             except Exception:
                 final_host = host
             if final_host and final_host not in mirrors:  # redirected off the allowlist -> distrust
+                saw_untrusted_redirect = True
+                continue
+            if r.status_code >= 400:
+                http_failures.add(r.status_code)
                 continue
             saw_real = True
             try:
@@ -240,7 +252,22 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
                 with _active_host_lock:
                     _active_host[site_key] = host
                 return r, host, 'ok'
-    return None, None, ('empty' if saw_real else 'blocked')
+    if saw_transport_failure or http_failures or saw_untrusted_redirect:
+        # Do not interpolate exception text, proxy endpoints, request URLs,
+        # response bodies, cookies, or headers: they can contain credentials.
+        site_label = {'supjav': 'SupJav', 'missav': 'MissAV', 'jable': 'JableTV'}.get(
+            site_key, 'Site')
+        details = []
+        if saw_transport_failure:
+            details.append('Network/proxy connection failed; check the app proxy mode and endpoint')
+        if http_failures:
+            details.append('HTTP ' + '/'.join(str(code) for code in sorted(http_failures)))
+        if saw_untrusted_redirect:
+            details.append('untrusted redirect rejected')
+        if saw_challenge:
+            details.append('some attempts also encountered a site challenge')
+        raise RuntimeError(f'{site_label}: ' + '; '.join(details))
+    return None, None, ('empty' if saw_real or not saw_challenge else 'blocked')
 
 # ── Global speed limiter (token bucket) ──────────────────────────
 class _SpeedLimiter:
@@ -700,19 +727,27 @@ class M3U8Crawler:
             if _is_cf_block_resp(resp) or b'cloudflare' in head.lower():
                 raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
             raise Exception(f"m3u8 內容無效（可能被阻擋或改版）: {url}")
-        return m3u8.loads(text, uri=str(getattr(resp, 'url', url)))
+        final_url = str(getattr(resp, 'url', None) or url)
+        playlist = m3u8.loads(text, uri=final_url)
+        # m3u8.base_uri retains only the directory. Query-only child URIs
+        # need the final playlist filename as their RFC 3986 resolution base.
+        playlist._uav_response_url = final_url
+        return playlist
+
+    @staticmethod
+    def _playlist_base(playlist, fallback):
+        return (getattr(playlist, '_uav_response_url', None)
+                or getattr(playlist, 'base_uri', None) or fallback)
 
     def _getm3u8PlayList(self, uri, base_url=None):
         playListUrl = urljoin(base_url or self._m3u8url, uri)
         m3u8obj = self._load_m3u8(playListUrl)
-        # _load_m3u8 gives the parser the final response URL, so base_uri
-        # follows CDN redirects instead of the original requested location.
-        variantBase = getattr(m3u8obj, 'base_uri', None) or urljoin(playListUrl, '.')
+        variantBase = self._playlist_base(m3u8obj, playListUrl)
         return m3u8obj, variantBase
 
     def _create_m3u8(self):
         m3u8obj = self._load_m3u8(self._m3u8url)
-        downloadurl = getattr(m3u8obj, 'base_uri', None) or urljoin(self._m3u8url, '.')
+        downloadurl = self._playlist_base(m3u8obj, self._m3u8url)
         if len(m3u8obj.playlists) > 0:
             # Pick variant based on resolution preference
             best = select_variant(m3u8obj.playlists, self._resolution_pref)

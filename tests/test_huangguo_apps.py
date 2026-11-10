@@ -1,5 +1,6 @@
 """Offline Browser/Watcher integration for numbered public drama episodes."""
 from types import SimpleNamespace
+from concurrent.futures import CancelledError
 
 import pytest
 
@@ -52,7 +53,7 @@ def test_huangguo_listing_crawl_queues_each_numbered_episode(monkeypatch):
     browser = browse.SITES['Huangguo']['browser']
     added, enqueued, fetched = [], [], []
 
-    def fetch(url):
+    def fetch(url, **kwargs):
         fetched.append(url)
         return _episodes('2026-10-10') if len(fetched) == 1 else []
 
@@ -102,7 +103,7 @@ def _episodes(date):
 
 def test_huangguo_watcher_keeps_numbered_episodes_and_destination(huangguo_scan, monkeypatch):
     worker, cfg, browser, _logs, downloaded = huangguo_scan
-    monkeypatch.setattr(browser, 'fetch_page', lambda url: [] if url.rstrip('/').endswith('/2') else _episodes('2026-10-10'))
+    monkeypatch.setattr(browser, 'fetch_page', lambda url, **kw: [] if url.rstrip('/').endswith('/2') else _episodes('2026-10-10'))
     assert worker._scan_and_download(cfg) is True
     assert [video['episode'] for video, _dest in downloaded] == [1, 3]
     assert all(dest == cfg['site_settings']['Huangguo']['output_folder'] for _video, dest in downloaded)
@@ -112,8 +113,8 @@ def test_huangguo_watcher_keeps_numbered_episodes_and_destination(huangguo_scan,
 def test_huangguo_watcher_baseline_and_unknown_date_are_conservative(
         huangguo_scan, monkeypatch, date, expected):
     worker, cfg, browser, logs, downloaded = huangguo_scan
-    monkeypatch.setattr(browser, 'fetch_page', lambda url: [] if url.rstrip('/').endswith('/2') else _episodes(date))
-    monkeypatch.setattr(browser, 'fetch_video_date', lambda _url: '')
+    monkeypatch.setattr(browser, 'fetch_page', lambda url, **kw: [] if url.rstrip('/').endswith('/2') else _episodes(date))
+    monkeypatch.setattr(browser, 'fetch_video_date', lambda _url, **kw: '')
     worker._scan_and_download(cfg)
     assert len(downloaded) == expected
     if not date:
@@ -123,20 +124,46 @@ def test_huangguo_watcher_baseline_and_unknown_date_are_conservative(
 
 def test_huangguo_watcher_confirms_missing_listing_date_from_detail(huangguo_scan, monkeypatch):
     worker, cfg, browser, _logs, downloaded = huangguo_scan
-    monkeypatch.setattr(browser, 'fetch_page', lambda url: [] if url.rstrip('/').endswith('/2') else _episodes(''))
-    monkeypatch.setattr(browser, 'fetch_video_date', lambda _url: '2026-10-11')
+    monkeypatch.setattr(browser, 'fetch_page', lambda url, **kw: [] if url.rstrip('/').endswith('/2') else _episodes(''))
+    monkeypatch.setattr(browser, 'fetch_video_date', lambda _url, **kw: '2026-10-11')
     assert worker._scan_and_download(cfg) is True
     assert len(downloaded) == 2
 
 
 def test_huangguo_detail_date_failure_does_not_complete_first_scan(huangguo_scan, monkeypatch):
     worker, cfg, browser, _logs, downloaded = huangguo_scan
-    monkeypatch.setattr(browser, 'fetch_page', lambda url: [] if url.rstrip('/').endswith('/2') else _episodes(''))
+    monkeypatch.setattr(browser, 'fetch_page', lambda url, **kw: [] if url.rstrip('/').endswith('/2') else _episodes(''))
 
-    def failed(_url):
+    def failed(_url, **kw):
         raise RuntimeError('Temporary unavailable detail')
 
     monkeypatch.setattr(browser, 'fetch_video_date', failed)
     assert worker._scan_and_download(cfg) is False
     assert cfg['first_run_done'] is False
     assert downloaded == []
+
+
+@pytest.mark.parametrize('detail', [False, True])
+def test_huangguo_watcher_cancels_metadata_without_completing_scan(
+        huangguo_scan, monkeypatch, detail):
+    worker, cfg, browser, logs, downloaded = huangguo_scan
+    reached = []
+
+    def cancelled(url, *, cancel_check):
+        assert not cancel_check()
+        reached.append(url)
+        worker._stop.set()
+        assert cancel_check()
+        raise CancelledError()
+
+    if detail:
+        monkeypatch.setattr(browser, 'fetch_page', lambda url, **kw: _episodes(''))
+        monkeypatch.setattr(browser, 'fetch_video_date', cancelled)
+    else:
+        monkeypatch.setattr(browser, 'fetch_page', cancelled)
+    assert worker._scan_and_download(cfg) is False
+    assert reached
+    assert cfg['first_run_done'] is False
+    assert downloaded == []
+    assert worker._seen == {}
+    assert not any('[ERR]' in line or '[BLOCKED]' in line for line in logs)

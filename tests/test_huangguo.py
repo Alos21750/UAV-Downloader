@@ -10,6 +10,13 @@ from uav_downloader.sites import huangguo as hg
 from uav_downloader.sites.huangguo import HuangguoBrowser, SiteHuangguo, canonical_url
 
 
+@pytest.fixture(autouse=True)
+def isolate_metadata_cache():
+    HuangguoBrowser.clear_metadata_cache()
+    yield
+    HuangguoBrowser.clear_metadata_cache()
+
+
 @pytest.mark.parametrize('url, identity, canonical', [
     ('https://huangguoai.com/video/42/', 'huangguo-42-ep-1',
      'https://huangguoai.com/video/42/'),
@@ -329,5 +336,5 @@ def test_expansion_time_budget_never_returns_partial_success(monkeypatch):
         {'url': 'https://huangguoai.com/video/42/', 'date': '', '_date_kind': 'unknown'}])
     ticks = iter([0, 121])
     monkeypatch.setattr(hg.time, 'monotonic', lambda: next(ticks))
-    with pytest.raises(ValueError, match='timed out'):
+    with pytest.raises(TimeoutError, match='timed out'):
         HuangguoBrowser.fetch_page('https://huangguoai.com/ai-duanju/')

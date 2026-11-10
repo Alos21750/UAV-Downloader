@@ -6,12 +6,18 @@ Signed playback URLs/headers stay in the job, never in persisted browser items.
 """
 
 import ipaddress
+import copy
+import hashlib
 import json
 import re
 import socket
 import threading
 import time
+from collections import OrderedDict
+from concurrent.futures import CancelledError
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import quote, urljoin, urlsplit
 
 import requests
@@ -36,6 +42,149 @@ _MAX_SERIES_PER_PAGE = 100
 _MAX_EPISODES_PER_SERIES = 1000
 _MAX_EPISODES_PER_PAGE = 5000
 _MAX_PAGE_EXPANSION_SECONDS = 120
+_METADATA_TTL = 120
+_METADATA_MAX_SERIES = 128
+_METADATA_MAX_EPISODES = 4000
+_METADATA_MAX_BYTES = 2 * 1024 * 1024
+_metadata_cache = OrderedDict()
+_metadata_inflight = {}
+_metadata_lock = threading.Lock()
+
+
+class HuangguoTransientError(RuntimeError):
+    """Retryable public-server failure, distinct from access challenges."""
+    def __init__(self, status=None, retry_after=None):
+        self.status_code = status
+        self.retry_after = retry_after
+        detail = f'HTTP {status}' if status else 'network timeout or connection error'
+        super().__init__(f'Huangguo temporarily unavailable ({detail}); retry later')
+
+
+class _MetadataDeadline(TimeoutError):
+    """One caller's deadline, not a shared upstream failure."""
+
+
+@contextmanager
+def _operation(cancel_check=None, deadline=None):
+    previous = getattr(_local, 'control', None)
+    checks = list(previous['checks']) if previous else []
+    if cancel_check is not None:
+        checks.append(cancel_check)
+    if previous and previous['deadline'] is not None:
+        deadline = min(deadline, previous['deadline']) if deadline is not None else previous['deadline']
+    _local.control = {
+        'checks': checks, 'deadline': deadline,
+        'proxy': previous['proxy'] if previous else copy.deepcopy(config.proxy_request_kwargs()),
+    }
+    try:
+        _check_control()
+        yield
+    finally:
+        _local.control = previous
+
+
+def _check_control():
+    control = getattr(_local, 'control', None)
+    if not control:
+        return
+    if any(check() for check in control['checks']):
+        raise CancelledError('Huangguo metadata request cancelled')
+    if control['deadline'] is not None and time.monotonic() >= control['deadline']:
+        raise _MetadataDeadline('Huangguo metadata request timed out; retry the page')
+
+
+def _proxy_kwargs():
+    control = getattr(_local, 'control', None)
+    return copy.deepcopy(control['proxy'] if control else config.proxy_request_kwargs())
+
+
+def _proxy_scope():
+    return hashlib.sha256(json.dumps(_proxy_kwargs(), sort_keys=True).encode()).digest()
+
+
+def _wait_controlled(seconds):
+    end = time.monotonic() + seconds
+    while True:
+        _check_control()
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.1, remaining))
+
+
+def _retry_after(value):
+    """Parse server cooldown; callers never shorten it to retry prematurely."""
+    try:
+        if str(value).strip().isdigit():
+            return min(int(value), 86400)
+        parsed = parsedate_to_datetime(str(value))
+        if parsed.tzinfo is None:
+            return None
+        return max(0, min(86400, (parsed - datetime.now(timezone.utc)).total_seconds()))
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _metadata(key, revision, loader):
+    """Cache only parsed public episode rows, never HTML/player credentials."""
+    key = (_proxy_scope(), key)
+    flight_key = (key, revision)
+    while True:
+        _check_control()
+        now = time.monotonic()
+        with _metadata_lock:
+            cached = _metadata_cache.get(key)
+            if (cached and now < cached['expires'] and
+                    (revision is None or revision == cached['revision'])):
+                _metadata_cache.move_to_end(key)
+                return copy.deepcopy(cached['items'])
+            flight = _metadata_inflight.get(flight_key)
+            owner = flight is None
+            if owner:
+                flight = {'event': threading.Event(), 'items': None, 'error': None,
+                          'cancelled': False}
+                _metadata_inflight[flight_key] = flight
+        if not owner:
+            while not flight['event'].wait(0.1):
+                _check_control()
+            _check_control()
+            if flight['cancelled']:
+                continue  # The other caller stopped; this caller may still proceed.
+            if flight['error']:
+                raise flight['error']
+            return copy.deepcopy(flight['items'])
+        try:
+            items = loader()
+            _check_control()
+            # These are already explicit metadata dictionaries, not raw JSON.
+            saved = copy.deepcopy(items)
+            size = len(json.dumps(saved, ensure_ascii=False).encode('utf-8'))
+            with _metadata_lock:
+                newer = _metadata_cache.get(key)
+                if (size <= _METADATA_MAX_BYTES and len(saved) <= _METADATA_MAX_EPISODES
+                        and (not newer or newer['started'] <= now)):
+                    _metadata_cache[key] = {'items': saved, 'bytes': size,
+                                            'revision': revision, 'started': now,
+                                            'expires': time.monotonic() + _METADATA_TTL}
+                    _metadata_cache.move_to_end(key)
+                    while (_metadata_cache and (
+                            len(_metadata_cache) > _METADATA_MAX_SERIES or
+                            sum(len(v['items']) for v in _metadata_cache.values()) > _METADATA_MAX_EPISODES or
+                            sum(v['bytes'] for v in _metadata_cache.values()) > _METADATA_MAX_BYTES)):
+                        _metadata_cache.popitem(last=False)
+                flight['items'] = saved
+            return items
+        except BaseException as exc:
+            # Cleanup also on KeyboardInterrupt/SystemExit; never mask them.
+            if isinstance(exc, (CancelledError, _MetadataDeadline, KeyboardInterrupt, SystemExit)):
+                flight['cancelled'] = True
+            else:
+                flight['error'] = exc
+            raise
+        finally:
+            with _metadata_lock:
+                _metadata_inflight.pop(flight_key, None)
+                flight['event'].set()
 
 
 def _parts(url):
@@ -116,20 +265,50 @@ def _session(kind='page'):
 def _get(url, *, header_factory=None, timeout=20, page=False):
     """Bound redirects; rebuild headers after validating every destination."""
     session = _session('page' if page else 'media')
+    transient_attempt = 0
     for _ in range(6):
+        _check_control()
         if page and not (canonical_url(url) or HuangguoBrowser.is_listing_url(url)):
             raise ValueError('Unsupported Huangguo page redirect')
         _verify_public_destination(url)
         headers = dict(config.headers)
         if header_factory:
             headers.update(header_factory(url))
-        try:
-            response = session.get(url, headers=headers, timeout=timeout,
-                                   allow_redirects=False, stream=page,
-                                   **config.proxy_request_kwargs())
-        except requests.RequestException:
-            # Requests exceptions can contain signed URLs/header values.
-            raise RuntimeError('Huangguo public request failed') from None
+        while True:
+            _check_control()
+            control = getattr(_local, 'control', None)
+            request_timeout = timeout
+            if control and control['deadline'] is not None:
+                request_timeout = max(0.01, min(timeout, control['deadline'] - time.monotonic()))
+            try:
+                response = session.get(url, headers=headers, timeout=request_timeout,
+                                       allow_redirects=False, stream=page,
+                                       **_proxy_kwargs())
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                _check_control()
+                if isinstance(exc, requests.exceptions.SSLError):
+                    raise RuntimeError('Huangguo TLS verification failed') from None
+                if not page or transient_attempt >= 2:
+                    raise HuangguoTransientError() from None
+                _wait_controlled(1 + transient_attempt)
+                transient_attempt += 1
+                continue
+            except requests.RequestException:
+                _check_control()
+                raise RuntimeError('Huangguo public request failed') from None
+            _check_control_after_response(response)
+            if 'challenge' in str(response.headers.get('cf-mitigated', '')).lower():
+                response.close()
+                raise MirrorsBlockedError('Huangguo requires manual public-site verification')
+            if response.status_code not in (408, 425, 429, 500, 502, 503, 504):
+                break
+            status = response.status_code
+            delay = _retry_after(response.headers.get('Retry-After'))
+            response.close()
+            if not page or transient_attempt >= 2 or (delay is not None and delay > 10):
+                raise HuangguoTransientError(status, delay)
+            _wait_controlled(delay if delay is not None else 1 + transient_attempt)
+            transient_attempt += 1
         if response.status_code in (301, 302, 303, 307, 308):
             location = response.headers.get('Location', '')
             response.close()
@@ -137,11 +316,19 @@ def _get(url, *, header_factory=None, timeout=20, page=False):
                 raise ValueError('Huangguo returned an invalid redirect')
             url = urljoin(url, location)
             continue
-        if response.status_code in (403, 429, 503):
+        if response.status_code == 403:
             response.close()
-            raise MirrorsBlockedError('Huangguo public access is blocked or rate limited')
+            raise RuntimeError('Huangguo public access was refused (HTTP 403)')
         return response
     raise ValueError('Huangguo redirect limit exceeded')
+
+
+def _check_control_after_response(response):
+    try:
+        _check_control()
+    except BaseException:
+        response.close()
+        raise
 
 
 def _page_soup(url):
@@ -151,6 +338,7 @@ def _page_soup(url):
             raise ValueError(f'Huangguo page unavailable (HTTP {response.status_code})')
         chunks, size = [], 0
         for chunk in response.iter_content(65536):
+            _check_control()
             size += len(chunk)
             if size > 4 * 1024 * 1024:
                 raise ValueError('Huangguo page exceeds metadata limit')
@@ -161,6 +349,9 @@ def _page_soup(url):
         if 'just a moment' in title or soup.select_one('#challenge-form'):
             raise MirrorsBlockedError('Huangguo requires manual public-site verification')
         return soup
+    except requests.RequestException:
+        _check_control()
+        raise HuangguoTransientError() from None
     finally:
         response.close()
 
@@ -182,7 +373,14 @@ def _initial_data(soup, url):
 
 
 def _clean(value):
-    return ' '.join(str(value or '').split())
+    # One hostile title repeated across 1,000 episodes must not amplify a
+    # bounded HTML response into gigabytes of metadata/cache serialization.
+    return ' '.join(str(value or '').split())[:1000]
+
+
+def _revision(value):
+    text = str(value or '')
+    return text if re.fullmatch(r'[1-9][0-9]{0,19}', text) else None
 
 
 def _date(value):
@@ -193,7 +391,8 @@ def _date(value):
             if int(value) <= 0:
                 return ''
             return datetime.fromtimestamp(int(value), _TAIPEI).date().isoformat()
-        return datetime.fromisoformat(str(value).replace('Z', '+00:00')).date().isoformat()
+        parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        return (parsed.astimezone(_TAIPEI) if parsed.tzinfo else parsed).date().isoformat()
     except (ValueError, TypeError, OSError, OverflowError):
         return ''
 
@@ -215,7 +414,8 @@ def _detail_date(soup, data):
                 if isinstance(item, dict):
                     kind = item.get('@type', [])
                     kinds = [kind] if isinstance(kind, str) else kind
-                    if not isinstance(kinds, list) or not set(kinds) & {'WebPage', 'VideoObject'}:
+                    if not isinstance(kinds, list) or not any(
+                            isinstance(k, str) and k in {'WebPage', 'VideoObject'} for k in kinds):
                         continue
                     value = _date(item.get('dateModified'))
                     if value:
@@ -245,6 +445,7 @@ def _parse_videos(soup, listing_url):
             'url': url, 'title': _clean(title.get_text(' ', strip=True) if title else ''),
             'thumbnail': '', 'duration': '', 'date': date, 'author': '',
             '_date_kind': 'series_updated' if date else 'unknown',
+            '_series_revision': _revision(updated.get('data-ep-at')) if updated else None,
             '_source_listing_url': listing_url,
         })
     return videos
@@ -346,10 +547,22 @@ class HuangguoBrowser:
                  'url': url, 'count': 0} for name, url in cls.CATEGORIES]
 
     @classmethod
-    def fetch_episodes(cls, url):
+    def clear_metadata_cache(cls):
+        with _metadata_lock:
+            _metadata_cache.clear()
+
+    @classmethod
+    def fetch_episodes(cls, url, *, cancel_check=None, deadline=None, revision=None):
         url = canonical_url(url)
         if not url:
             raise ValueError('Unsupported Huangguo episode URL')
+        series_id, _ = _video_parts(url)
+        root = f'{HUANGGUO_ROOT}/video/{series_id}/'
+        with _operation(cancel_check, deadline):
+            return _metadata(root, _revision(revision), lambda: cls._fetch_episodes_uncached(root))
+
+    @classmethod
+    def _fetch_episodes_uncached(cls, url):
         soup = _page_soup(url)
         data = _initial_data(soup, url)
         series_id, _ = _video_parts(url)
@@ -357,6 +570,7 @@ class HuangguoBrowser:
         date = _detail_date(soup, data)
         items, seen = [], set()
         for anchor in soup.select('[data-web-play] a.hg-web-play__ep[data-ep-id][href]'):
+            _check_control()
             episode_url = canonical_url(urljoin(url, anchor.get('href', '')))
             parts = _video_parts(episode_url)
             if (not parts or parts[0] != series_id or
@@ -375,16 +589,21 @@ class HuangguoBrowser:
         return sorted(items, key=lambda item: item['episode'])
 
     @classmethod
-    def fetch_page(cls, url):
+    def fetch_page(cls, url, *, cancel_check=None, deadline=None):
         if not cls.is_listing_url(url):
             return []
+        limit = time.monotonic() + _MAX_PAGE_EXPANSION_SECONDS
+        with _operation(cancel_check, min(limit, deadline) if deadline is not None else limit):
+            return cls._fetch_page(url)
+
+    @classmethod
+    def _fetch_page(cls, url):
         cards = _parse_videos(_page_soup(url), url)
         items, seen = [], set()
-        started = time.monotonic()
         for card in cards:
-            if time.monotonic() - started > _MAX_PAGE_EXPANSION_SECONDS:
-                raise ValueError('Huangguo episode expansion timed out; retry the page')
-            for item in cls.fetch_episodes(card['url']):
+            _check_control()
+            for item in cls.fetch_episodes(card['url'], revision=card.get('_series_revision') or None):
+                _check_control()
                 if item['url'] not in seen:
                     seen.add(item['url'])
                     if len(seen) > _MAX_EPISODES_PER_PAGE:
@@ -396,12 +615,12 @@ class HuangguoBrowser:
         return items
 
     @classmethod
-    def fetch_video_date(cls, url):
+    def fetch_video_date(cls, url, *, cancel_check=None, deadline=None):
         url = canonical_url(url)
         if not url:
             return ''
-        soup = _page_soup(url)
-        return _detail_date(soup, _initial_data(soup, url))
+        episodes = cls.fetch_episodes(url, cancel_check=cancel_check, deadline=deadline)
+        return episodes[0]['date'] if episodes else ''
 
     @classmethod
     def page_url(cls, base, page):

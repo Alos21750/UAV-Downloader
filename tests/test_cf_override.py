@@ -1,6 +1,8 @@
 import sys
 import types
 
+import pytest
+
 
 def _stub_runtime_dependency(name, factory=None):
     try:
@@ -173,16 +175,9 @@ def test_fetch_with_mirrors_falls_back_to_plain_after_blocked_cookie_trial(tmp_p
     assert scraper.calls[1][1] is None
 
     scraper = FakeScraper([403, 403])
-    resp, host, reason = fetch_with_mirrors(
-        scraper,
-        'https://supjav.com/1.html',
-        't',
-        validate=lambda r: True,
-    )
-
-    assert resp is None
-    assert host is None
-    assert reason == 'blocked'
+    with pytest.raises(RuntimeError, match='HTTP 403'):
+        fetch_with_mirrors(
+            scraper, 'https://supjav.com/1.html', 't', validate=lambda r: True)
     assert len(scraper.calls) == 2
 
 
@@ -214,14 +209,13 @@ def test_fetch_with_mirrors_waits_out_rate_limit_on_same_host(tmp_path, monkeypa
     assert len(scraper.calls) == 2
 
 
-def test_fetch_with_mirrors_reports_blocked_after_rate_limit_waits_run_out(tmp_path, monkeypatch):
+def test_fetch_with_mirrors_reports_http_after_rate_limit_waits_run_out(tmp_path, monkeypatch):
     sleeps = _rate_limit_env(monkeypatch, tmp_path)
     scraper = FakeScraper([429, 429, 429, 200])
 
-    resp, host, reason = fetch_with_mirrors(
-        scraper, 'https://supjav.com/?s=x', 't', validate=lambda r: True)
-
-    assert (resp, host, reason) == (None, None, 'blocked')
+    with pytest.raises(RuntimeError, match='HTTP 429'):
+        fetch_with_mirrors(
+            scraper, 'https://supjav.com/?s=x', 't', validate=lambda r: True)
     assert sleeps == [10, 20]
     assert len(scraper.calls) == 3
 
@@ -229,14 +223,16 @@ def test_fetch_with_mirrors_reports_blocked_after_rate_limit_waits_run_out(tmp_p
 def test_fetch_with_mirrors_does_not_wait_on_403_or_unlisted_sites(tmp_path, monkeypatch):
     sleeps = _rate_limit_env(monkeypatch, tmp_path)
     scraper = FakeScraper([403])
-    assert fetch_with_mirrors(
-        scraper, 'https://supjav.com/1.html', 't', validate=lambda r: True)[2] == 'blocked'
+    with pytest.raises(RuntimeError, match='HTTP 403'):
+        fetch_with_mirrors(
+            scraper, 'https://supjav.com/1.html', 't', validate=lambda r: True)
     assert sleeps == []
 
     monkeypatch.setattr(config, 'RATE_LIMIT_WAITS', {})
     scraper = FakeScraper([429])
-    assert fetch_with_mirrors(
-        scraper, 'https://supjav.com/1.html', 't', validate=lambda r: True)[2] == 'blocked'
+    with pytest.raises(RuntimeError, match='HTTP 429'):
+        fetch_with_mirrors(
+            scraper, 'https://supjav.com/1.html', 't', validate=lambda r: True)
     assert sleeps == []
     assert len(scraper.calls) == 1
 
@@ -263,7 +259,8 @@ def test_fetch_with_mirrors_retries_one_transport_error_only(tmp_path, monkeypat
     assert len(scraper.calls) == 2
 
     scraper = FlakyScraper(failures=5)
-    assert fetch_with_mirrors(
-        scraper, 'https://supjav.com/1.html', 't', validate=lambda r: True)[2] == 'blocked'
+    with pytest.raises(RuntimeError, match='Network/proxy'):
+        fetch_with_mirrors(
+            scraper, 'https://supjav.com/1.html', 't', validate=lambda r: True)
     assert len(scraper.calls) == 2
     assert sleeps == []

@@ -38,6 +38,14 @@
 
 ## Three workflows, one download core
 
+### v3.5.0: responsiveness and reliability
+
+- Bounded, short-lived in-memory Huangguo episode metadata caching and concurrent request sharing; update markers invalidate entries. Playback URLs and authentication headers are never cached.
+- Page changes, scan cancellation, and Watcher stop now reach Huangguo metadata work. Pending network calls may still take their bounded timeout. Offset-aware update dates use the Taipei calendar date.
+- Watcher builds each site's categories on demand in small batches and debounces filtering, while preserving selections for unopened sites and per-site destination/date settings.
+- Distinguishes proxy/network failures, ordinary HTTP errors, and site challenges; fixes query-only HLS child URLs after manifest redirects.
+- See the [issue/PR audit](docs/maintenance/2026-11-10-issue-audit.md) and [HGhub design/license review](docs/hghub-review.md). UAV remains Apache-2.0; no HGhub noncommercial implementation was copied.
+
 ### New in v3.4.0: Huangguo short dramas
 
 - Public Huangguo episode URLs work in Browser, Watcher, CLI, and the Web download queue.
