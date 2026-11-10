@@ -2389,6 +2389,9 @@ class SmallToolApp(ctk.CTk):
 
     def _reflow_category_grid(self):
         self._resize_after_id = None
+        # grid_configure can remap a previously grid-removed checkbox.
+        for group in self.__dict__.get('_filter_groups', []):
+            group['item_visibility'] = {}
         for widgets in self._category_groups:
             for index, widget in enumerate(widgets):
                 try:
@@ -3279,7 +3282,7 @@ class SmallToolApp(ctk.CTk):
         if not self._category_site_views[site]['complete']:
             gen, epoch = self._build_gen, self._category_render_epoch
             self._category_build_after_id = self.after(
-                1, lambda: self._run_category_build_batch(site, gen, epoch))
+                16, lambda: self._run_category_build_batch(site, gen, epoch))
 
     def _run_category_build_batch(self, site, gen, epoch):
         if (self._is_closing or gen != self._build_gen or
@@ -3296,10 +3299,10 @@ class SmallToolApp(ctk.CTk):
                 break
             if time.monotonic() >= deadline:
                 break
-        self._filter_targets()
         if not view['complete']:
+            # Give Tk's geometry/paint idle tasks a turn between batches.
             self._category_build_after_id = self.after(
-                1, lambda: self._run_category_build_batch(site, gen, epoch))
+                16, lambda: self._run_category_build_batch(site, gen, epoch))
 
     def _iter_category_widgets(self, site_name):
         inner = ctk.CTkScrollableFrame(
@@ -3311,7 +3314,6 @@ class SmallToolApp(ctk.CTk):
             group_frame = ctk.CTkFrame(
                 inner, fg_color=BG_SECTION, corner_radius=8,
                 border_width=1, border_color=BORDER_CARD)
-            group_frame.pack(fill='x', padx=4, pady=5)
             group_header = ctk.CTkFrame(group_frame, fg_color='transparent')
             group_header.pack(fill='x', padx=12, pady=(9, 5))
             ctk.CTkLabel(
@@ -3333,8 +3335,10 @@ class SmallToolApp(ctk.CTk):
                 cat_grid.grid_columnconfigure(col, weight=1)
             group_widgets, filter_items = [], []
             self._category_groups.append(group_widgets)
-            self._filter_groups.append({
-                'site': site_name, 'frame': group_frame, 'items': filter_items})
+            filter_group = {
+                'site': site_name, 'frame': group_frame, 'items': filter_items,
+                'visible': False, 'item_visibility': {}}
+            self._filter_groups.append(filter_group)
             yield
             for index, target in enumerate(group['targets']):
                 label = target_label(target)
@@ -3353,6 +3357,13 @@ class SmallToolApp(ctk.CTk):
                 self._target_widgets.append((cb, label.casefold()))
                 group_widgets.append(cb)
                 filter_items.append((cb, label.casefold()))
+                query = self._category_filter_var.get().strip().casefold()
+                matches = not query or query in label.casefold()
+                filter_group['item_visibility'][cb] = matches
+                if matches:
+                    self._set_category_group_visible(filter_group, True)
+                else:
+                    cb.grid_remove()
                 yield
 
     def _schedule_category_filter(self, *_args):
@@ -3422,36 +3433,46 @@ class SmallToolApp(ctk.CTk):
     def _filter_targets(self, *_args):
         query = self._category_filter_var.get().strip().casefold()
         active_site = self._active_category_site()
-        visibility = []
         for group in self._filter_groups:
             if active_site and group.get('site', active_site) != active_site:
                 continue
             group_matches = False
+            item_visibility = group.setdefault('item_visibility', {})
             for widget, label in group['items']:
                 try:
                     matches = not query or query in label
-                    if matches:
-                        widget.grid()
-                        group_matches = True
-                    else:
-                        widget.grid_remove()
+                    group_matches = group_matches or matches
+                    if matches != item_visibility.get(widget, True):
+                        if matches:
+                            widget.grid()
+                        else:
+                            widget.grid_remove()
+                    item_visibility[widget] = matches
                 except tk.TclError:
                     pass
-            visibility.append((group, group_matches))
+            self._set_category_group_visible(group, group_matches)
 
-        # Repack in registry order so empty groups do not leave large blank areas.
-        for group, _matches in visibility:
-            try:
+    def _set_category_group_visible(self, group, visible):
+        """Change only this frame; never blank/repack the whole category tab."""
+        if group.get('visible', True) == visible:
+            return
+        try:
+            if not visible:
                 group['frame'].pack_forget()
-            except tk.TclError:
-                pass
-        for group, matches in visibility:
-            if not matches:
-                continue
-            try:
-                group['frame'].pack(fill='x', padx=4, pady=5)
-            except tk.TclError:
-                pass
+            else:
+                options = {}
+                found = False
+                for following in self._filter_groups:
+                    if following is group:
+                        found = True
+                    elif (found and following.get('site') == group.get('site')
+                          and following.get('visible', True)):
+                        options['before'] = following['frame']
+                        break
+                group['frame'].pack(fill='x', padx=4, pady=5, **options)
+            group['visible'] = visible
+        except tk.TclError:
+            pass
 
     def _toggle_select_group(self, site_name: str, group_id: str):
         all_key = f'{site_name}|__group__|{group_id}'

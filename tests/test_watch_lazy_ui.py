@@ -23,17 +23,34 @@ class Widget:
 
     def __init__(self, *args, **kwargs):
         self.kwargs = kwargs
-        self.visible = True
+        self.visible = False
         self.tabs = {}
         self.selected = ''
+        self.grid_calls = 0
+        self.grid_remove_calls = 0
+        self.pack_calls = 0
+        self.pack_forget_calls = 0
+        self.last_pack = {}
         Widget.created.append(self)
 
-    def pack(self, **kwargs): self.visible = True
-    def pack_forget(self): self.visible = False
+    def pack(self, **kwargs):
+        self.visible = True
+        self.pack_calls += 1
+        self.last_pack = kwargs
+    def pack_forget(self):
+        self.visible = False
+        self.pack_forget_calls += 1
     def configure(self, **kwargs): self.kwargs.update(kwargs)
-    def grid(self, **kwargs): self.visible = True
-    def grid_remove(self): self.visible = False
-    def grid_configure(self, **kwargs): self.kwargs.update(kwargs)
+    def grid(self, **kwargs):
+        self.visible = True
+        self.grid_calls += 1
+    def grid_remove(self):
+        self.visible = False
+        self.grid_remove_calls += 1
+    def grid_configure(self, **kwargs):
+        self.kwargs.update(kwargs)
+        # Tk grid configure remaps a previously grid-removed child.
+        self.visible = True
     def grid_columnconfigure(self, *args, **kwargs): pass
     def add(self, name):
         self.tabs[name] = Widget()
@@ -53,9 +70,10 @@ def lazy_app(monkeypatch):
         _check_vars={}, _category_groups=[], _filter_groups=[], _target_widgets=[],
         _category_columns=3, _build_gen=0, _is_closing=False,
         _category_filter_var=Var(value=''), _selected_count_lbl=Widget(),
-        pending={}, next_id=0)
+        pending={}, next_id=0, scheduled_delays=[])
 
     def after(_delay, callback):
+        app.scheduled_delays.append(_delay)
         app.next_id += 1
         app.pending[app.next_id] = callback
         return app.next_id
@@ -68,6 +86,7 @@ def lazy_app(monkeypatch):
         '_schedule_category_filter', '_filter_targets', '_update_selected_count',
         '_toggle_select_group', '_sync_group_select', '_sync_select_all_vars',
         '_get_selected_targets', '_restore_target_checks',
+        '_set_category_group_visible', '_reflow_category_grid',
     ):
         setattr(app, name, MethodType(getattr(watch.SmallToolApp, name), app))
     app._build_category_tabs(Widget(), 'Arial')
@@ -214,3 +233,98 @@ def test_late_materialization_observes_already_selected_target_variables(lazy_ap
     selected_checkbox = next(widget for widget, _label in app._target_widgets
                              if widget.kwargs['variable'] is app._check_vars[key])
     assert selected_checkbox.kwargs['variable'].get() is True
+
+
+def test_first_visit_geometry_work_is_linear_without_blank_repacking(lazy_app):
+    app = lazy_app
+    app._category_tabview.set(app._category_tab_names['Hanime1'])
+    app._on_category_tab_changed()
+    drain(app)
+    widgets = [widget for widget, _label in app._target_widgets]
+    assert len(widgets) == 272
+    assert sum(widget.grid_calls for widget in widgets) == 272
+    assert sum(widget.grid_remove_calls for widget in widgets) == 0
+    groups = [group['frame'] for group in app._filter_groups]
+    assert len(groups) == 13
+    assert sum(frame.pack_calls for frame in groups) == 13
+    assert sum(frame.pack_forget_calls for frame in groups) == 0
+    assert all(delay >= 16 for delay in app.scheduled_delays)
+
+
+def test_unchanged_filter_never_regrids_or_repacks_existing_content(lazy_app):
+    app = lazy_app
+    drain(app)
+    before = [(w.grid_calls, w.grid_remove_calls, w.pack_calls, w.pack_forget_calls)
+              for w in Widget.created]
+    app._filter_targets()
+    app._filter_targets()
+    after = [(w.grid_calls, w.grid_remove_calls, w.pack_calls, w.pack_forget_calls)
+             for w in Widget.created]
+    assert after == before
+
+
+def test_new_widgets_honor_filter_without_touching_prior_batches(lazy_app):
+    app = lazy_app
+    app._category_filter_var.set('no-such-category-fixture')
+    step(app)
+    prior_widgets = [widget for widget, _label in app._target_widgets]
+    before = [(w.grid_calls, w.grid_remove_calls) for w in prior_widgets]
+    step(app)
+    assert [(w.grid_calls, w.grid_remove_calls) for w in prior_widgets] == before
+    assert all(not widget.visible for widget, _label in app._target_widgets)
+    assert all(not group['frame'].visible for group in app._filter_groups)
+
+
+def test_filter_reinserts_only_changed_group_before_later_visible_group(lazy_app):
+    app = lazy_app
+    drain(app)
+    first, later = app._filter_groups[:2]
+    # Give one earlier group a nonmatching label while keeping later groups.
+    first['items'] = [(widget, 'first-only') for widget, _label in first['items']]
+    for group in app._filter_groups[1:]:
+        group['items'] = [(widget, 'later-only') for widget, _label in group['items']]
+    app._category_filter_var.set('later-only')
+    app._filter_targets()
+    assert first['frame'].visible is False
+    later_counts = (later['frame'].pack_calls, later['frame'].pack_forget_calls)
+    app._category_filter_var.set('')
+    app._filter_targets()
+    assert first['frame'].last_pack['before'] is later['frame']
+    assert (later['frame'].pack_calls, later['frame'].pack_forget_calls) == later_counts
+
+
+def test_render_batches_never_run_a_full_filter_pass(lazy_app):
+    app = lazy_app
+    app._filter_targets = lambda: pytest.fail('Full filtering inside render batch')
+    drain(app)
+    assert len(app._target_widgets) == 129
+
+
+def test_resize_preserves_hidden_checkboxes_without_repacking_groups(lazy_app):
+    app = lazy_app
+    drain(app)
+    app._category_filter_var.set('no-such-category-fixture')
+    app._filter_targets()
+    before = [(group['frame'].pack_calls, group['frame'].pack_forget_calls)
+              for group in app._filter_groups]
+    hidden_before = [widget.grid_remove_calls for widget, _label in app._target_widgets]
+    app._category_columns = 2
+    app._reflow_category_grid()
+    assert all(not widget.visible for widget, _label in app._target_widgets)
+    assert [widget.grid_remove_calls for widget, _label in app._target_widgets] == [
+        calls + 1 for calls in hidden_before]
+    assert [(group['frame'].pack_calls, group['frame'].pack_forget_calls)
+            for group in app._filter_groups] == before
+
+
+def test_filter_change_during_build_applies_once_to_existing_and_new_items(lazy_app):
+    app = lazy_app
+    app._category_filter_var.set('no-such-category-fixture')
+    step(app)
+    old_widgets = [widget for widget, _label in app._target_widgets]
+    app._category_filter_var.set('')
+    app._filter_targets()
+    old_counts = [(w.grid_calls, w.grid_remove_calls) for w in old_widgets]
+    step(app)
+    assert all(widget.visible for widget, _label in app._target_widgets)
+    assert [(w.grid_calls, w.grid_remove_calls) for w in old_widgets] == old_counts
