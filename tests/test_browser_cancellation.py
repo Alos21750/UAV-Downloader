@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from uav_downloader.core import task_queue
 from uav_downloader.apps import browse
 
 
@@ -49,7 +50,7 @@ def test_superseded_huangguo_page_stops_without_ui_publication(monkeypatch):
         assert cancel_check()
         raise CancelledError()
 
-    monkeypatch.setattr(browse.threading, 'Thread', Thread)
+    monkeypatch.setattr(task_queue.threading, 'Thread', Thread)
     monkeypatch.setattr(browse.HuangguoBrowser, 'fetch_page', fetch)
     browse.ModernApp._load_page(app)
     assert callbacks == []
@@ -76,7 +77,7 @@ def test_select_all_huangguo_cancellation_reaches_request(monkeypatch):
         assert cancel_check()
         raise CancelledError()
 
-    monkeypatch.setattr(browse.threading, 'Thread', Thread)
+    monkeypatch.setattr(task_queue.threading, 'Thread', Thread)
     monkeypatch.setattr(browse.HuangguoBrowser, 'fetch_page', fetch)
     browse.ModernApp._select_all_results(app)
     assert len(reached) == 1

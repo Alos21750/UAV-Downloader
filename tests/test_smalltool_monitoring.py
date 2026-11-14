@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from uav_downloader.core import watcher
 from uav_downloader.apps import watch as jable_smalltool
 from uav_downloader.apps.watch_categories import find_target
 from uav_downloader.core.video_identity import trusted_chinese_subtitle_evidence
@@ -21,13 +22,13 @@ def _exact_missav_targets():
 
 def test_exact_missav_monitoring_run_reports_scan_and_downloads(monkeypatch,
                                                                  tmp_path):
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
 
     logs = []
     statuses = []
-    worker = jable_smalltool.SmallToolWorker(
+    worker = watcher.SmallToolWorker(
         logs.append, lambda key, _color: statuses.append(key))
     scan_states = []
     original_set_scan_state = worker._set_scan_state
@@ -79,14 +80,14 @@ def test_exact_missav_monitoring_run_reports_scan_and_downloads(monkeypatch,
 
 def test_incomplete_download_keeps_first_run_pending_for_next_check(
         monkeypatch, tmp_path):
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
-    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'MAX_SCAN_PAGES', 1)
 
     logs = []
-    worker = jable_smalltool.SmallToolWorker(logs.append)
+    worker = watcher.SmallToolWorker(logs.append)
     worker._fetch_page_for_site = lambda _site, _url: [{
         'url': 'https://missav.ws/sample-001',
         'title': 'SAMPLE-001 title',
@@ -108,12 +109,12 @@ def test_incomplete_download_keeps_first_run_pending_for_next_check(
 
 def test_worker_uses_independent_dates_and_output_folders_per_site(
         monkeypatch, tmp_path):
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
-    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'MAX_SCAN_PAGES', 1)
 
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     worker._fetch_page_for_site = lambda site, _url: [{
         'url': (
             'https://jable.tv/videos/jable-sample/' if site == 'JableTV'
@@ -160,11 +161,11 @@ def test_worker_uses_independent_dates_and_output_folders_per_site(
 
 def test_active_scan_uses_latest_hanime_output_folder(monkeypatch, tmp_path):
     """A folder saved while an automatic scan is running applies immediately."""
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
-    monkeypatch.setattr(jable_smalltool, 'DAILY_SCAN_PAGES', 1)
-    monkeypatch.setattr(jable_smalltool, 'update_config', lambda *_a, **_k: None)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'DAILY_SCAN_PAGES', 1)
+    monkeypatch.setattr(watcher, 'update_config', lambda *_a, **_k: None)
 
     shared = tmp_path / 'shared'
     hanime = tmp_path / 'hanime'
@@ -192,7 +193,7 @@ def test_active_scan_uses_latest_hanime_output_folder(monkeypatch, tmp_path):
     def fake_load_config():
         return latest if settings_saved['value'] else initial
 
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
 
     def fake_fetch(_site, _url):
         settings_saved['value'] = True
@@ -206,7 +207,7 @@ def test_active_scan_uses_latest_hanime_output_folder(monkeypatch, tmp_path):
     downloaded = []
     worker._download_one = lambda video, dest: downloaded.append(
         (video['_site'], dest))
-    monkeypatch.setattr(jable_smalltool, 'load_config', fake_load_config)
+    monkeypatch.setattr(watcher, 'load_config', fake_load_config)
 
     assert worker._perform_scan(worker.run_generation) is True
     assert downloaded == [('Hanime1', str(hanime))]
@@ -240,7 +241,7 @@ def test_missav_same_code_uses_selected_version_regardless_of_order():
             ('standard', standard)):
         for ordered in ([standard, subtitle, leaked, unrelated],
                         [leaked, subtitle, standard, unrelated]):
-            kept, decisions = jable_smalltool._dedupe_missav_candidates(
+            kept, decisions = watcher._dedupe_missav_candidates(
                 ordered, preference)
             kept_urls = [video['url'] for video in kept]
 
@@ -251,22 +252,22 @@ def test_missav_same_code_uses_selected_version_regardless_of_order():
             assert all(code == 'mimk-284'
                        for _dropped, _kept, code in decisions)
 
-    default_kept, _ = jable_smalltool._dedupe_missav_candidates(
+    default_kept, _ = watcher._dedupe_missav_candidates(
         [standard, leaked, subtitle])
     assert default_kept == [subtitle]
 
-    assert jable_smalltool._missav_video_code(unrelated) == 'fc2-ppv-1234567'
+    assert watcher._missav_video_code(unrelated) == 'fc2-ppv-1234567'
 
 
 def test_worker_defaults_to_chinese_subtitle_for_duplicate_missav_code(
         monkeypatch, tmp_path):
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
 
     logs = []
-    worker = jable_smalltool.SmallToolWorker(logs.append)
+    worker = watcher.SmallToolWorker(logs.append)
     worker._fetch_page_for_site = lambda _site, url: ([] if 'page=2' in url else [
         {'url': 'https://missav.ai/hone-297', 'title': 'HONE-297'},
         {'url': 'https://missav.ai/hone-297-uncensored-leak', 'title': 'HONE-297'},
@@ -299,13 +300,13 @@ def test_worker_defaults_to_chinese_subtitle_for_duplicate_missav_code(
 
 def test_chinese_preference_scans_missav_genre_filter_before_fallback(
         monkeypatch, tmp_path):
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
-    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'MAX_SCAN_PAGES', 1)
 
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     fetch_calls = []
 
     def fake_fetch(_site, url):
@@ -343,7 +344,7 @@ def test_chinese_preference_scans_missav_genre_filter_before_fallback(
 def test_changed_preference_reconsiders_version_skipped_by_dedup(
         monkeypatch, tmp_path):
     subtitle_url = 'https://missav.ai/mimk-284-chinese-subtitle'
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {
         'https://missav.ai/mimk-284': {
             'title': 'MIMK-284', 'skipped': False,
         },
@@ -352,11 +353,11 @@ def test_changed_preference_reconsiders_version_skipped_by_dedup(
             'reason': 'duplicate-version',
         },
     })
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
 
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     worker._fetch_page_for_site = lambda _site, url: ([] if 'page=2' in url else [
         {'url': subtitle_url, 'title': 'MIMK-284'},
     ])
@@ -387,13 +388,13 @@ def _target(site, target_id):
 
 def test_worker_dedupes_same_code_across_categories_and_all_sites(
         monkeypatch, tmp_path):
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
-    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'MAX_SCAN_PAGES', 1)
 
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
 
     def fake_fetch(site, url):
         if site == 'JableTV':
@@ -448,13 +449,13 @@ def test_worker_dedupes_same_code_across_categories_and_all_sites(
 
 def test_worker_same_url_preserves_trusted_chinese_listing_evidence(
         monkeypatch, tmp_path):
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
-    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'MAX_SCAN_PAGES', 1)
 
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     video_url = 'https://jable.tv/videos/ipzz-905/'
     worker._fetch_page_for_site = lambda _site, _url: [{
         'url': video_url,
@@ -485,18 +486,18 @@ def test_worker_same_url_preserves_trusted_chinese_listing_evidence(
 def test_prior_preferred_download_blocks_cross_site_duplicate(
         monkeypatch, tmp_path):
     existing_url = 'https://jable.tv/videos/ipzz-905/'
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {
         existing_url: {
             'title': 'IPZZ-905', 'skipped': False, 'site': 'JableTV',
             'code': 'ipzz-905', 'versions': ['chinese-subtitle'],
         },
     })
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
-    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'MAX_SCAN_PAGES', 1)
 
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     candidate_url = 'https://missav.ai/ipzz-905-chinese-subtitle'
     worker._fetch_page_for_site = lambda _site, _url: [{
         'url': candidate_url, 'title': 'IPZZ-905',
@@ -522,17 +523,17 @@ def test_prior_preferred_download_blocks_cross_site_duplicate(
 def test_new_preferred_cross_site_version_upgrades_prior_download(
         monkeypatch, tmp_path):
     existing_url = 'https://jable.tv/videos/ipzz-905/'
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {
         existing_url: {
             'title': 'IPZZ-905', 'skipped': False, 'site': 'JableTV',
             'code': 'ipzz-905', 'versions': ['standard'],
         },
     })
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'MAX_SCAN_PAGES', 1)
 
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     preferred_url = 'https://supjav.com/440577.html'
     worker._fetch_page_for_site = lambda _site, _url: [{
         'url': preferred_url, 'title': '[Reducing Mosaic] IPZZ-905',
@@ -556,18 +557,18 @@ def test_new_preferred_cross_site_version_upgrades_prior_download(
 
 def test_changed_preference_reconsiders_supjav_duplicate(monkeypatch, tmp_path):
     preferred_url = 'https://supjav.com/440577.html'
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {
         preferred_url: {
             'title': '[Reducing Mosaic] IPZZ-905', 'skipped': True,
             'reason': 'duplicate-version', 'site': 'SupJav',
             'code': 'ipzz-905', 'versions': ['reducing-mosaic'],
         },
     })
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'MAX_SCAN_PAGES', 1)
 
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     worker._fetch_page_for_site = lambda _site, _url: [{
         'url': preferred_url, 'title': '[Reducing Mosaic] IPZZ-905',
         'date': '2026/07/12',
@@ -590,7 +591,7 @@ def test_changed_preference_reconsiders_supjav_duplicate(monkeypatch, tmp_path):
 def test_earlier_baseline_reconsiders_previously_too_old_video(
         monkeypatch, tmp_path):
     video_url = 'https://supjav.com/440577.html'
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {
         video_url: {
             'title': 'IPZZ-905', 'skipped': True,
             'reason': 'before-baseline', 'release_date': '2026-01-01',
@@ -598,11 +599,11 @@ def test_earlier_baseline_reconsiders_previously_too_old_video(
             'versions': ['standard'],
         },
     })
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'MAX_SCAN_PAGES', 1)
 
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     worker._fetch_page_for_site = lambda _site, _url: [{
         'url': video_url, 'title': 'IPZZ-905', 'date': '2026/01/01',
     }]
@@ -628,14 +629,14 @@ def test_same_baseline_keeps_previously_too_old_video_skipped(
         'reason': 'before-baseline', 'release_date': '2026-01-01',
         'site': 'SupJav', 'code': 'ipzz-905', 'versions': ['standard'],
     }
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {
         video_url: dict(original_entry),
     })
-    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
-    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(watcher, 'MAX_SCAN_PAGES', 1)
 
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     worker._fetch_page_for_site = lambda _site, _url: [{
         'url': video_url, 'title': 'IPZZ-905', 'date': '2026/01/01',
     }]
@@ -719,7 +720,7 @@ def test_monitoring_can_collapse_and_restore_category_panel():
     assert app._category_tabview.packed is False
     assert app._category_filter_box.packed is False
     assert app._selection_panel.pack_kwargs == {'fill': 'x', 'expand': False}
-    assert app._categories_toggle_btn.config['text'] == jable_smalltool.T(
+    assert app._categories_toggle_btn.config['text'] == watcher.T(
         'st_categories_expand')
 
     app._set_categories_collapsed(False)
@@ -729,5 +730,5 @@ def test_monitoring_can_collapse_and_restore_category_panel():
     assert app._category_filter_box.packed is True
     assert app._selection_panel.pack_kwargs == {
         'fill': 'both', 'expand': True}
-    assert app._categories_toggle_btn.config['text'] == jable_smalltool.T(
+    assert app._categories_toggle_btn.config['text'] == watcher.T(
         'st_categories_collapse')

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from uav_downloader.core import task_queue, watcher
 from uav_downloader.apps import browse as gui_modern
 from uav_downloader.apps import watch as jable_smalltool
 from uav_downloader import core, subtitles
@@ -171,14 +172,14 @@ def test_watcher_preserves_valid_segments_for_incomplete_retry(
             self._temp_folder = str(temp_folder)
 
         def start_download(self):
-            raise jable_smalltool.DownloadIncompleteError(1)
+            raise watcher.DownloadIncompleteError(1)
 
     job = IncompleteDownloadJob()
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
     monkeypatch.setattr(
-        jable_smalltool.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
+        watcher.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
     logs = []
-    worker = jable_smalltool.SmallToolWorker(logs.append)
+    worker = watcher.SmallToolWorker(logs.append)
     marked = []
     worker._mark_seen = lambda *args, **kwargs: marked.append(args)
 
@@ -198,7 +199,7 @@ def test_modern_manager_runs_selected_subtitle_mode(monkeypatch, tmp_path):
     video = tmp_path / 'sample.mp4'
     video.write_bytes(b'video')
     job = FakeDownloadJob(video)
-    monkeypatch.setattr(gui_modern.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
+    monkeypatch.setattr(task_queue.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
     calls = []
 
     def fake_generate(path, mode, progress_callback=None, cancel_check=None):
@@ -206,8 +207,8 @@ def test_modern_manager_runs_selected_subtitle_mode(monkeypatch, tmp_path):
         progress_callback('transcribe_ja', None)
         return SubtitleResult((str(tmp_path / 'sample.ja.srt'),), ())
 
-    monkeypatch.setattr(gui_modern, 'generate_subtitles', fake_generate)
-    manager = gui_modern.DownloadManager(subtitle_mode_getter=lambda: 'ja')
+    monkeypatch.setattr(task_queue, 'generate_subtitles', fake_generate)
+    manager = task_queue.DownloadManager(subtitle_mode_getter=lambda: 'ja')
     manager.add_item('https://jable.tv/videos/sample/', state='等待中')
 
     manager._run('https://jable.tv/videos/sample/', str(tmp_path), epoch=0)
@@ -246,7 +247,7 @@ def test_modern_passes_trusted_source_evidence_and_accepts_source_satisfied_zh(
     video.write_bytes(b'video')
     job = FakeDownloadJob(video)
     monkeypatch.setattr(
-        gui_modern.M3U8Sites, 'CreateSite',
+        task_queue.M3U8Sites, 'CreateSite',
         lambda _url, _dest: job)
     calls = []
 
@@ -256,8 +257,8 @@ def test_modern_passes_trusted_source_evidence_and_accepts_source_satisfied_zh(
         return SubtitleResult(
             (), (), satisfied_by_source=('zh-TW',))
 
-    monkeypatch.setattr(gui_modern, 'generate_subtitles', fake_generate)
-    manager = gui_modern.DownloadManager(
+    monkeypatch.setattr(task_queue, 'generate_subtitles', fake_generate)
+    manager = task_queue.DownloadManager(
         subtitle_mode_getter=lambda: 'zh')
     manager.add_item(
         url,
@@ -280,12 +281,12 @@ def test_modern_keeps_video_and_surfaces_subtitle_failure(monkeypatch, tmp_path)
     video = tmp_path / 'sample.mp4'
     video.write_bytes(b'video')
     monkeypatch.setattr(
-        gui_modern.M3U8Sites, 'CreateSite',
+        task_queue.M3U8Sites, 'CreateSite',
         lambda _url, _dest: FakeDownloadJob(video))
     monkeypatch.setattr(
-        gui_modern, 'generate_subtitles',
+        task_queue, 'generate_subtitles',
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('offline')))
-    manager = gui_modern.DownloadManager(subtitle_mode_getter=lambda: 'zh')
+    manager = task_queue.DownloadManager(subtitle_mode_getter=lambda: 'zh')
     manager.add_item('https://jable.tv/videos/sample/', state='等待中')
 
     manager._run('https://jable.tv/videos/sample/', str(tmp_path), epoch=0)
@@ -304,12 +305,12 @@ def test_modern_no_speech_is_a_non_error_terminal_result(monkeypatch, tmp_path):
     video = tmp_path / 'silent.mp4'
     video.write_bytes(b'video')
     monkeypatch.setattr(
-        gui_modern.M3U8Sites, 'CreateSite',
+        task_queue.M3U8Sites, 'CreateSite',
         lambda _url, _dest: FakeDownloadJob(video))
     monkeypatch.setattr(
-        gui_modern, 'generate_subtitles',
+        task_queue, 'generate_subtitles',
         lambda *_args, **_kwargs: SubtitleResult((), (), no_speech=True))
-    manager = gui_modern.DownloadManager(subtitle_mode_getter=lambda: 'ja')
+    manager = task_queue.DownloadManager(subtitle_mode_getter=lambda: 'ja')
     manager.add_item('https://jable.tv/videos/silent/', state='等待中')
 
     manager._run(
@@ -329,12 +330,12 @@ def test_modern_empty_subtitle_result_is_not_silent_success(
     video = tmp_path / 'empty.mp4'
     video.write_bytes(b'video')
     monkeypatch.setattr(
-        gui_modern.M3U8Sites, 'CreateSite',
+        task_queue.M3U8Sites, 'CreateSite',
         lambda _url, _dest: FakeDownloadJob(video))
     monkeypatch.setattr(
-        gui_modern, 'generate_subtitles',
+        task_queue, 'generate_subtitles',
         lambda *_args, **_kwargs: SubtitleResult((), ()))
-    manager = gui_modern.DownloadManager(subtitle_mode_getter=lambda: 'ja')
+    manager = task_queue.DownloadManager(subtitle_mode_getter=lambda: 'ja')
     manager.add_item('https://jable.tv/videos/empty/', state='等待中')
 
     manager._run(
@@ -377,7 +378,7 @@ def test_modern_download_slot_is_released_while_subtitles_run(
         second_url: SequencedJob(second_video, second_download_started),
     }
     monkeypatch.setattr(
-        gui_modern.M3U8Sites, 'CreateSite',
+        task_queue.M3U8Sites, 'CreateSite',
         lambda url, _dest: jobs[url])
 
     def slow_subtitles(path, _mode, progress_callback=None,
@@ -387,8 +388,8 @@ def test_modern_download_slot_is_released_while_subtitles_run(
             assert release_subtitle.wait(3)
         return SubtitleResult((), ())
 
-    monkeypatch.setattr(gui_modern, 'generate_subtitles', slow_subtitles)
-    manager = gui_modern.DownloadManager(
+    monkeypatch.setattr(task_queue, 'generate_subtitles', slow_subtitles)
+    manager = task_queue.DownloadManager(
         max_concurrent=1, subtitle_mode_getter=lambda: 'ja')
 
     manager.enqueue(first_url, str(tmp_path))
@@ -432,9 +433,9 @@ def test_modern_pending_download_queue_advances_after_refactor(
         second_url: BlockingJob(tmp_path / 'second.mp4', second_started),
     }
     monkeypatch.setattr(
-        gui_modern.M3U8Sites, 'CreateSite',
+        task_queue.M3U8Sites, 'CreateSite',
         lambda url, _dest: jobs[url])
-    manager = gui_modern.DownloadManager(
+    manager = task_queue.DownloadManager(
         max_concurrent=1, subtitle_mode_getter=lambda: 'none')
 
     manager.enqueue(first_url, str(tmp_path))
@@ -485,7 +486,7 @@ def test_modern_subtitle_queue_is_serial_and_dedupes_inflight_urls(
 
     jobs = {url: TrackedJob(url) for url in urls}
     monkeypatch.setattr(
-        gui_modern.M3U8Sites, 'CreateSite',
+        task_queue.M3U8Sites, 'CreateSite',
         lambda url, _dest: jobs[url])
 
     def serial_subtitles(path, _mode, progress_callback=None,
@@ -498,8 +499,8 @@ def test_modern_subtitle_queue_is_serial_and_dedupes_inflight_urls(
             assert release_subtitle.wait(3)
         return SubtitleResult((path + '.ja.srt',), ())
 
-    monkeypatch.setattr(gui_modern, 'generate_subtitles', serial_subtitles)
-    manager = gui_modern.DownloadManager(
+    monkeypatch.setattr(task_queue, 'generate_subtitles', serial_subtitles)
+    manager = task_queue.DownloadManager(
         max_concurrent=3, subtitle_mode_getter=lambda: 'ja')
 
     for url in urls:
@@ -543,7 +544,7 @@ def test_modern_cancel_all_cancels_queued_subtitles_and_blocks_stale_finish(
         path.write_bytes(b'video')
     jobs = {url: FakeDownloadJob(paths[url]) for url in urls}
     monkeypatch.setattr(
-        gui_modern.M3U8Sites, 'CreateSite',
+        task_queue.M3U8Sites, 'CreateSite',
         lambda url, _dest: jobs[url])
 
     subtitle_started = threading.Event()
@@ -558,8 +559,8 @@ def test_modern_cancel_all_cancels_queued_subtitles_and_blocks_stale_finish(
         progress_callback('translate_zh', 55)
         return SubtitleResult((), ())
 
-    monkeypatch.setattr(gui_modern, 'generate_subtitles', stubborn_subtitles)
-    manager = gui_modern.DownloadManager(
+    monkeypatch.setattr(task_queue, 'generate_subtitles', stubborn_subtitles)
+    manager = task_queue.DownloadManager(
         max_concurrent=2, subtitle_mode_getter=lambda: 'ja')
     for url in urls:
         manager.enqueue(url, str(tmp_path))
@@ -599,8 +600,8 @@ def test_modern_cancel_blocks_stale_download_progress(monkeypatch, tmp_path):
 
     job = StubbornDownloadJob(video)
     monkeypatch.setattr(
-        gui_modern.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
-    manager = gui_modern.DownloadManager(subtitle_mode_getter=lambda: 'none')
+        task_queue.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
+    manager = task_queue.DownloadManager(subtitle_mode_getter=lambda: 'none')
     manager.enqueue(url, str(tmp_path))
 
     assert download_started.wait(2)
@@ -619,10 +620,10 @@ def test_modern_cancel_blocks_stale_download_progress(monkeypatch, tmp_path):
 
 def test_modern_cancellation_dominates_stale_final_completion(tmp_path):
     download_url = 'https://jable.tv/videos/stale-download-finish/'
-    download_manager = gui_modern.DownloadManager()
+    download_manager = task_queue.DownloadManager()
     download_item = download_manager.add_item(
         download_url, state='下載中')
-    download_task = gui_modern._DownloadTask(
+    download_task = task_queue._DownloadTask(
         download_url, str(tmp_path), download_manager._cancel_epoch)
     with download_manager._lock:
         download_manager._active[download_url] = download_task
@@ -635,10 +636,10 @@ def test_modern_cancellation_dominates_stale_final_completion(tmp_path):
     assert download_item.progress == 0
 
     subtitle_url = 'https://jable.tv/videos/stale-subtitle-finish/'
-    subtitle_manager = gui_modern.DownloadManager()
+    subtitle_manager = task_queue.DownloadManager()
     subtitle_item = subtitle_manager.add_item(
         subtitle_url, state='字幕翻譯中')
-    subtitle_task = gui_modern._DownloadTask(
+    subtitle_task = task_queue._DownloadTask(
         subtitle_url, str(tmp_path), subtitle_manager._cancel_epoch)
     with subtitle_manager._lock:
         subtitle_manager._subtitle_active[subtitle_url] = subtitle_task
@@ -658,7 +659,7 @@ def test_modern_remove_active_subtitle_does_not_restore_removed_item(
     video.write_bytes(b'video')
     job = FakeDownloadJob(video)
     monkeypatch.setattr(
-        gui_modern.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
+        task_queue.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
 
     subtitle_started = threading.Event()
     release_subtitle = threading.Event()
@@ -668,8 +669,8 @@ def test_modern_remove_active_subtitle_does_not_restore_removed_item(
         assert release_subtitle.wait(3)
         return SubtitleResult((), ())
 
-    monkeypatch.setattr(gui_modern, 'generate_subtitles', slow_subtitles)
-    manager = gui_modern.DownloadManager(subtitle_mode_getter=lambda: 'ja')
+    monkeypatch.setattr(task_queue, 'generate_subtitles', slow_subtitles)
+    manager = task_queue.DownloadManager(subtitle_mode_getter=lambda: 'ja')
     manager.enqueue(url, str(tmp_path))
 
     assert subtitle_started.wait(2)
@@ -686,9 +687,9 @@ def test_smalltool_runs_subtitles_before_marking_seen(monkeypatch, tmp_path):
     video_path = tmp_path / 'sample.mp4'
     video_path.write_bytes(b'video')
     job = FakeDownloadJob(video_path)
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
     monkeypatch.setattr(
-        jable_smalltool.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
+        watcher.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
     calls = []
     subtitle_progress = []
 
@@ -699,8 +700,8 @@ def test_smalltool_runs_subtitles_before_marking_seen(monkeypatch, tmp_path):
         progress_callback('translate_zh', 100)
         return SubtitleResult((str(tmp_path / 'sample.zh-TW.srt'),), ())
 
-    monkeypatch.setattr(jable_smalltool, 'generate_subtitles', fake_generate)
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    monkeypatch.setattr(watcher, 'generate_subtitles', fake_generate)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     worker._subtitle_mode = 'zh'
     marked = []
     worker._mark_seen = lambda url, title, **kwargs: marked.append((url, title))
@@ -742,9 +743,9 @@ def test_smalltool_passes_category_evidence_and_marks_source_satisfied_zh_seen(
     video_path = tmp_path / 'sample.mp4'
     video_path.write_bytes(b'video')
     job = FakeDownloadJob(video_path)
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
     monkeypatch.setattr(
-        jable_smalltool.M3U8Sites, 'CreateSite',
+        watcher.M3U8Sites, 'CreateSite',
         lambda _url, _dest: job)
     calls = []
 
@@ -755,9 +756,9 @@ def test_smalltool_passes_category_evidence_and_marks_source_satisfied_zh_seen(
             (), (), satisfied_by_source=('zh-TW',))
 
     monkeypatch.setattr(
-        jable_smalltool, 'generate_subtitles', fake_generate)
+        watcher, 'generate_subtitles', fake_generate)
     logs = []
-    worker = jable_smalltool.SmallToolWorker(logs.append)
+    worker = watcher.SmallToolWorker(logs.append)
     worker._subtitle_mode = 'zh'
     marked = []
     worker._mark_seen = (
@@ -778,15 +779,15 @@ def test_smalltool_passes_category_evidence_and_marks_source_satisfied_zh_seen(
 def test_smalltool_no_speech_is_logged_and_marked_seen(monkeypatch, tmp_path):
     video_path = tmp_path / 'silent.mp4'
     video_path.write_bytes(b'video')
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
     monkeypatch.setattr(
-        jable_smalltool.M3U8Sites, 'CreateSite',
+        watcher.M3U8Sites, 'CreateSite',
         lambda _url, _dest: FakeDownloadJob(video_path))
     monkeypatch.setattr(
-        jable_smalltool, 'generate_subtitles',
+        watcher, 'generate_subtitles',
         lambda *_args, **_kwargs: SubtitleResult((), (), no_speech=True))
     logs = []
-    worker = jable_smalltool.SmallToolWorker(logs.append)
+    worker = watcher.SmallToolWorker(logs.append)
     worker._subtitle_mode = 'ja'
     marked = []
     worker._mark_seen = lambda url, title, **kwargs: marked.append((url, title))
@@ -808,15 +809,15 @@ def test_smalltool_empty_subtitle_result_retries_without_marking_seen(
         monkeypatch, tmp_path):
     video_path = tmp_path / 'empty.mp4'
     video_path.write_bytes(b'video')
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
     monkeypatch.setattr(
-        jable_smalltool.M3U8Sites, 'CreateSite',
+        watcher.M3U8Sites, 'CreateSite',
         lambda _url, _dest: FakeDownloadJob(video_path))
     monkeypatch.setattr(
-        jable_smalltool, 'generate_subtitles',
+        watcher, 'generate_subtitles',
         lambda *_args, **_kwargs: SubtitleResult((), ()))
     logs = []
-    worker = jable_smalltool.SmallToolWorker(logs.append)
+    worker = watcher.SmallToolWorker(logs.append)
     worker._subtitle_mode = 'ja'
     marked = []
     worker._mark_seen = lambda *args, **kwargs: marked.append(args)
@@ -837,14 +838,14 @@ def test_smalltool_empty_subtitle_result_retries_without_marking_seen(
 def test_smalltool_retries_when_subtitle_generation_fails(monkeypatch, tmp_path):
     video_path = tmp_path / 'sample.mp4'
     video_path.write_bytes(b'video')
-    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
     monkeypatch.setattr(
-        jable_smalltool.M3U8Sites, 'CreateSite',
+        watcher.M3U8Sites, 'CreateSite',
         lambda _url, _dest: FakeDownloadJob(video_path))
     monkeypatch.setattr(
-        jable_smalltool, 'generate_subtitles',
+        watcher, 'generate_subtitles',
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('offline')))
-    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     worker._subtitle_mode = 'all'
     marked = []
     worker._mark_seen = lambda *args, **kwargs: marked.append(args)

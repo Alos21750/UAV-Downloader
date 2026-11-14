@@ -3,6 +3,7 @@ import re
 import types
 from pathlib import Path
 
+from uav_downloader.core import task_queue, watcher
 from uav_downloader.apps import browse as gui_modern
 from uav_downloader.apps import watch as jable_smalltool
 from uav_downloader.i18n import locales
@@ -45,7 +46,7 @@ def test_shared_palette_is_valid_and_used_by_both_apps():
     assert all(re.fullmatch(r'#[0-9A-Fa-f]{6}', color)
                for token in tokens for color in token)
     assert gui_modern.ACCENT is ui_theme.ACCENT
-    assert jable_smalltool.ACCENT is ui_theme.ACCENT
+    assert watcher.ACCENT is ui_theme.ACCENT
 
 
 def test_primary_text_contrast_is_accessible_in_both_themes():
@@ -100,7 +101,8 @@ def test_windows_version_resources_match_app_version():
         assert "StringStruct('ProductName', 'UAV Downloader')" in resource
     for name in ('UAV_Browser.spec', 'UAV_Watcher.spec'):
         spec = (packaging / name).read_text(encoding='utf-8')
-        assert "'numpy._core._exceptions'" in spec
+        assert 'qt_runtime(SPECPATH)' in spec
+    assert "'numpy._core._exceptions'" in (packaging / 'qt_runtime.py').read_text(encoding='utf-8')
 
 
 def test_windows_distribution_is_hardened_and_verifiable():
@@ -119,10 +121,10 @@ def test_windows_distribution_is_hardened_and_verifiable():
         assert 'upx=False' in spec
         assert 'upx=True' not in spec
 
-    # SmallTool has no update UI.  Do not bundle Modern's executable
-    # downloader/self-replacement helper into its archive.
-    assert "'uav_downloader.core.updater'" in browse_spec
-    assert "'uav_downloader.core.updater'" not in watch_spec
+    # Both Qt workspaces expose update UI through the shared background service.
+    runtime = (root / 'packaging/windows/qt_runtime.py').read_text(encoding='utf-8')
+    assert "'uav_downloader.core.updater'" in runtime
+    assert all('qt_runtime(SPECPATH)' in spec for spec in (browse_spec, watch_spec))
 
     # Keep the convenient one-file build, but also ship a SmallTool onedir
     # fallback that does not self-extract through a _MEI directory.
@@ -327,7 +329,7 @@ def test_both_quality_selectors_persist_to_shared_config(monkeypatch):
 
     saved = []
     monkeypatch.setattr(
-        gui_modern.config, 'set_recognition_quality',
+        task_queue.config, 'set_recognition_quality',
         lambda value: saved.append(('modern', value)) or value)
     modern = gui_modern.ModernApp.__new__(gui_modern.ModernApp)
     modern._recognition_quality_var = _Var()
@@ -338,7 +340,7 @@ def test_both_quality_selectors_persist_to_shared_config(monkeypatch):
         locales.STRINGS['en']['recognition_quality_balanced'])
 
     monkeypatch.setattr(
-        jable_smalltool.config, 'set_recognition_quality',
+        watcher.config, 'set_recognition_quality',
         lambda value: saved.append(('smalltool', value)) or value)
     smalltool = jable_smalltool.SmallToolApp.__new__(
         jable_smalltool.SmallToolApp)
@@ -355,7 +357,7 @@ def test_both_quality_selectors_persist_to_shared_config(monkeypatch):
 
 
 def test_modern_concurrency_is_editable_persisted_and_clamped(monkeypatch):
-    assert gui_modern.MAX_CONCURRENT == 32
+    assert task_queue.MAX_CONCURRENT == 32
     init_source = inspect.getsource(gui_modern.ModernApp.__init__)
     settings_source = inspect.getsource(
         gui_modern.ModernApp._build_settings_tab)
@@ -385,7 +387,7 @@ def test_modern_concurrency_is_editable_persisted_and_clamped(monkeypatch):
         saved.append(value)
         return max(1, min(int(value), 32))
 
-    monkeypatch.setattr(gui_modern.config, 'set_download_concurrency', _save)
+    monkeypatch.setattr(task_queue.config, 'set_download_concurrency', _save)
     app._on_conc_change()
 
     assert saved == [99]
@@ -427,13 +429,13 @@ def test_both_apps_expose_and_persist_per_video_worker_limit(monkeypatch):
         return max(1, min(int(value), 16))
 
     monkeypatch.setattr(
-        gui_modern.config, 'set_max_workers_per_video', _save)
+        task_queue.config, 'set_max_workers_per_video', _save)
     modern = gui_modern.ModernApp.__new__(gui_modern.ModernApp)
     modern._workers_var = _Var('99')
     modern._on_workers_change()
 
     monkeypatch.setattr(
-        jable_smalltool.config, 'set_max_workers_per_video', _save)
+        watcher.config, 'set_max_workers_per_video', _save)
     smalltool = jable_smalltool.SmallToolApp.__new__(
         jable_smalltool.SmallToolApp)
     smalltool._workers_var = _Var('2')
@@ -466,9 +468,9 @@ def test_both_apps_expose_and_persist_filename_mode(monkeypatch):
 
     def _save(value):
         saved.append(value)
-        return gui_modern.config.normalize_filename_mode(value)
+        return task_queue.config.normalize_filename_mode(value)
 
-    monkeypatch.setattr(gui_modern.config, 'set_filename_mode', _save)
+    monkeypatch.setattr(task_queue.config, 'set_filename_mode', _save)
 
     modern = gui_modern.ModernApp.__new__(gui_modern.ModernApp)
     modern._filename_mode_var = _Var()
@@ -497,9 +499,9 @@ def test_language_rebuild_commits_the_focused_worker_entry(monkeypatch):
 
     saved = []
     monkeypatch.setattr(
-        gui_modern.config, 'get_max_workers_per_video', lambda: 16)
+        task_queue.config, 'get_max_workers_per_video', lambda: 16)
     monkeypatch.setattr(
-        gui_modern.config, 'set_max_workers_per_video',
+        task_queue.config, 'set_max_workers_per_video',
         lambda value: saved.append(('modern', value)) or int(value))
     modern = gui_modern.ModernApp.__new__(gui_modern.ModernApp)
     modern._workers_var = _Var('3')
@@ -508,9 +510,9 @@ def test_language_rebuild_commits_the_focused_worker_entry(monkeypatch):
         inspect.getsource(gui_modern.ModernApp._apply_language))
 
     monkeypatch.setattr(
-        jable_smalltool.config, 'get_max_workers_per_video', lambda: 16)
+        watcher.config, 'get_max_workers_per_video', lambda: 16)
     monkeypatch.setattr(
-        jable_smalltool.config, 'set_max_workers_per_video',
+        watcher.config, 'set_max_workers_per_video',
         lambda value: saved.append(('smalltool', value)) or int(value))
     smalltool = jable_smalltool.SmallToolApp.__new__(
         jable_smalltool.SmallToolApp)
@@ -528,7 +530,7 @@ def test_supjav_thumbnail_context_reuses_cf_override_only_on_trusted_zone(
         monkeypatch):
     override = {'cookie': 'test-clearance', 'ua': 'Exact Browser UA'}
     monkeypatch.setattr(
-        gui_modern.config, 'get_cf_override',
+        task_queue.config, 'get_cf_override',
         lambda host: dict(override) if host == 'supjav.com' else None)
 
     request_headers, cookies = gui_modern._thumbnail_request_context(
@@ -591,7 +593,7 @@ def test_failed_thumbnail_replaces_loading_placeholder(monkeypatch):
     app._load_thumb_async(
         'https://img.supjav.com/missing.jpg', _Label(), 7, 9, 'SupJav')
 
-    assert configured[-1]['text'] == gui_modern.T('no_thumbnail')
+    assert configured[-1]['text'] == task_queue.T('no_thumbnail')
 
 
 def test_stale_supjav_thumbnail_override_retries_without_credentials(
@@ -626,7 +628,7 @@ def test_stale_supjav_thumbnail_override_retries_without_credentials(
     monkeypatch.setattr(gui_modern.Image, 'open', lambda _stream: _Image())
     monkeypatch.setattr(gui_modern, '_thumb_cache', {})
     monkeypatch.setattr(
-        gui_modern.config, 'get_cf_override',
+        task_queue.config, 'get_cf_override',
         lambda _host: {'cookie': 'stale', 'ua': 'Stale UA'})
 
     result = gui_modern._fetch_thumbnail(
@@ -650,7 +652,7 @@ def test_global_version_selector_saves_internal_preference(monkeypatch):
         jable_smalltool, 'update_config',
         lambda patch, **_kwargs: saved.append(dict(patch)))
 
-    app._on_version_change(jable_smalltool.T('st_pref_uncensored'))
+    app._on_version_change(watcher.T('st_pref_uncensored'))
 
     assert app._cfg['version_preference'] == 'uncensored'
     assert saved[-1]['version_preference'] == 'uncensored'

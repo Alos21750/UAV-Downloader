@@ -34,3 +34,7 @@ is not bundled with Python.
 
 Windows executable releases are created only by the pinned GitHub Actions
 workflow. Do not attach locally built executables to project releases.
+
+Browser and Watcher use Qt Quick; the desktop dependencies include pinned
+PySide6. See [desktop responsiveness](docs/desktop-responsiveness.md) for the
+thread boundaries, compatibility scope and visual acceptance procedure.

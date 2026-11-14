@@ -16,6 +16,7 @@ from uav_downloader.apps.downloads import (
     storage_preflight,
     video_code,
 )
+from uav_downloader.core import task_queue
 from uav_downloader.apps import browse
 from uav_downloader.apps.browse import DownloadManager, _DownloadTask
 from uav_downloader.core import config
@@ -204,7 +205,7 @@ def test_future_schedule_waits_until_due(monkeypatch):
     now = [1000.0]
     manager = DownloadManager(max_concurrent=1)
     started = []
-    monkeypatch.setattr(browse.time, 'time', lambda: now[0])
+    monkeypatch.setattr(task_queue.time, 'time', lambda: now[0])
     monkeypatch.setattr(manager, '_arm_schedule_locked', lambda: None)
     monkeypatch.setattr(manager, '_start_download_thread', started.append)
     item = manager.add_item('scheduled', dest='download')
@@ -223,7 +224,7 @@ def test_future_schedule_waits_until_due(monkeypatch):
 def test_transient_failure_uses_bounded_backoff(monkeypatch):
     now = [1000.0]
     manager = DownloadManager(auto_retry_count_getter=lambda: 2)
-    monkeypatch.setattr(browse.time, 'time', lambda: now[0])
+    monkeypatch.setattr(task_queue.time, 'time', lambda: now[0])
     monkeypatch.setattr(manager, '_arm_schedule_locked', lambda: None)
     item = manager.add_item('retry', state='下載中', dest='download')
     task = _DownloadTask('retry', 'download', manager._cancel_epoch)

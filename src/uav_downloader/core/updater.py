@@ -127,7 +127,7 @@ def _remove_quiet(path):
         pass
 
 
-def download_asset(url, dest_path, progress_cb=None, timeout=60):
+def download_asset(url, dest_path, progress_cb=None, timeout=60, cancel_check=None):
     part_path = dest_path + '.part'
     _remove_quiet(part_path)
     try:
@@ -140,6 +140,8 @@ def download_asset(url, dest_path, progress_cb=None, timeout=60):
             downloaded = 0
             with open(part_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=1024 * 256):
+                    if cancel_check and cancel_check():
+                        raise InterruptedError('Update download cancelled')
                     if not chunk:
                         continue
                     f.write(chunk)
