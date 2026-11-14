@@ -2,9 +2,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import ctypes
 import multiprocessing
-import sys
 
 if __name__ == '__main__':
     # PyInstaller replaces this with an early child-process dispatcher.  It
@@ -19,50 +17,30 @@ from uav_downloader.core.bootstrap import (
 
 install_runtime_guards()
 
-if __name__ == '__main__':
+def main(argv=None):
     run_translation_diagnostic_if_requested()
-
-# Enable DPI awareness BEFORE any Tk/GUI imports
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)   # Per-monitor V2
-except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
-
-from uav_downloader.cli.args import av_recommand, get_parser
-from uav_downloader import sites as M3U8Sites
-
-# Use modern CustomTkinter GUI by default; fall back to basic tkinter if unavailable
-try:
-    from uav_downloader.apps.browse import gui_modern_main as _gui_main
-    _USE_MODERN = True
-except ImportError:
-    from uav_downloader.legacy.gui import gui_main as _gui_main
-    _USE_MODERN = False
-
-def main():
-    url_arg = ""
+    from uav_downloader.cli.args import av_recommand, get_parser
+    from uav_downloader.core import config
+    from uav_downloader import sites as M3U8Sites
     parser = get_parser()
-    args = parser.parse_args()
-
-    if len(args.url) != 0:
-        url_arg = args.url
-    elif args.random:
-        url_arg = av_recommand() or ""   # None (site changed/blocked) -> empty, not a crash
-
+    import sys
+    supplied = sys.argv[1:] if argv is None else list(argv)
+    args = parser.parse_args() if argv is None else parser.parse_args(supplied)
+    url_arg = args.url or (av_recommand() or '' if args.random else '')
     if args.nogui:
         result = M3U8Sites.consoles_main(
             url_arg, args.output, args.max_workers_per_video)
         return 0 if result is None else int(result)
-    elif _USE_MODERN:
-        _gui_main(url_arg, args.output)
-    else:
-        from uav_downloader.legacy.gui import gui_main
-        gui_main(url_arg, args.output)
+    from uav_downloader.apps.qt_tasks import main as desktop_main
+    options = ['--workspace', 'browser', '--update-channel', 'browse',
+               '--queue', args.queue or config.queue_csv_path(),
+               '--initial-url', url_arg]
+    if any(arg == '--output' or arg.startswith('--output=') or arg.startswith('-o') for arg in supplied):
+        options += ['--dest', args.output]
+    if args.smoke_report:
+        options += ['--smoke-report', args.smoke_report]
+    return desktop_main(options)
 
-    return 0
 
 
 if __name__ == "__main__":

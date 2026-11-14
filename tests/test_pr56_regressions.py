@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from uav_downloader.core import task_queue
 from uav_downloader.apps import browse
 from uav_downloader.core import config
 from uav_downloader.core.storage import StorageWriteError
@@ -59,13 +60,13 @@ def test_missav_variant_survives_code_only_and_code_template(title, suffix, tag)
 
 
 def test_constructor_timeout_enters_bounded_retry(monkeypatch):
-    manager = browse.DownloadManager(auto_retry_count_getter=lambda: 2)
+    manager = task_queue.DownloadManager(auto_retry_count_getter=lambda: 2)
     item = manager.add_item('https://missav.ai/abc-123', state='下載中')
-    task = browse._DownloadTask(item.url, 'download', manager._cancel_epoch)
+    task = task_queue._DownloadTask(item.url, 'download', manager._cancel_epoch)
     manager._active[item.url] = task
     monkeypatch.setattr(manager, '_arm_schedule_locked', lambda: None)
     fake = SimpleNamespace(_last_error=ConnectionError('connection timed out'), is_url_vaildate=lambda: False)
-    monkeypatch.setattr(browse.M3U8Sites, 'CreateSite', lambda *a, **kw: fake)
+    monkeypatch.setattr(task_queue.M3U8Sites, 'CreateSite', lambda *a, **kw: fake)
     manager._run_download(task)
     assert item.state == '等待重試'
     assert item.retry_count == 1
@@ -73,14 +74,14 @@ def test_constructor_timeout_enters_bounded_retry(monkeypatch):
 
 
 def test_constructor_storage_error_stops_entire_queue(monkeypatch):
-    manager = browse.DownloadManager(auto_retry_count_getter=lambda: 2)
+    manager = task_queue.DownloadManager(auto_retry_count_getter=lambda: 2)
     item = manager.add_item('https://missav.ai/abc-123', state='下載中')
-    task = browse._DownloadTask(item.url, 'download', manager._cancel_epoch)
+    task = task_queue._DownloadTask(item.url, 'download', manager._cancel_epoch)
     manager._active[item.url] = task
     second = manager.add_item('https://missav.ai/abc-124')
-    manager._pending.append(browse._DownloadTask(second.url, 'download', manager._cancel_epoch))
+    manager._pending.append(task_queue._DownloadTask(second.url, 'download', manager._cancel_epoch))
     fake = SimpleNamespace(_last_error=StorageWriteError('output', OSError('device offline'), operation='write'), is_url_vaildate=lambda: False)
-    monkeypatch.setattr(browse.M3U8Sites, 'CreateSite', lambda *a, **kw: fake)
+    monkeypatch.setattr(task_queue.M3U8Sites, 'CreateSite', lambda *a, **kw: fake)
     monkeypatch.setattr(manager, '_start_download_thread', lambda task: None)
     manager._run_download(task)
     assert manager.pending_count == 0
@@ -101,8 +102,8 @@ def _selection_app(monkeypatch, fetch):
     class Thread:
         def __init__(self, target, **kw): self.target = target
         def start(self): self.target()
-    monkeypatch.setattr(browse.threading, 'Thread', Thread)
-    monkeypatch.setattr(browse.time, 'sleep', lambda seconds: None)
+    monkeypatch.setattr(task_queue.threading, 'Thread', Thread)
+    monkeypatch.setattr(task_queue.time, 'sleep', lambda seconds: None)
     monkeypatch.setitem(browse.SITES, 'MissAV', {'browser': SimpleNamespace(
         fetch_page=fetch, page_url=lambda base_url, page: str(page))})
     return app, messages
@@ -145,7 +146,7 @@ def test_listing_download_collects_beyond_fifty_pages(monkeypatch):
         return [{'url': f'https://missav.ai/en/abc-{page}'}] if page <= 53 else []
     monkeypatch.setattr(browse.MissAVBrowser, 'page_url', lambda url, page: str(page))
     monkeypatch.setattr(browse.MissAVBrowser, 'fetch_page', fetch)
-    monkeypatch.setattr(browse.time, 'sleep', lambda seconds: None)
+    monkeypatch.setattr(task_queue.time, 'sleep', lambda seconds: None)
     app = SimpleNamespace(
         _is_closing=False, _build_gen=1,
         _ui=lambda callback, **kw: callback(),

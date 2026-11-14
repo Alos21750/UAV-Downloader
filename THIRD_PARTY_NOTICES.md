@@ -1,5 +1,29 @@
 # Third-party notices
 
+## Qt Quick desktop runtime
+
+Browser and Watcher use the unmodified PySide6 / Shiboken6 6.10.2 wheels and
+the Qt 6.10.2 shared libraries for Qt Core, GUI, Network, QML, Quick, Quick
+Controls, layouts and native dialogs. These components are used under their
+LGPL-3.0 terms. Qt is copyright The Qt Company Ltd. and its contributors.
+The Windows QML hook collects the modules imported by this desktop UI.
+
+The executable includes `third_party_licenses/Qt-LGPL-3.0.txt` and
+`Qt-GPL-3.0.txt`, copied verbatim from the upstream Qt 6.10.2 source tree,
+plus the original distribution metadata. The application's source and build
+specifications are available in this repository. Qt remains dynamically linked;
+the Watcher portable build exposes the runtime under `_internal/PySide6`
+for replacement with compatible modified libraries. Modification of these
+libraries and reverse engineering for debugging such modifications are
+permitted under the applicable terms.
+
+Upstream source and notices:
+
+- [Qt base 6.10.2 source](https://github.com/qt/qtbase/tree/v6.10.2)
+- [Qt declarative 6.10.2 source](https://github.com/qt/qtdeclarative/tree/v6.10.2)
+- [Qt for Python 6.10.2 source](https://code.qt.io/cgit/pyside/pyside-setup.git/tree/?h=v6.10.2)
+- [Qt for Python notices](https://doc.qt.io/qtforpython-6/licenses.html)
+
 ## Optional local Japanese speech-recognition pack
 
 The optional `UAV_reazonspeech_asr_v1.zip` archive is a mixed-license,

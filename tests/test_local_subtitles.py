@@ -43,6 +43,7 @@ _stub_runtime_dependency('cloudscraper', _cloudscraper_stub)
 _stub_runtime_dependency('m3u8', _m3u8_stub)
 _stub_runtime_dependency('customtkinter', _customtkinter_stub)
 
+from uav_downloader.core import task_queue
 from uav_downloader.apps import browse as gui_modern
 from uav_downloader.apps.browse import DownloadManager, ModernApp
 from uav_downloader.i18n.locales import T
@@ -78,7 +79,7 @@ def test_enqueue_local_subtitles_runs_pipeline_on_existing_file(
         calls.append((path, mode))
         return SubtitleResult((str(tmp_path / 'legacy.en.srt'),), ())
 
-    monkeypatch.setattr(gui_modern, 'generate_subtitles', fake_generate)
+    monkeypatch.setattr(task_queue, 'generate_subtitles', fake_generate)
     manager = DownloadManager()
 
     assert manager.enqueue_local_subtitles(str(video), 'en') is True
@@ -123,7 +124,7 @@ def test_enqueue_local_subtitles_dedupes_inflight_path(monkeypatch, tmp_path):
         assert release.wait(3)
         return SubtitleResult((), ())
 
-    monkeypatch.setattr(gui_modern, 'generate_subtitles', slow_generate)
+    monkeypatch.setattr(task_queue, 'generate_subtitles', slow_generate)
     manager = DownloadManager()
 
     assert manager.enqueue_local_subtitles(str(video), 'en') is True
@@ -149,12 +150,12 @@ def test_retry_local_item_reruns_subtitles_never_downloads(
             raise RuntimeError('offline')
         return SubtitleResult((str(tmp_path / 'legacy.en.srt'),), ())
 
-    monkeypatch.setattr(gui_modern, 'generate_subtitles', failing_then_ok)
+    monkeypatch.setattr(task_queue, 'generate_subtitles', failing_then_ok)
     create_site_calls = []
     monkeypatch.setattr(
-        gui_modern.M3U8Sites, 'CreateSite',
+        task_queue.M3U8Sites, 'CreateSite',
         lambda *a, **k: create_site_calls.append((a, k)))
-    monkeypatch.setattr(gui_modern.config, 'get_subtitle_pref', lambda: 'en')
+    monkeypatch.setattr(task_queue.config, 'get_subtitle_pref', lambda: 'en')
 
     manager = DownloadManager()
     assert manager.enqueue_local_subtitles(str(video), 'en') is True
@@ -187,10 +188,10 @@ def test_retry_local_item_reports_a_moved_file(monkeypatch, tmp_path):
     video = tmp_path / 'legacy.mp4'
     video.write_bytes(b'video')
     monkeypatch.setattr(
-        gui_modern, 'generate_subtitles',
+        task_queue, 'generate_subtitles',
         lambda path, mode, **kwargs: SubtitleResult(
             (str(tmp_path / 'legacy.en.srt'),), ()))
-    monkeypatch.setattr(gui_modern.config, 'get_subtitle_pref', lambda: 'en')
+    monkeypatch.setattr(task_queue.config, 'get_subtitle_pref', lambda: 'en')
     manager = DownloadManager()
     assert manager.enqueue_local_subtitles(str(video), 'en') is True
     assert _wait_until(
@@ -216,7 +217,7 @@ def test_save_csv_excludes_local_items(monkeypatch, tmp_path):
     video = tmp_path / 'legacy.mp4'
     video.write_bytes(b'video')
     monkeypatch.setattr(
-        gui_modern, 'generate_subtitles',
+        task_queue, 'generate_subtitles',
         lambda *a, **k: SubtitleResult((), ()))
     manager = DownloadManager()
     manager.add_item('https://jable.tv/videos/sample/', state='未完成')
@@ -248,7 +249,7 @@ def test_cancel_all_cancels_local_subtitle_item(monkeypatch, tmp_path):
         assert release.wait(3)
         return SubtitleResult((), ())
 
-    monkeypatch.setattr(gui_modern, 'generate_subtitles', slow_generate)
+    monkeypatch.setattr(task_queue, 'generate_subtitles', slow_generate)
     manager = DownloadManager()
 
     assert manager.enqueue_local_subtitles(str(video), 'en') is True

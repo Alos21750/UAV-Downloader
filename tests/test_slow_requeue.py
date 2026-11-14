@@ -6,6 +6,7 @@ import types
 
 import pytest
 
+from uav_downloader.core import task_queue
 from uav_downloader.apps import browse
 from uav_downloader.apps.browse import DownloadManager, _DownloadTask
 from uav_downloader.core import config
@@ -20,7 +21,7 @@ KB = 1024
 @pytest.fixture
 def clock(monkeypatch):
     now = [1000.0]
-    monkeypatch.setattr(browse.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(task_queue.time, 'monotonic', lambda: now[0])
     monkeypatch.setattr(base.speed_limiter, '_limit_bps', 0)
     return now
 
@@ -383,7 +384,7 @@ def test_stalled_transfer_requeues_end_to_end_and_leaves_no_monitor(clock, monke
             self._progress_callback(1, 1, 0)
             return True
 
-    monkeypatch.setattr(browse.M3U8Sites, 'CreateSite', lambda *args: Job())
+    monkeypatch.setattr(task_queue.M3U8Sites, 'CreateSite', lambda *args: Job())
     manager = DownloadManager(subtitle_mode_getter=lambda: 'none',
                               slow_requeue_kbps_getter=lambda: 750)
     item = manager.add_item(URL, dest=DEST)

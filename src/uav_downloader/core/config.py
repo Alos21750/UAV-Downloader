@@ -878,6 +878,22 @@ def load_cf_overrides():
         CF_OVERRIDES = parsed
 
 
+def _write_cf_snapshot(snapshot):
+    """Persist a desktop transaction; the background caller handles failures."""
+    path = _cf_store_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8') as handle:
+            json.dump(snapshot, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
 def save_cf_overrides():
     try:
         path = _cf_store_path()
