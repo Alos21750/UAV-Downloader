@@ -1,6 +1,9 @@
 import sys
 import types
 
+import pytest
+from requests.exceptions import Timeout
+
 
 def _stub_runtime_dependency(name, factory=None):
     try:
@@ -279,6 +282,143 @@ def test_hanime1_is_registered_for_cli_and_gui_site_creation(monkeypatch):
     created = M3U8Sites.CreateSite('https://hanime1.me/watch?v=42', silence=True)
     assert isinstance(created, SiteHanime1)
     assert created.is_url_vaildate()
+
+
+@pytest.mark.parametrize('result', [
+    'title', 'missing', 'blocked', 'timeout', 'cffi-timeout', 'http-error',
+    'wrong-id', 'wrong-host', 'wrong-path', 'insecure', 'duplicate-id',
+    'malformed-url', 'blank-duplicate-id', 'credentials', 'wrong-port',
+])
+def test_hanime1_missing_title_preserves_watch_source(tmp_path, monkeypatch, result):
+    from contextlib import nullcontext
+
+    watch_url = 'https://hanime1.me/watch?v=1243'
+    download_url = 'https://hanime1.me/download?v=1243'
+    watch_html = '''
+        <meta property="og:title" content=" - Hanime1.me">
+        <title>-&nbsp;H動漫/裏番/線上看&nbsp;-&nbsp;Hanime1.me</title>
+        <h3 class="video-details-wrapper"></h3>
+        <video poster="https://cdn.example.test/watch.jpg">
+          <source src="https://cdn.example.test/1243-1080p.mp4">
+        </video>
+    '''
+    download_html = '''
+        <meta property="og:title" content="下載 [Studio] 完整標題 - Hanime1.me">
+        <video><source src="https://cdn.example.test/1243-480p.mp4"></video>
+    '''
+    redirects = {
+        'wrong-id': download_url.replace('1243', '999'),
+        'wrong-host': 'https://other.example.test/download?v=1243',
+        'wrong-path': 'https://hanime1.me/watch?v=1243',
+        'insecure': 'http://hanime1.me/download?v=1243',
+        'duplicate-id': download_url + '&v=999',
+        'malformed-url': 'https://[invalid/download?v=1243',
+        'blank-duplicate-id': download_url + '&v=',
+        'credentials': 'https://user:password@hanime1.me/download?v=1243',
+        'wrong-port': 'https://hanime1.me:8443/download?v=1243',
+    }
+    calls = []
+
+    def request(_session, url):
+        calls.append(url)
+        if url == hanime_mod.HANIME1_HOME:
+            return types.SimpleNamespace(status_code=200)
+        if url == watch_url:
+            return types.SimpleNamespace(status_code=200, content=watch_html.encode())
+        assert url == download_url
+        if result == 'blocked':
+            raise hanime_mod.MirrorsBlockedError('controlled block')
+        if result == 'timeout':
+            raise Timeout('controlled timeout')
+        if result == 'cffi-timeout':
+            if not hanime_mod._use_cffi:
+                pytest.skip('curl_cffi is optional')
+            raise hanime_mod.cffi_requests.RequestsError('controlled timeout')
+        content = '<title>下載 - Hanime1.me</title>' if result == 'missing' else download_html
+        return types.SimpleNamespace(
+            status_code=500 if result == 'http-error' else 200,
+            content=content.encode(), url=redirects.get(result, download_url))
+
+    monkeypatch.setattr(hanime_mod, '_make_scraper', nullcontext)
+    monkeypatch.setattr(hanime_mod, '_request', request)
+    monkeypatch.setattr(hanime_mod.config, 'get_filename_mode', lambda: 'full-title')
+    crawler = SiteHanime1(watch_url, str(tmp_path), silence=True, filename_template='{title}')
+
+    expected = '[Studio] 完整標題' if result == 'title' else 'Hanime1-1243'
+    assert calls == [hanime_mod.HANIME1_HOME, watch_url, download_url]
+    assert crawler.is_url_vaildate() and crawler.target_name() == expected
+    assert crawler._get_video_savename() == str(tmp_path / (expected + '.mp4'))
+    assert crawler._direct_url == 'https://cdn.example.test/1243-1080p.mp4'
+    assert crawler._direct_referer == watch_url
+    assert crawler._imageUrl == 'https://cdn.example.test/watch.jpg'
+
+
+@pytest.mark.parametrize(('markup', 'download_page', 'expected'), [
+    ('<title>Original title - Hanime1.me</title>', False, 'Original title'),
+    ('<meta name="twitter:title" content="Twitter title - Hanime1.me">', False, 'Twitter title'),
+    ('<meta property="og:title" content="Hanime1.me"><title>Real title - Hanime1.me</title>', False, 'Real title'),
+    ('<title>下載 A &amp; B - Hanime1.me</title>', True, 'A & B'),
+    ('<title>Download A - Hanime1.me</title>', True, 'A'),
+    ('<title>下载 A - Hanime1.me</title>', True, 'A'),
+    ('<title>下載 - Hanime1.me</title>', True, ''),
+    ('<title>- H動漫/裏番/線上看 - Hanime1.me</title>', False, ''),
+    ('<h3 class="video-details-wrapper">Download story</h3>', False, 'Download story'),
+])
+def test_hanime1_title_candidates(markup, download_page, expected):
+    assert hanime_mod._extract_title(
+        BeautifulSoup(markup, 'html.parser'), download_page=download_page) == expected
+
+
+@pytest.mark.parametrize('available', [True, False])
+def test_hanime1_download_page_source_fallback(monkeypatch, available):
+    from contextlib import nullcontext
+
+    watch_url = 'https://hanime1.me/watch?v=42'
+
+    def request(_session, url):
+        if url == hanime_mod.HANIME1_HOME:
+            return types.SimpleNamespace(status_code=200)
+        if url == watch_url:
+            markup = '<h3 class="video-details-wrapper">Original title</h3>'
+        else:
+            assert url == 'https://hanime1.me/download?v=42'
+            markup = '<title>下載 Other title - Hanime1.me</title>'
+            if available:
+                markup += '<source src="https://cdn.example.test/42-720p.mp4">'
+        return types.SimpleNamespace(status_code=200, content=markup.encode(), url=url)
+
+    monkeypatch.setattr(hanime_mod, '_make_scraper', nullcontext)
+    monkeypatch.setattr(hanime_mod, '_request', request)
+    crawler = SiteHanime1(watch_url, silence=True, filename_template='{title}')
+    assert crawler.is_url_vaildate() is available
+    if available:
+        assert crawler.target_name() == 'Original title'
+        assert crawler._direct_url == 'https://cdn.example.test/42-720p.mp4'
+    else:
+        assert 'MP4' in str(crawler._last_error)
+
+
+def test_hanime1_metadata_request_propagates_unexpected_errors(monkeypatch):
+    from contextlib import nullcontext
+
+    class Interrupted(Exception):
+        pass
+
+    def request(_session, url):
+        if url == hanime_mod.HANIME1_HOME:
+            return types.SimpleNamespace(status_code=200)
+        if '/watch?' in url:
+            return types.SimpleNamespace(
+                status_code=200,
+                content=b'<source src="https://cdn.example.test/42.mp4">')
+        raise Interrupted('must propagate, not become a metadata fallback')
+
+    monkeypatch.setattr(hanime_mod, '_make_scraper', nullcontext)
+    monkeypatch.setattr(hanime_mod, '_request', request)
+    crawler = SiteHanime1.__new__(SiteHanime1)
+    crawler._url = 'https://hanime1.me/watch?v=42'
+    with pytest.raises(Interrupted):
+        crawler.get_url_infos()
 
 
 def test_hanime1_is_exposed_by_every_desktop_browser_and_listing_detection():
