@@ -33,6 +33,8 @@ def get_parser():
         default=None, metavar="N",
         help="Maximum segment download workers per video (1-16)")
 
+    parser.add_argument('--queue', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--smoke-report', default=None, help=argparse.SUPPRESS)
     return parser
 
 

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from uav_downloader.core import task_queue
 from uav_downloader.apps import browse
 
 
@@ -49,7 +50,7 @@ def test_superseded_huangguo_page_stops_without_ui_publication(monkeypatch):
         assert cancel_check()
         raise CancelledError()
 
-    monkeypatch.setattr(browse.threading, 'Thread', Thread)
+    monkeypatch.setattr(task_queue.threading, 'Thread', Thread)
     monkeypatch.setattr(browse.HuangguoBrowser, 'fetch_page', fetch)
     browse.ModernApp._load_page(app)
     assert callbacks == []
@@ -76,7 +77,7 @@ def test_select_all_huangguo_cancellation_reaches_request(monkeypatch):
         assert cancel_check()
         raise CancelledError()
 
-    monkeypatch.setattr(browse.threading, 'Thread', Thread)
+    monkeypatch.setattr(task_queue.threading, 'Thread', Thread)
     monkeypatch.setattr(browse.HuangguoBrowser, 'fetch_page', fetch)
     browse.ModernApp._select_all_results(app)
     assert len(reached) == 1
@@ -86,7 +87,7 @@ def test_select_all_huangguo_cancellation_reaches_request(monkeypatch):
 
 def test_huangguo_listing_crawl_cancel_epoch_reaches_request(monkeypatch):
     reached = []
-    manager = SimpleNamespace(_cancel_epoch=0,
+    manager = SimpleNamespace(cancellation_epoch=0,
         add_item=lambda *a, **kw: pytest.fail('Cancelled request must not queue'),
         enqueue=lambda *a, **kw: pytest.fail('Cancelled request must not download'))
     app = SimpleNamespace(_build_gen=1, _is_closing=False, _dlmgr=manager,
@@ -95,7 +96,7 @@ def test_huangguo_listing_crawl_cancel_epoch_reaches_request(monkeypatch):
     def fetch(url, *, cancel_check):
         reached.append(url)
         assert not cancel_check()
-        manager._cancel_epoch += 1
+        manager.cancellation_epoch += 1
         assert cancel_check()
         raise CancelledError()
 

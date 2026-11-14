@@ -12,6 +12,7 @@ provider; video and audio always remain on the computer.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import math
 import multiprocessing
@@ -30,11 +31,13 @@ import wave
 import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, wraps
 from typing import Callable, Iterable, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
+from uav_downloader.core.http import controlled_get, response_scope
+from uav_downloader.core.stop import DownloadStopped, current_stop_context
 
 from uav_downloader.core import config
 from uav_downloader.core.storage import (
@@ -666,9 +669,44 @@ def _notify(callback: Optional[ProgressCallback], stage: str,
         callback(stage, percent)
 
 
+_publication_control = threading.local()
+
+
+def _with_subtitle_cancellation(function):
+    signature = inspect.signature(function)
+    @wraps(function)
+    def run(*args, **kwargs):
+        check = signature.bind_partial(*args, **kwargs).arguments.get('cancel_check')
+        previous = getattr(_publication_control, 'checks', ())
+        _publication_control.checks = previous + ((check,) if check is not None else ())
+        try:
+            _check_cancel(None)
+            return function(*args, **kwargs)
+        finally:
+            _publication_control.checks = previous
+    return run
+
+
 def _check_cancel(cancel_check: Optional[CancelCheck]) -> None:
-    if cancel_check and cancel_check():
+    context = current_stop_context()
+    checks = getattr(_publication_control, 'checks', ())
+    unique = {id(check): check for check in checks + ((cancel_check,) if cancel_check is not None else ())}
+    if ((context is not None and context.requested.is_set())
+            or any(check() for check in unique.values())):
         raise SubtitleCancelled('Subtitle generation cancelled')
+
+
+@contextmanager
+def _model_lock(lock, cancel_check: Optional[CancelCheck]):
+    while True:
+        _check_cancel(cancel_check)
+        if lock.acquire(timeout=0.05):
+            break
+    try:
+        _check_cancel(cancel_check)
+        yield
+    finally:
+        lock.release()
 
 
 def _session() -> requests.Session:
@@ -779,9 +817,8 @@ def _download_verified(url: str, destination: str, expected_size: int,
     session = _session()
     try:
         kwargs = config.proxy_request_kwargs()
-        # A short per-read timeout keeps cancellation responsive when a model
-        # host stalls; the timeout resets whenever another chunk arrives.
-        with session.get(url, stream=True, timeout=(15, 15), **kwargs) as response:
+        with response_scope(controlled_get(session, url, stream=True, timeout=15,
+                total_timeout=3600, cancel_check=cancel_check, **kwargs)) as response:
             response.raise_for_status()
             received = 0
             total = int(response.headers.get('Content-Length') or expected_size)
@@ -802,6 +839,7 @@ def _download_verified(url: str, destination: str, expected_size: int,
         if not _is_verified(
                 part, expected_size, expected_sha256, cancel_check):
             raise SubtitleError('Downloaded subtitle component failed integrity verification')
+        _check_cancel(cancel_check)
         os.replace(part, destination)
         _verified_paths.pop(os.path.abspath(part), None)
         _verified_paths.pop(os.path.abspath(destination), None)
@@ -809,6 +847,8 @@ def _download_verified(url: str, destination: str, expected_size: int,
                 destination, expected_size, expected_sha256, cancel_check):
             raise SubtitleError('Installed subtitle component failed integrity verification')
         return destination
+    except DownloadStopped as exc:
+        raise SubtitleCancelled('Subtitle component download cancelled') from exc
     except SubtitleCancelled:
         raise
     except SubtitleError:
@@ -1235,10 +1275,36 @@ def _prepare_reazonspeech_runtime(
             progress_callback, cancel_check)
 
 
+def _activate_runtime_tree(temp_dir: str, runtime_dir: str,
+                           cancel_check: Optional[CancelCheck]) -> None:
+    """Keep the previous tree until activation has survived its stop boundary."""
+    _check_cancel(cancel_check)
+    previous = runtime_dir + '.previous'
+    if os.path.exists(previous):
+        raise SubtitleError('Previous model installation still requires recovery')
+    had_previous = os.path.exists(runtime_dir)
+    if had_previous:
+        os.replace(runtime_dir, previous)
+    activated = False
+    try:
+        _check_cancel(cancel_check)
+        os.replace(temp_dir, runtime_dir)
+        activated = True
+        _check_cancel(cancel_check)
+    except BaseException:
+        # Rollback is necessary disposal, so it must run even after stop.
+        # If restoration fails, leave the backup on disk for the next run.
+        if activated:
+            os.replace(runtime_dir, temp_dir)
+        if had_previous:
+            os.replace(previous, runtime_dir)
+        raise
+
+
 def _prepare_reazonspeech_runtime_locked(
         progress_callback: Optional[ProgressCallback],
         cancel_check: Optional[CancelCheck]) -> str:
-    with _reazonspeech_runtime_lock:
+    with _model_lock(_reazonspeech_runtime_lock, cancel_check):
         _check_cancel(cancel_check)
         root = _cache_root()
         runtime_dir = os.path.join(
@@ -1253,6 +1319,7 @@ def _prepare_reazonspeech_runtime_locked(
         try:
             installed = _verify_reazonspeech_install(
                 runtime_dir, cancel_check=cancel_check)
+            _check_cancel(cancel_check)
             if os.path.exists(previous):
                 _remove_reazonspeech_cache_path_best_effort(
                     previous, parent)
@@ -1271,6 +1338,7 @@ def _prepare_reazonspeech_runtime_locked(
             except SubtitleError:
                 pass
             else:
+                _check_cancel(cancel_check)
                 _remove_reazonspeech_cache_path(runtime_dir, parent)
                 os.replace(previous, runtime_dir)
                 return _verify_reazonspeech_install(
@@ -1338,19 +1406,14 @@ def _prepare_reazonspeech_runtime_locked(
                 handle.write(REAZONSPEECH_PACK_SHA256)
                 handle.flush()
                 os.fsync(handle.fileno())
+            _check_cancel(cancel_check)
             if os.path.exists(previous):
                 _remove_reazonspeech_cache_path_best_effort(
                     previous, parent)
-            had_previous = os.path.exists(runtime_dir)
-            if had_previous:
-                os.replace(runtime_dir, previous)
-            try:
-                os.replace(temp_dir, runtime_dir)
-                temp_dir = ''
-            except Exception:
-                if had_previous and not os.path.exists(runtime_dir):
-                    os.replace(previous, runtime_dir)
-                raise
+            _check_cancel(cancel_check)
+            _activate_runtime_tree(temp_dir, runtime_dir, cancel_check)
+            temp_dir = ''
+            _check_cancel(cancel_check)
             if os.path.exists(previous):
                 _remove_reazonspeech_cache_path(previous, parent)
         finally:
@@ -1401,7 +1464,7 @@ def _prepare_whisper_fallback_model(
     profile = RECOGNITION_PROFILES['balanced']
     with _interprocess_cache_lock(
             f'whisper-{WHISPER_VERSION}', cancel_check):
-        with _runtime_lock:
+        with _model_lock(_runtime_lock, cancel_check):
             return _prepare_whisper_model(
                 profile, progress_callback, cancel_check)
 
@@ -1409,13 +1472,36 @@ def _prepare_whisper_fallback_model(
 def _prepare_runtime_locked(
         progress_callback: Optional[ProgressCallback],
         cancel_check: Optional[CancelCheck]) -> tuple[str, str, str]:
-    with _runtime_lock:
+    with _model_lock(_runtime_lock, cancel_check):
         _check_cancel(cancel_check)
         root = _cache_root()
         archive = os.path.join(root, 'downloads', f'whisper-{WHISPER_VERSION}-x64.zip')
         runtime_dir = os.path.join(root, 'whisper', WHISPER_VERSION)
+        previous = runtime_dir + '.previous'
+        if not os.path.exists(runtime_dir) and os.path.isdir(previous):
+            os.replace(previous, runtime_dir)
         exe = _verify_whisper_install(
             runtime_dir, cancel_check=cancel_check)
+        if not exe and os.path.isdir(previous):
+            backup_exe = _verify_whisper_install(
+                previous, cancel_check=cancel_check)
+            _check_cancel(cancel_check)
+            if backup_exe:
+                if os.path.isdir(runtime_dir):
+                    shutil.rmtree(runtime_dir)
+                os.replace(previous, runtime_dir)
+                exe = _verify_whisper_install(
+                    runtime_dir, cancel_check=cancel_check)
+            else:
+                # This backup failed the same integrity check as the active
+                # tree; retain the active tree until replacement succeeds.
+                shutil.rmtree(previous)
+        if exe and os.path.isdir(previous):
+            _check_cancel(cancel_check)
+            try:
+                shutil.rmtree(previous)
+            except OSError:
+                pass
         if not exe:
             _notify(progress_callback, 'runtime', 0)
             _download_verified(
@@ -1434,10 +1520,15 @@ def _prepare_runtime_locked(
                         'whisper.cpp runtime failed integrity verification')
                 with open(os.path.join(temp_dir, '.source-sha256'), 'w', encoding='ascii') as handle:
                     handle.write(WHISPER_ARCHIVE_SHA256)
-                if os.path.isdir(runtime_dir):
-                    shutil.rmtree(runtime_dir)
-                os.replace(temp_dir, runtime_dir)
+                _check_cancel(cancel_check)
+                if os.path.exists(previous):
+                    # Both paths survived a previous interrupted rollback.
+                    # Preserve them rather than overwrite the only backup.
+                    raise SubtitleError('Previous whisper.cpp installation still requires recovery')
+                _activate_runtime_tree(temp_dir, runtime_dir, cancel_check)
                 temp_dir = ''
+                if os.path.isdir(previous):
+                    shutil.rmtree(previous)
             finally:
                 if temp_dir:
                     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1481,6 +1572,7 @@ def _run_process(args: list[str], log_path: str,
                  progress_probe: Optional[Callable[[], object]] = None,
                  heartbeat_callback: Optional[Callable[[], None]] = None,
                  ) -> None:
+    _check_cancel(cancel_check)
     creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0) if os.name == 'nt' else 0
     if disk_guard_path:
         _ensure_asr_temp_space(disk_guard_path)
@@ -1493,6 +1585,7 @@ def _run_process(args: list[str], log_path: str,
     with log_handle:
         process = None
         try:
+            _check_cancel(cancel_check)
             process = subprocess.Popen(
                 args, stdin=subprocess.DEVNULL, stdout=log_handle,
                 stderr=subprocess.STDOUT, creationflags=creationflags, cwd=cwd)
@@ -1774,7 +1867,7 @@ def _terminate_process(process) -> None:
         if process.poll() is not None:
             return
     except (OSError, ValueError):
-        return
+        pass  # Failure to observe is not proof of exit.
     try:
         process.terminate()
     except (OSError, ValueError):
@@ -1784,17 +1877,29 @@ def _terminate_process(process) -> None:
         return
     except (OSError, ValueError, subprocess.TimeoutExpired):
         pass
-    try:
-        process.kill()
-    except (OSError, ValueError):
-        pass
-    try:
-        process.wait(timeout=3)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        pass
+    while True:
+        try:
+            process.kill()
+        except (OSError, ValueError):
+            pass
+        try:
+            process.wait(timeout=0.3)
+            return
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            time.sleep(0.05)
 
 
-def _wait_for_process(
+def _wait_for_process(process, cancel_check, **kwargs):
+    # Native callers hold log/output handles here. Reap before unwinding them.
+    try:
+        _check_cancel(cancel_check)
+        return _wait_for_process_owned(process, cancel_check, **kwargs)
+    except BaseException:
+        _terminate_process(process)
+        raise
+
+
+def _wait_for_process_owned(
         process,
         cancel_check: Optional[CancelCheck],
         *,
@@ -1936,6 +2041,7 @@ def _run_external_vad(
                 open(output_path, 'wb') as output_handle,
                 open(log_path, 'wb') as log_handle):
             try:
+                _check_cancel(cancel_check)
                 process = subprocess.Popen(
                     args,
                     stdin=subprocess.DEVNULL,
@@ -2526,6 +2632,7 @@ def _run_reazonspeech_cli_batch(
                 open(stdout_path, 'wb') as stdout_handle,
                 open(stderr_path, 'wb') as stderr_handle):
             try:
+                _check_cancel(cancel_check)
                 process = subprocess.Popen(
                     args,
                     stdin=subprocess.DEVNULL,
@@ -2949,6 +3056,7 @@ def _run_recognition(
 
 
 def _atomic_copy(source: str, destination: str) -> None:
+    _check_cancel(None)
     destination_dir = os.path.dirname(destination)
     os.makedirs(destination_dir, exist_ok=True)
     descriptor, temp = tempfile.mkstemp(
@@ -2956,7 +3064,17 @@ def _atomic_copy(source: str, destination: str) -> None:
         suffix='.tmp', dir=destination_dir)
     os.close(descriptor)
     try:
-        shutil.copyfile(source, temp)
+        with open(source, 'rb') as source_handle, open(temp, 'wb') as target:
+            while True:
+                _check_cancel(None)
+                chunk = source_handle.read(1024 * 1024)
+                _check_cancel(None)
+                if not chunk:
+                    break
+                target.write(chunk)
+            target.flush()
+            os.fsync(target.fileno())
+        _check_cancel(None)
         os.replace(temp, destination)
         temp = ''
     finally:
@@ -3118,7 +3236,7 @@ def _prepare_translation_runtime(
 def _prepare_translation_runtime_locked(
         progress_callback: Optional[ProgressCallback],
         cancel_check: Optional[CancelCheck]) -> dict[str, str]:
-    with _translation_runtime_lock:
+    with _model_lock(_translation_runtime_lock, cancel_check):
         _check_cancel(cancel_check)
         root = _cache_root()
         runtime_dir = os.path.join(
@@ -3132,6 +3250,7 @@ def _prepare_translation_runtime_locked(
         try:
             installed = _verify_translation_install(
                 runtime_dir, cancel_check=cancel_check)
+            _check_cancel(cancel_check)
             if os.path.exists(previous):
                 _remove_translation_cache_path_best_effort(previous, parent)
             return installed
@@ -3152,6 +3271,7 @@ def _prepare_translation_runtime_locked(
             except SubtitleError:
                 pass
             else:
+                _check_cancel(cancel_check)
                 _remove_translation_cache_path(runtime_dir, parent)
                 os.replace(previous, runtime_dir)
                 return _verify_translation_install(
@@ -3214,18 +3334,13 @@ def _prepare_translation_runtime_locked(
                     os.path.join(temp_dir, '.source-sha256'),
                     'w', encoding='ascii') as handle:
                 handle.write(TRANSLATION_PACK_SHA256)
+            _check_cancel(cancel_check)
             if os.path.exists(previous):
                 _remove_translation_cache_path_best_effort(previous, parent)
-            had_previous = os.path.exists(runtime_dir)
-            if had_previous:
-                os.replace(runtime_dir, previous)
-            try:
-                os.replace(temp_dir, runtime_dir)
-                temp_dir = ''
-            except Exception:
-                if had_previous and not os.path.exists(runtime_dir):
-                    os.replace(previous, runtime_dir)
-                raise
+            _check_cancel(cancel_check)
+            _activate_runtime_tree(temp_dir, runtime_dir, cancel_check)
+            temp_dir = ''
+            _check_cancel(cancel_check)
             if os.path.exists(previous):
                 _remove_translation_cache_path(previous, parent)
         finally:
@@ -3659,36 +3774,25 @@ def _translation_worker_progress(
 
 
 def _terminate_translation_worker(process) -> bool:
+    # Preserve the parent worker/handle/IPC ownership until death is observed.
+    # Service shutdown has its own bounded wait and reports still-stopping.
     try:
-        alive = process.is_alive()
-    except (AssertionError, OSError, ValueError):
-        return False
-    if alive:
-        try:
+        if process.is_alive():
             process.terminate()
-        except (AttributeError, OSError, ValueError):
-            pass
+    except (AttributeError, AssertionError, OSError, ValueError):
+        pass
+    while True:
         try:
-            process.join(5)
+            process.join(0.3)
+            if not process.is_alive():
+                return True
         except (AssertionError, OSError, ValueError):
             pass
-    try:
-        alive = process.is_alive()
-    except (AssertionError, OSError, ValueError):
-        return False
-    if alive:
         try:
             process.kill()
         except (AttributeError, OSError, ValueError):
             pass
-        try:
-            process.join(5)
-        except (AssertionError, OSError, ValueError):
-            pass
-    try:
-        return not process.is_alive()
-    except (AssertionError, OSError, ValueError):
-        return False
+        time.sleep(0.05)
 
 
 def _validate_translation_worker_result(
@@ -3779,8 +3883,11 @@ def _run_local_model(
                 target=_local_translation_worker_entry,
                 args=(request_path, result_path, progress_path),
             )
+            _check_cancel(cancel_check)
             process.start()
             started = True
+        except SubtitleCancelled:
+            raise
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             started = bool(
                 process is not None
@@ -3820,11 +3927,13 @@ def _run_local_model(
             process.join(0.1)
 
         process.join()
+        _check_cancel(cancel_check)
         if process.exitcode != 0:
             raise SubtitleError(
                 'Local translation worker exited unexpectedly')
         translations = _validate_translation_worker_result(
             result_path, len(texts))
+        _check_cancel(cancel_check)
         if progress_callback:
             progress_callback(len(texts), len(texts))
         return translations
@@ -4192,6 +4301,7 @@ def translate_cues(
         f'{source_language} -> {target_language}')
 
 
+@_with_subtitle_cancellation
 def translate_srt(
         source_path: str, destination_path: str, target_language: str,
         progress_stage: str,
@@ -4625,6 +4735,7 @@ def _atomic_write_text(destination: str, text: str) -> None:
 
 
 def _atomic_write_text_impl(destination: str, text: str) -> None:
+    _check_cancel(None)
     destination_dir = os.path.dirname(destination)
     os.makedirs(destination_dir, exist_ok=True)
     descriptor, temp = tempfile.mkstemp(
@@ -4638,6 +4749,7 @@ def _atomic_write_text_impl(destination: str, text: str) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
+        _check_cancel(None)
         os.replace(temp, destination)
         temp = ''
     finally:
@@ -5052,6 +5164,7 @@ def _generation_slot(cancel_check: Optional[CancelCheck]):
             _generation_lock.release()
 
 
+@_with_subtitle_cancellation
 def generate_subtitles(video_path: str, mode,
                        progress_callback: Optional[ProgressCallback] = None,
                        cancel_check: Optional[CancelCheck] = None,
@@ -5214,6 +5327,7 @@ def generate_subtitles(video_path: str, mode,
                     profile, exe, model, vad_model, wav,
                     os.path.join(temp_dir, 'japanese'), log, cancel_check,
                     progress_callback=progress_callback)
+                _check_cancel(cancel_check)
                 if not japanese_source:
                     stale_languages = {
                         language for language in requested
@@ -5225,6 +5339,7 @@ def generate_subtitles(video_path: str, mode,
                         stale_languages.add('ja')
                     provenance_changed = False
                     for language in stale_languages:
+                        _check_cancel(cancel_check)
                         try:
                             os.remove(paths[language])
                         except FileNotFoundError:

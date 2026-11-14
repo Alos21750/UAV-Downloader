@@ -24,6 +24,8 @@ from uav_downloader.sites.missav import _unpack_js_eval
 from bs4 import BeautifulSoup
 from uav_downloader.i18n import sites as site_i18n
 from uav_downloader.core import config
+from uav_downloader.core.download_storage import ResourceChangedError, file_digest
+from uav_downloader.core.http import controlled_get, controlled_request
 
 
 SUPREMEJAV = 'https://lk1.supremejav.com/supjav.php?c={}'
@@ -31,6 +33,9 @@ _BLOCKED_MSG = "所有鏡像都被 Cloudflare 阻擋（可能是你的網路/IP 
 _DIRECT_RANGE_WORKERS = 4
 _DIRECT_RANGE_RETRIES = 4
 _DIRECT_RETRY_BASE_DELAY = 1.0
+# Bound a single large-media response without imposing the 60 s header/idle
+# timeout on a complete movie. Range/serial retries retain this attempt's bytes.
+_DIRECT_REQUEST_BUDGET_SECONDS = 3600.0
 
 _browser_scraper = None
 _browser_scraper_lock = _threading.Lock()
@@ -232,7 +237,7 @@ def _fetch_embed(scraper, url, referer):
     for _ in range(6):
         if not _public_https_url(url):
             raise ValueError('Unsafe playback source URL')
-        response = scraper.get(
+        response = controlled_get(scraper,
             url, headers={'Referer': referer}, timeout=25,
             allow_redirects=False, **config.proxy_request_kwargs())
         if not _public_https_url(str(response.url)):
@@ -379,7 +384,7 @@ class SiteSupJav(M3U8Crawler):
                 return None, source_headers
             query = urlencode([(k, v) for k, v in parse_qsl(parts.query) if k != 'filecode'])
             api_url = origin + '/api/stream' + ('?' + query if query else '')
-            api_response = scraper.post(
+            api_response = controlled_request(scraper, 'post',
                 api_url, headers=source_headers,
                 json={'filecode': filecode, 'device': 'web', 'codecs': []},
                 timeout=25, allow_redirects=False, **config.proxy_request_kwargs(),
@@ -451,6 +456,10 @@ class SiteSupJav(M3U8Crawler):
         return bool(self._m3u8url or getattr(self, '_direct_url', None))
 
     def start_download(self):
+        with execution_scope(self._stop()):
+            return self._start_download_sources()
+
+    def _start_download_sources(self):
         sources = getattr(self, '_hls_sources', None) or (
             [('HLS', self._m3u8url, getattr(self, '_extra_headers', {}))] if self._m3u8url else [])
         last_error = None
@@ -484,6 +493,108 @@ class SiteSupJav(M3U8Crawler):
             pass
 
     def _download_direct(self):
+        with execution_scope(self._stop()):
+            return self._download_direct_scoped()
+
+    def _download_direct_scoped(self):
+        storage = getattr(self, '_storage', None)
+        with storage.session() if storage is not None else nullcontext():
+            if self._cancel_job:
+                return False
+            if storage is not None:
+                descriptor = self._probe_direct_storage_identity()
+                if self._cancel_job:
+                    return False
+                storage.bind_media(descriptor)
+                self._temp_folder = str(storage.cache)
+                self._reserve_storage_output()
+            if (storage is not None and storage.output_exists()
+                    and not getattr(self, '_direct_expected_etag', '')):
+                result = self._verify_direct_without_validator(descriptor)
+            else:
+                result = self._download_direct_owned()
+            if result and storage is not None and not storage.output_exists():
+                storage.publish_output()
+            return result
+
+    def _probe_direct_storage_identity(self):
+        """Use a strong validator for signed URL refreshes; otherwise fail closed."""
+        self._direct_probe_info = None
+        self._direct_expected_etag = ''
+        response = None
+        descriptor = dict(kind='direct', url=url_fingerprint(self._direct_url))
+        try:
+            response = controlled_get(_get_session(), self._direct_url,
+                headers={'Referer': self._direct_referer or self.direct_default_referer, 'Range': 'bytes=0-0'},
+                timeout=60, stream=True, context=self._stop(), allow_redirects=True, **config.proxy_request_kwargs())
+            headers = getattr(response, 'headers', {}) or {}
+            info = _content_range(headers.get('content-range'))
+            status = getattr(response, 'status_code', 0)
+            if status == 206 and info and info[:2] == (0, 0):
+                self._direct_probe_info = dict(total=info[2], range_supported=True)
+                size = info[2]
+            elif status == 200:
+                self._direct_probe_info = dict(range_supported=False)
+                size = int(headers.get('content-length') or 0)
+            else:
+                return descriptor
+            etag = headers.get('ETag', headers.get('etag', ''))
+            if isinstance(etag, str) and etag.startswith('"') and etag.endswith('"') and size > 0:
+                self._direct_expected_etag = etag
+                descriptor = dict(kind='direct', url=url_fingerprint(self._direct_url, signed=True),
+                    bytes=size, etag_sha256=hashlib.sha256(etag.encode()).hexdigest())
+            return descriptor
+        except Exception:
+            return descriptor
+        finally:
+            if response is not None:
+                close = getattr(response, 'close', None)
+                if callable(close):
+                    close()
+
+    def _verify_direct_without_validator(self, descriptor):
+        """A URL alone cannot identify bytes: compare a fresh owned scratch file."""
+        storage = self._storage
+        fd, part = tempfile.mkstemp(prefix='direct-verify-', suffix='.part', dir=storage.cache)
+        os.close(fd)
+        try:
+            done, total = self._download_direct_to(part, self._direct_referer or self.direct_default_referer, time.time())
+            if self._cancel_job:
+                return False
+            if done <= 0 or os.path.getsize(part) != done or (total > 0 and done != total):
+                raise ResourceChangedError('Cannot verify an incomplete direct media response')
+            digest = file_digest(part)
+            if digest == file_digest(storage.output):
+                return True
+            storage.bind_media(dict(descriptor, content_revision=digest))
+            self._temp_folder = str(storage.cache)
+            self._reserve_storage_output()
+            if storage.output_exists():
+                return True
+            if self._cancel_job:
+                return False
+            try:
+                os.replace(part, storage.output)
+            except OSError as exc:
+                raise StorageWriteError(storage.output, exc) from exc
+            return True
+        finally:
+            self._safe_remove(part)
+
+    def _download_direct_to(self, part, ref, start):
+        try:
+            ranged = self._download_direct_ranges(part, ref, start)
+        except (StorageWriteError, ResourceChangedError):
+            raise
+        except Exception:
+            if self._cancel_job:
+                raise
+            print(f'\n[{self.direct_site_name}] Parallel ranges failed; retrying with one resumable connection.', flush=True)
+            self._safe_remove(part)
+            ranged = None
+        return self._download_direct_serial(part, ref, start) if ranged is None else ranged
+
+    def _download_direct_owned(self):
         self._progress_unit = 'bytes'
         if self._cancel_job:
             return False
@@ -498,23 +609,7 @@ class SiteSupJav(M3U8Crawler):
         ref = self._direct_referer or self.direct_default_referer
         start = time.time()
         try:
-            try:
-                ranged = self._download_direct_ranges(part, ref, start)
-            except StorageWriteError:
-                raise
-            except Exception:
-                if self._cancel_job:
-                    raise
-                print(
-                    f'\n[{self.direct_site_name}] Parallel ranges failed; '
-                    'retrying with one resumable connection.',
-                    flush=True)
-                self._safe_remove(part)
-                ranged = None
-            if ranged is None:
-                done, total = self._download_direct_serial(part, ref, start)
-            else:
-                done, total = ranged
+            done, total = self._download_direct_to(part, ref, start)
         except StorageWriteError:
             # Preserve the partial file; a failing device must not be
             # subjected to a source fallback or another write attempt.
@@ -543,21 +638,31 @@ class SiteSupJav(M3U8Crawler):
         """Use up to four HTTP Range connections when the host supports ranges.
         The shared requests session mounts SharedSSLAdapter, which is required for every
         concurrent HTTPS path in this project. Return None to keep the serial fallback."""
+        if self._cancel_job:
+            return 0, 0
         session = _get_session()
+        cached_probe = getattr(self, '_direct_probe_info', None)
+        self._direct_probe_info = None
         probe = None
         try:
-            probe = session.get(
-                self._direct_url,
-                headers={'Referer': ref, 'Range': 'bytes=0-0'},
-                timeout=60,
-                stream=True,
-                allow_redirects=True,
-                **config.proxy_request_kwargs(),
-            )
-            info = _content_range(getattr(probe, 'headers', {}).get('content-range'))
-            if getattr(probe, 'status_code', 0) != 206 or not info or info[:2] != (0, 0):
-                return None
-            total = info[2]
+            if cached_probe is not None:
+                if not cached_probe['range_supported']:
+                    return None
+                total = cached_probe['total']
+            else:
+                probe = controlled_get(session,
+                    self._direct_url,
+                    headers={'Referer': ref, 'Range': 'bytes=0-0'},
+                    timeout=60,
+                    stream=True,
+                    context=self._stop(),
+                    allow_redirects=True,
+                    **config.proxy_request_kwargs(),
+                )
+                info = _content_range(getattr(probe, 'headers', {}).get('content-range'))
+                if getattr(probe, 'status_code', 0) != 206 or not info or info[:2] != (0, 0):
+                    return None
+                total = info[2]
         except Exception:
             return None
         finally:
@@ -566,6 +671,9 @@ class SiteSupJav(M3U8Crawler):
                     probe.close()
                 except Exception:
                     pass
+
+        if self._cancel_job:
+            return 0, total
 
         ranges = _split_byte_ranges(
             total,
@@ -592,14 +700,21 @@ class SiteSupJav(M3U8Crawler):
                 cursor = range_start + written
                 response = None
                 try:
-                    response = session.get(
+                    request_headers = {'Referer': ref, 'Range': f'bytes={cursor}-{range_end}'}
+                    expected_etag = getattr(self, '_direct_expected_etag', '')
+                    if expected_etag:
+                        request_headers['If-Match'] = expected_etag
+                    response = controlled_get(session,
                         self._direct_url,
-                        headers={'Referer': ref, 'Range': f'bytes={cursor}-{range_end}'},
+                        headers=request_headers,
                         timeout=60,
                         stream=True,
+                        context=self._stop(), cancel_check=stop_event.is_set,
+                        total_timeout=_DIRECT_REQUEST_BUDGET_SECONDS,
                         allow_redirects=True,
                         **config.proxy_request_kwargs(),
                     )
+                    self._check_direct_validator(response)
                     response_range = _content_range(
                         getattr(response, 'headers', {}).get('content-range'))
                     if (getattr(response, 'status_code', 0) != 206 or
@@ -616,7 +731,9 @@ class SiteSupJav(M3U8Crawler):
                                 continue
                             if written + len(chunk) > expected:
                                 raise Exception("直接下載分段長度超出預期")
-                            speed_limiter.acquire(len(chunk))
+                            if (speed_limiter.acquire(len(chunk), cancel_check=lambda: self._cancel_job or stop_event.is_set()) is False
+                                    or self._cancel_job or stop_event.is_set()):
+                                break
                             if target.write(chunk) != len(chunk):
                                 raise Exception("直接下載寫入失敗")
                             written += len(chunk)
@@ -634,7 +751,7 @@ class SiteSupJav(M3U8Crawler):
                     if written < expected:
                         detail = "未收到資料" if received == 0 else "連線提前結束"
                         raise Exception(f"直接下載分段{detail}")
-                except StorageWriteError:
+                except (StorageWriteError, ResourceChangedError):
                     stop_event.set()
                     raise
                 except Exception:
@@ -643,7 +760,7 @@ class SiteSupJav(M3U8Crawler):
                     retries += 1
                     if retries > _DIRECT_RANGE_RETRIES:
                         raise
-                    stop_event.wait(_DIRECT_RETRY_BASE_DELAY * retries)
+                    self._stop().wait(_DIRECT_RETRY_BASE_DELAY * retries, cancel_check=stop_event.is_set)
                 finally:
                     if response is not None:
                         try:
@@ -683,18 +800,22 @@ class SiteSupJav(M3U8Crawler):
         session = _get_session()
         while not self._cancel_job:
             request_headers = {'Referer': ref}
+            if getattr(self, '_direct_expected_etag', ''):
+                request_headers['If-Match'] = self._direct_expected_etag
             if done:
                 request_headers['Range'] = f'bytes={done}-'
             resp = None
             try:
-                resp = session.get(
+                resp = controlled_get(session,
                     self._direct_url,
                     headers=request_headers,
                     timeout=60,
                     stream=True,
+                    context=self._stop(), total_timeout=_DIRECT_REQUEST_BUDGET_SECONDS,
                     allow_redirects=True,
                     **config.proxy_request_kwargs(),
                 )
+                self._check_direct_validator(resp)
                 status = getattr(resp, 'status_code', 0)
                 response_range = _content_range(
                     getattr(resp, 'headers', {}).get('content-range'))
@@ -719,7 +840,9 @@ class SiteSupJav(M3U8Crawler):
                             break
                         if not chunk:
                             continue
-                        speed_limiter.acquire(len(chunk))
+                        if (speed_limiter.acquire(len(chunk), cancel_check=lambda: self._cancel_job) is False
+                                or self._cancel_job):
+                            break
                         target.write(chunk)
                         done += len(chunk)
                         received += len(chunk)
@@ -735,7 +858,7 @@ class SiteSupJav(M3U8Crawler):
                 if total == 0 and received > 0:
                     return done, done
                 raise Exception("直接下載連線提前結束")
-            except StorageWriteError:
+            except (StorageWriteError, ResourceChangedError):
                 raise
             except Exception:
                 if self._cancel_job:
@@ -743,7 +866,7 @@ class SiteSupJav(M3U8Crawler):
                 retries += 1
                 if retries > _DIRECT_RANGE_RETRIES:
                     raise
-                time.sleep(_DIRECT_RETRY_BASE_DELAY * retries)
+                self._stop().wait(_DIRECT_RETRY_BASE_DELAY * retries)
             finally:
                 if resp is not None:
                     try:
@@ -751,6 +874,15 @@ class SiteSupJav(M3U8Crawler):
                     except Exception:
                         pass
         return done, total
+
+    def _check_direct_validator(self, response):
+        expected = getattr(self, '_direct_expected_etag', '')
+        if not expected:
+            return
+        headers = getattr(response, 'headers', {}) or {}
+        actual = headers.get('ETag', headers.get('etag', ''))
+        if getattr(response, 'status_code', 0) == 412 or actual != expected:
+            raise ResourceChangedError('Media changed after resolution; resolve the source again before retrying')
 
 
 class SupJavBrowser:

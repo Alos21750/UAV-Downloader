@@ -40,6 +40,7 @@ _stub_runtime_dependency('m3u8', _m3u8_stub)
 _stub_runtime_dependency('customtkinter', _customtkinter_stub)
 
 from uav_downloader.core import config
+from uav_downloader.core import task_queue
 from uav_downloader.apps import browse as gui_modern
 from uav_downloader.apps.browse import (
     DownloadItem,
@@ -203,7 +204,7 @@ def test__select_persist_never_drops_resumable_over_cap():
 
 
 def test_save_csv_caps_with_monkeypatched_max(monkeypatch, tmp_path):
-    monkeypatch.setattr(gui_modern, 'MAX_PERSIST_ROWS', 4)
+    monkeypatch.setattr(task_queue, 'MAX_PERSIST_ROWS', 4)
     path = tmp_path / 'download_queue.csv'
     mgr = DownloadManager()
     for idx in range(2):
@@ -224,7 +225,7 @@ def test_save_csv_caps_with_monkeypatched_max(monkeypatch, tmp_path):
 
 
 def test_load_csv_caps_large_file(monkeypatch, tmp_path):
-    monkeypatch.setattr(gui_modern, 'MAX_PERSIST_ROWS', 4)
+    monkeypatch.setattr(task_queue, 'MAX_PERSIST_ROWS', 4)
     path = tmp_path / 'large_queue.csv'
     with open(path, 'w', encoding='utf-8', newline='') as f:
         writer = csv.writer(f)
@@ -270,7 +271,8 @@ def test_clear_then_save_writes_header_only(tmp_path):
         rows = list(csv.reader(f))
     assert rows == [[
         '狀態', '名稱', '進度', '速度', '網址', '目標',
-        '字幕來源證據', '工作 ID', '網站', '解析度',
+        '字幕來源證據', '已保存位元組', '總位元組', '檔案位元組', '大小類型',
+        '已完成片段', '總片段', '工作 ID', '網站', '解析度',
         '檔名範本', '縮圖', '錯誤', '錯誤代碼',
         '重試次數', '排程時間', '建立時間', '更新時間',
     ]]
@@ -365,10 +367,10 @@ def test_restart_active_download_cancels_then_requeues_same_item_first(
         def cancel_download(self, cleanup=True):
             self.cancel_calls.append(cleanup)
 
-    old_task = gui_modern._DownloadTask(
+    old_task = task_queue._DownloadTask(
         url, str(tmp_path), manager._cancel_epoch)
     old_task.job = FakeJob()
-    queued_task = gui_modern._DownloadTask(
+    queued_task = task_queue._DownloadTask(
         other_url, str(tmp_path), manager._cancel_epoch)
     with manager._lock:
         manager._active[url] = old_task
@@ -382,7 +384,7 @@ def test_restart_active_download_cancels_then_requeues_same_item_first(
     assert old_task.cancelled.is_set()
     assert old_task.job.cancel_calls == [True]
     assert (item.state, item.progress, item.speed, item.error) == (
-        '等待中', 0, '', '')
+        '重新排隊中', 47, '', '')
 
     # The replacement must only start after the old worker reaches its safe
     # completion point, and it must be placed ahead of older queued work.
@@ -402,7 +404,7 @@ def test_remove_after_restart_request_never_resurrects_item(monkeypatch, tmp_pat
     url = 'https://supjav.com/12345.html'
     manager = DownloadManager(max_concurrent=1)
     manager.add_item(url, state='下載中', dest=str(tmp_path))
-    task = gui_modern._DownloadTask(url, str(tmp_path), manager._cancel_epoch)
+    task = task_queue._DownloadTask(url, str(tmp_path), manager._cancel_epoch)
     with manager._lock:
         manager._active[url] = task
     monkeypatch.setattr(manager, '_start_download_thread', lambda _task: None)
@@ -430,7 +432,7 @@ def test_restart_waits_for_old_cleanup_before_starting_replacement(
             cleanup_started.set()
             assert allow_cleanup_finish.wait(2)
 
-    task = gui_modern._DownloadTask(url, str(tmp_path), manager._cancel_epoch)
+    task = task_queue._DownloadTask(url, str(tmp_path), manager._cancel_epoch)
     task.job = SlowCleanupJob()
     with manager._lock:
         manager._active[url] = task
@@ -446,8 +448,9 @@ def test_restart_waits_for_old_cleanup_before_starting_replacement(
     completion_thread = threading.Thread(
         target=manager._complete_download, args=(task, '已取消'))
     completion_thread.start()
-    completion_thread.join(0.05)
-    assert completion_thread.is_alive()
+    completion_thread.join(1)
+    assert not completion_thread.is_alive()
+    assert manager._active[url] is task and not task.stop.finished.is_set()
     assert started == []
 
     allow_cleanup_finish.set()
@@ -464,7 +467,7 @@ def test_cancel_all_after_restart_request_suppresses_replacement(
     url = 'https://supjav.com/12345.html'
     manager = DownloadManager(max_concurrent=1)
     item = manager.add_item(url, state='下載中', dest=str(tmp_path))
-    task = gui_modern._DownloadTask(url, str(tmp_path), manager._cancel_epoch)
+    task = task_queue._DownloadTask(url, str(tmp_path), manager._cancel_epoch)
     with manager._lock:
         manager._active[url] = task
     started = []

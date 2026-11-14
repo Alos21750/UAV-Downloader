@@ -557,7 +557,7 @@ def test_supjav_luc_encrypted_segment_decrypts_before_ts_transform(monkeypatch, 
     crawler._job_total = 1
     crawler._progress_callback = None
     monkeypatch.setattr(crawler_mod, '_http_get', lambda *a, **k: _FakeResp(content=encrypted))
-    monkeypatch.setattr(crawler_mod.speed_limiter, 'acquire', lambda _: None)
+    monkeypatch.setattr(crawler_mod.speed_limiter, 'acquire', lambda _, **kwargs: None)
     assert crawler._scrape((0, url)) is True
     assert (tmp_path / '000000.mp4').read_bytes() == plain
     assert not crawler._pending_set
@@ -619,7 +619,7 @@ def test_direct_download_uses_parallel_ranges_and_assembles_file(monkeypatch, tm
         '_make_scraper',
         lambda: (_ for _ in ()).throw(AssertionError('range-capable downloads must not use the serial path')),
     )
-    monkeypatch.setattr(supjav_mod.speed_limiter, 'acquire', lambda _size: None)
+    monkeypatch.setattr(supjav_mod.speed_limiter, 'acquire', lambda _size, **kwargs: None)
 
     crawler = SiteSupJav.__new__(SiteSupJav)
     crawler._cancel_job = False
@@ -676,7 +676,7 @@ def test_direct_parallel_range_resumes_after_connection_reset(monkeypatch, tmp_p
 
     monkeypatch.setattr(supjav_mod, '_get_session', lambda: RangeSession())
     monkeypatch.setattr(supjav_mod, '_DIRECT_RETRY_BASE_DELAY', 0)
-    monkeypatch.setattr(supjav_mod.speed_limiter, 'acquire', lambda _size: None)
+    monkeypatch.setattr(supjav_mod.speed_limiter, 'acquire', lambda _size, **kwargs: None)
 
     crawler = SiteSupJav.__new__(SiteSupJav)
     crawler._cancel_job = False
@@ -744,7 +744,7 @@ def test_direct_download_keeps_serial_fallback_without_range_support(monkeypatch
             yield payload
 
     monkeypatch.setattr(supjav_mod, '_get_session', lambda: ProbeSession())
-    monkeypatch.setattr(supjav_mod.speed_limiter, 'acquire', lambda _size: None)
+    monkeypatch.setattr(supjav_mod.speed_limiter, 'acquire', lambda _size, **kwargs: None)
 
     crawler = SiteSupJav.__new__(SiteSupJav)
     crawler._cancel_job = False

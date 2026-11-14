@@ -4,6 +4,7 @@ from concurrent.futures import CancelledError
 
 import pytest
 
+from uav_downloader.core import task_queue, watcher
 from uav_downloader.apps import browse, watch, watch_categories
 
 
@@ -41,12 +42,12 @@ def test_huangguo_search_uses_own_browser_not_missav():
 def test_huangguo_site_settings_inherit_and_allow_separate_overrides(tmp_path):
     cfg = {'output_folder': str(tmp_path), 'baseline_date': '2026-01-01',
            'site_settings': {}}
-    assert watch._resolve_site_settings(cfg, 'Huangguo') == {
+    assert watcher._resolve_site_settings(cfg, 'Huangguo') == {
         'output_folder': str(tmp_path), 'baseline_date': '2026-01-01'}
     cfg['site_settings']['Huangguo'] = {
         'output_folder': str(tmp_path / 'drama'), 'baseline_date': '2026-10-01'}
-    assert watch._resolve_site_settings(cfg, 'Huangguo') == cfg['site_settings']['Huangguo']
-    assert watch._resolve_site_settings(cfg, 'MissAV')['output_folder'] == str(tmp_path)
+    assert watcher._resolve_site_settings(cfg, 'Huangguo') == cfg['site_settings']['Huangguo']
+    assert watcher._resolve_site_settings(cfg, 'MissAV')['output_folder'] == str(tmp_path)
 
 
 def test_huangguo_listing_crawl_queues_each_numbered_episode(monkeypatch):
@@ -59,10 +60,13 @@ def test_huangguo_listing_crawl_queues_each_numbered_episode(monkeypatch):
 
     monkeypatch.setattr(browser, 'fetch_page', fetch)
     monkeypatch.setattr(browse.time, 'sleep', lambda _seconds: None)
-    manager = SimpleNamespace(
-        _cancel_epoch=0,
-        add_item=lambda url, **kwargs: added.append((url, kwargs)),
-        enqueue=lambda url, dest, **kwargs: enqueued.append((url, dest)))
+    manager = browse.DownloadManager(max_concurrent=32)
+    original_add = manager.add_item
+    def add(url, **kwargs):
+        added.append((url, kwargs))
+        return original_add(url, **kwargs)
+    monkeypatch.setattr(manager, 'add_item', add)
+    monkeypatch.setattr(manager, '_start_download_thread', lambda task: enqueued.append((task.url, task.dest)))
     app = SimpleNamespace(
         _build_gen=1, _is_closing=False, _dlmgr=manager,
         _status_lbl=SimpleNamespace(configure=lambda **_kwargs: None),
@@ -78,12 +82,12 @@ def test_huangguo_listing_crawl_queues_each_numbered_episode(monkeypatch):
 
 @pytest.fixture
 def huangguo_scan(monkeypatch, tmp_path):
-    monkeypatch.setattr(watch, 'load_seen', lambda: {})
-    monkeypatch.setattr(watch, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(watch, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
-    monkeypatch.setattr(watch, 'PER_LISTING_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'PER_LISTING_FETCH_DELAY_SEC', 0)
     logs, downloaded = [], []
-    worker = watch.SmallToolWorker(logs.append)
+    worker = watcher.SmallToolWorker(logs.append)
     worker._download_one = lambda item, dest: downloaded.append((item, dest))
     target = watch_categories.find_target('Huangguo', 'category:ai-duanju')
     cfg = {'output_folder': str(tmp_path / 'global'), 'baseline_date': '2026-01-01',
@@ -91,7 +95,7 @@ def huangguo_scan(monkeypatch, tmp_path):
                'output_folder': str(tmp_path / 'drama'), 'baseline_date': '2026-10-01'}},
            'first_run_done': False, 'version_preference': 'standard',
            'selected_targets': [{'site': 'Huangguo', 'id': target['id']}]}
-    browser = watch.SITES['Huangguo']['browser']
+    browser = watcher.SITES['Huangguo']['browser']
     return worker, cfg, browser, logs, downloaded
 
 

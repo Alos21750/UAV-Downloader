@@ -631,7 +631,7 @@ def test_local_model_cancel_terminates_worker_and_removes_ipc(
     monkeypatch.setattr(
         subtitles.multiprocessing, 'get_context',
         lambda _method: FakeContext())
-    checks = iter((False, True))
+    checks = iter((False, False, True))
 
     with pytest.raises(subtitles.SubtitleCancelled):
         subtitles._run_local_model(
@@ -700,61 +700,51 @@ def test_local_model_timeout_terminates_worker(
     assert processes[0].closed
 
 
-def test_local_model_preserves_ipc_if_worker_cannot_be_stopped(
-        monkeypatch, tmp_path):
+def test_local_model_preserves_owner_and_ipc_until_worker_can_be_stopped(monkeypatch, tmp_path):
+    import threading
     model_dir = tmp_path / 'model'
     model_dir.mkdir()
-    created_dirs = []
-
+    created_dirs, errors, closed = [], [], []
+    joining, release = threading.Event(), threading.Event()
     class UnstoppableProcess:
         exitcode = None
-
         def __init__(self, *, target, args):
-            del target
-            self.args = args
-            self.alive = False
-
+            self.args, self.alive = args, False
         def start(self):
             self.alive = True
             created_dirs.append(os.path.dirname(self.args[0]))
-
-        def is_alive(self):
-            return self.alive
-
+        def is_alive(self): return self.alive
         def join(self, _timeout=None):
-            return None
-
-        def terminate(self):
-            return None
-
-        def kill(self):
-            return None
-
+            joining.set()
+            if release.wait(0.02):
+                self.alive = False
+                self.exitcode = -1
+        def terminate(self): pass
+        def kill(self): pass
         def close(self):
-            pytest.fail('a live worker handle must not be closed')
-
-    class FakeContext:
-        Process = UnstoppableProcess
-
-    monkeypatch.setattr(
-        subtitles.multiprocessing, 'get_context',
-        lambda _method: FakeContext())
-    monkeypatch.setattr(
-        subtitles, 'LOCAL_TRANSLATION_WORKER_TIMEOUT_SECONDS', -1)
-
+            assert not self.alive
+            closed.append(True)
+    monkeypatch.setattr(subtitles.multiprocessing, 'get_context',
+                        lambda _method: type('Context', (), {'Process': UnstoppableProcess})())
+    monkeypatch.setattr(subtitles, 'LOCAL_TRANSLATION_WORKER_TIMEOUT_SECONDS', -1)
+    def run():
+        try: subtitles._run_local_model(str(model_dir), ['cue'], None, None)
+        except BaseException as error: errors.append(error)
+    worker = threading.Thread(target=run)
     try:
-        with pytest.raises(
-                subtitles.SubtitleError,
-                match='could not be stopped'):
-            subtitles._run_local_model(
-                str(model_dir), ['cue'], None, None)
-
-        assert len(created_dirs) == 1
-        assert os.path.isdir(created_dirs[0])
+        worker.start()
+        assert joining.wait(2)
+        worker.join(0.2)
+        assert worker.is_alive(), 'a live child must retain its owning subtitle worker'
+        assert not closed and not errors
         assert os.path.isfile(os.path.join(created_dirs[0], 'request.json'))
+        release.set(); worker.join(3)
+        assert not worker.is_alive() and closed == [True]
+        assert len(errors) == 1 and isinstance(errors[0], subtitles.SubtitleProcessTimeout)
+        assert not os.path.exists(created_dirs[0])
     finally:
-        for path in created_dirs:
-            shutil.rmtree(path, ignore_errors=True)
+        release.set(); worker.join(3)
+        for path in created_dirs: shutil.rmtree(path, ignore_errors=True)
 
 
 def test_local_translation_memory_is_exact_and_versioned(

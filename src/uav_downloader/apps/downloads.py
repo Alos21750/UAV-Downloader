@@ -25,14 +25,24 @@ URL_RE = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
 TERMINAL_STATES = frozenset({
     '已下載', '未偵測到日語語音', '已取消', '網址錯誤',
 })
+STOPPING_STATES = frozenset({'取消中', '暫停中', '停止中', '重新排隊中'})
 ACTIVE_STATES = frozenset({
     '準備中', '下載中', '字幕準備中', '字幕模型準備中',
     '字幕辨識中', '字幕翻譯中',
-})
+}) | STOPPING_STATES
 QUEUED_STATES = frozenset({'等待中', '等待重試', '已排程'})
 FAILED_STATES = frozenset({'未完成', '封鎖/解析失敗', '網址錯誤'})
 DONE_STATES = frozenset({'已下載', '未偵測到日語語音'})
 PAUSED_STATES = frozenset({'已暫停', '已取消'})
+
+
+def recovered_state(state: str) -> str:
+    """Preserve stop intent without restoring non-existent running workers."""
+    if state == '暫停中':
+        return '已暫停'
+    if state == '取消中':
+        return '已取消'
+    return '未完成' if state in ACTIVE_STATES or state in QUEUED_STATES else state
 
 
 @dataclass(frozen=True)

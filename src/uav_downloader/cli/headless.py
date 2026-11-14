@@ -1,3 +1,4 @@
+from uav_downloader.core.stop import StopContext, StopReason, DownloadStopped, console_stop_scope
 #!/usr/bin/env python
 # coding: utf-8
 """UAV Downloader CLI for Docker, NAS, and local terminal use — no GUI.
@@ -87,7 +88,7 @@ def gather_urls(cli_urls=None, download_dir=None):
     return out
 
 
-def main(argv=None):
+def _main(argv, context):
     _configure_console_encoding()
     args = get_parser().parse_args(argv)
 
@@ -141,10 +142,13 @@ def main(argv=None):
           f"每片執行緒: {worker_label} | 共 {len(urls)} 個網址", flush=True)
     ok = fail = 0
     for url in urls:
+        context.check()
         print(f"\n========== {url} ==========", flush=True)
         try:
             site = M3U8Sites.CreateSite(
                 url, dest, max_workers=max_workers)
+            context.job = site
+            context.check()
             if site is None:
                 print(f"[跳過] 不支援的網址: {url}", flush=True); fail += 1; continue
             if not site.is_url_vaildate():
@@ -155,6 +159,8 @@ def main(argv=None):
                 fail += 1
                 continue
             print(f"[完成] {url}", flush=True); ok += 1
+        except DownloadStopped:
+            raise
         except StorageWriteError as exc:
             print(f'[Storage error] {url}: {exc}', flush=True)
             fail += 1
@@ -163,6 +169,25 @@ def main(argv=None):
             print(f"[錯誤] {url}: {exc}", flush=True); fail += 1
     print(f"\n===== 完成 {ok} 個，失敗 {fail} 個 =====", flush=True)
     return 0 if fail == 0 else 1
+
+
+def main(argv=None):
+    context = StopContext()
+    context.job = None
+    with console_stop_scope(context):
+        try:
+            result = _main(argv, context)
+            context.check()
+            return result
+        except (KeyboardInterrupt, DownloadStopped):
+            context.request(StopReason.SHUTDOWN)
+            job = context.job
+            if job is not None:
+                job.cancel_download(cleanup=False)
+                waiter = getattr(job, 'wait_stopped', None)
+                if waiter is not None:
+                    waiter()
+            return 130
 
 
 if __name__ == '__main__':

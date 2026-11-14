@@ -438,7 +438,7 @@ def test_whisper_batch_reports_real_progress_before_process_returns(
 
 
 def test_run_process_cancellation_terminates_child(monkeypatch, tmp_path):
-    state = {'terminated': False}
+    state = {'terminated': False, 'started': False}
 
     class RunningProcess:
         returncode = None
@@ -456,14 +456,15 @@ def test_run_process_cancellation_terminates_child(monkeypatch, tmp_path):
         def kill(self):
             self.returncode = -9
 
-    monkeypatch.setattr(
-        subtitles.subprocess, 'Popen',
-        lambda *_args, **_kwargs: RunningProcess())
+    def start(*args, **kwargs):
+        state['started'] = True
+        return RunningProcess()
+    monkeypatch.setattr(subtitles.subprocess, 'Popen', start)
     with pytest.raises(subtitles.SubtitleCancelled):
         subtitles._run_process(
             ['whisper-cli.exe'],
             str(tmp_path / 'process.log'),
-            lambda: True,
+            lambda: state['started'],
             cwd=str(tmp_path),
         )
     assert state['terminated'] is True

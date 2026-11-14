@@ -16,6 +16,7 @@ except ImportError:
 from bs4 import BeautifulSoup
 
 from uav_downloader.core import config
+from uav_downloader.core.http import controlled_get
 from uav_downloader.i18n import sites as site_i18n
 from uav_downloader.sites.base import (
     MirrorsBlockedError,
@@ -132,7 +133,7 @@ def _blocked_response(response) -> bool:
 
 
 def _request(session, url, *, timeout=30):
-    response = session.get(
+    response = controlled_get(session,
         url,
         headers={'Referer': HANIME1_HOME},
         timeout=timeout,

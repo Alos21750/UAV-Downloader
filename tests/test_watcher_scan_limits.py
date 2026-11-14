@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from uav_downloader.core import watcher
 from uav_downloader.apps import watch
 from uav_downloader.apps.watch_categories import find_target
 from uav_downloader.core.video_identity import (
@@ -12,13 +13,13 @@ from uav_downloader.core.video_identity import (
 
 
 def _scan(monkeypatch, tmp_path, fetch, *, first_run=True, seen=None, pref='standard'):
-    monkeypatch.setattr(watch, 'load_seen', lambda: seen or {})
-    monkeypatch.setattr(watch, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(watch, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
-    monkeypatch.setattr(watch, 'PER_LISTING_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: seen or {})
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(watcher, 'PER_LISTING_FETCH_DELAY_SEC', 0)
     target = find_target('MissAV', legacy_name='最近更新')
     logs, downloaded = [], []
-    worker = watch.SmallToolWorker(logs.append)
+    worker = watcher.SmallToolWorker(logs.append)
     worker._fetch_page_for_site = fetch
     worker._fetch_missav_video_date = lambda _url: (
         datetime(2026, 10, 10, tzinfo=timezone.utc), '2026-10-10')
@@ -98,9 +99,9 @@ def test_all_versions_reconsiders_skipped_variant_and_separates_destinations(
 
 
 def test_scan_can_be_cancelled_before_the_next_page(monkeypatch, tmp_path):
-    monkeypatch.setattr(watch, 'load_seen', lambda: {})
-    monkeypatch.setattr(watch, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
-    worker = watch.SmallToolWorker(lambda _line: None)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     calls = []
     def fetch(_site, url):
         calls.append(url)
@@ -117,10 +118,10 @@ def test_scan_can_be_cancelled_before_the_next_page(monkeypatch, tmp_path):
 
 
 def test_scan_stops_at_confirmed_baseline(monkeypatch, tmp_path):
-    monkeypatch.setattr(watch, 'load_seen', lambda: {})
-    monkeypatch.setattr(watch, 'save_seen', lambda _seen: None)
-    monkeypatch.setattr(watch, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
-    worker = watch.SmallToolWorker(lambda _line: None)
+    monkeypatch.setattr(watcher, 'load_seen', lambda: {})
+    monkeypatch.setattr(watcher, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(watcher, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    worker = watcher.SmallToolWorker(lambda _line: None)
     calls = []
     def fetch(_site, url):
         calls.append(url)
