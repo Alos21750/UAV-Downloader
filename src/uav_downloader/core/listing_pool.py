@@ -7,7 +7,7 @@ from concurrent.futures import Future
 from itertools import count, islice
 
 from uav_downloader.core.browse_service import fetch_listing_page
-from contextlib import nullcontext
+from uav_downloader.core.stop import StopContext, StopReason, execution_scope
 
 
 @dataclass(eq=False)
@@ -18,10 +18,15 @@ class ListingRequest:
     epoch: int
     stopped: threading.Event = field(default_factory=threading.Event)
     done: Future = field(default_factory=Future)
+    stop: StopContext = field(default_factory=lambda: StopContext(managed=True), init=False, repr=False)
     paused: bool = False
     not_before: float = 0
     resolution: str = ''
     filename_template: str = ''
+
+
+    def __post_init__(self):
+        self.stop.requested = self.stopped
 
 
 class ListingPool:
@@ -52,7 +57,7 @@ class ListingPool:
     def stop_all(self, close=False):
         with self._lock:
             for request in self._requests:
-                request.stopped.set()
+                request.stop.request(StopReason.CANCEL)
             self._added = 0
             if close and not self._closed:
                 self._closed = True
@@ -99,7 +104,7 @@ class ListingPool:
             added = 0
             seen = set()
             try:
-                with nullcontext():
+                with execution_scope(request.stop):
                     for page in islice(count(1), self.max_pages):
                         if not self._boundary(request):
                             break
@@ -137,5 +142,6 @@ class ListingPool:
                 else:
                     request.done.set_result(added)
             finally:
+                request.stop.finish()
                 with self._lock:
                     self._requests.discard(request)

@@ -20,6 +20,8 @@ from urllib.parse import quote, urlsplit
 import requests
 
 from uav_downloader.core.ssl import SharedSSLAdapter
+from uav_downloader.core.http import controlled_request
+from uav_downloader.core.stop import DownloadStopped
 
 
 SUPPORTED_PROVIDERS = frozenset({
@@ -171,6 +173,8 @@ def translate_cues(
             completed += len(batch)
             if progress_callback is not None:
                 progress_callback(completed, total)
+    except DownloadStopped as error:
+        raise LlmTranslationCancelled('LLM subtitle translation was cancelled') from error
     finally:
         if own_session:
             active_session.close()
@@ -272,8 +276,9 @@ def _request_batch(
     for attempt in range(attempts):
         _check_cancelled(cancel_check)
         try:
-            response = session.post(
+            response = controlled_request(session, 'post',
                 endpoint, headers=headers, json=payload, timeout=timeout,
+                total_timeout=float(settings.timeout_seconds), cancel_check=cancel_check,
                 allow_redirects=False, stream=True, **request_kwargs)
         except (requests.Timeout, requests.ConnectionError):
             if attempt + 1 < attempts:

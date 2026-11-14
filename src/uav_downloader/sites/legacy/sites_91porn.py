@@ -6,12 +6,13 @@ import cloudscraper
 from uav_downloader.sites.base import *
 from bs4 import BeautifulSoup
 from uav_downloader.core import config
+from uav_downloader.core.http import controlled_get
 
 
 class SiteCCCDNXYZ(M3U8Crawler):
 
     def get_url_infos(self):
-        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(
+        htmlfile = controlled_get(cloudscraper.create_scraper(browser=request_headers, delay=10),
             self._url, **config.proxy_request_kwargs())
         if htmlfile.status_code != 200:
             raise Exception(f"Bad url names: {self._url}")

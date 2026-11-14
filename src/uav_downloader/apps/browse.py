@@ -1,3 +1,7 @@
+from uav_downloader.core.shutdown import ShutdownAttempt, require_stopped, remaining
+from uav_downloader.core.stop import StopTimeoutError
+from uav_downloader.core.stop import StopContext, StopReason, DownloadStopped, execution_scope, stop_scope
+from uav_downloader.core.listing_pool import ListingRequest
 #!/usr/bin/env python
 # coding: utf-8
 """UAV Browser: interactive multi-site video downloader GUI."""
@@ -128,18 +132,6 @@ from uav_downloader.core.task_queue import (
     _SUBTITLE_STATE_BY_STAGE,
 )
 
-def fetch_page_data(browser_cls, url: str, *, cancel_check=None) -> dict:
-    """Fetch video list from a category/search URL. Returns dict with videos list."""
-    try:
-        videos = (browser_cls.fetch_page(url, cancel_check=cancel_check)
-                  if browser_cls is HuangguoBrowser else browser_cls.fetch_page(url))
-        return {'videos': videos}
-    except (MirrorsBlockedError, concurrent.futures.CancelledError):
-        raise
-    except Exception as e:
-        print(f'[瀏覽錯誤] {e}')
-        return {'videos': [], 'error': str(e)}
-
 
 # ── Thumbnail loader ────────────────────────────────────────────────
 _thumb_session: Optional[requests.Session] = None
@@ -239,9 +231,18 @@ def _fetch_thumbnail(url: str, site_key: str = '') -> Optional[Image.Image]:
                     _thumb_cache.pop(k, None)
         return img
     return None
+def fetch_page_data(browser_cls, url: str, *, cancel_check=None) -> dict:
+    """Fetch video list from a category/search URL. Returns dict with videos list."""
+    try:
+        videos = (browser_cls.fetch_page(url, cancel_check=cancel_check)
+                  if browser_cls is HuangguoBrowser else browser_cls.fetch_page(url))
+        return {'videos': videos}
+    except (MirrorsBlockedError, concurrent.futures.CancelledError, DownloadStopped):
+        raise
+    except Exception as e:
+        print(f'[瀏覽錯誤] {e}')
+        return {'videos': [], 'error': str(e)}
 
-
-# ── Main App ─────────────────────────────────────────────────────────
 class ModernApp(ctk.CTk):
     def __init__(self, url: str = '', dest: str = 'download', lang: str = 'en'):
         super().__init__()
@@ -3377,7 +3378,8 @@ class ModernApp(ctk.CTk):
             dest = self._dest_var.get() or 'download'
             threading.Thread(
                 target=self._crawl_listing,
-                args=(url, dest, resolution, filename_template, due),
+                args=(url, dest, resolution, filename_template, due,
+                      ModernApp._register_listing(self, url, dest)),
                 daemon=True).start()
             return
         self._status_lbl.configure(text=T('url_not_supported'))
@@ -3396,117 +3398,150 @@ class ModernApp(ctk.CTk):
                 bool(re.match(r'https://(?:www\.)?supjav\.com/', url)) or
                 bool(re.match(r'https://(?:www\.)?hanime1\.me/', url)))
 
+    def _register_listing(self, url, dest):
+            request = ListingRequest('', url, dest, self._dlmgr.cancellation_epoch)
+            if getattr(self, '_listing_lock', None) is None:
+                self._listing_lock = threading.Lock()
+                self._listing_requests = set()
+            with self._listing_lock:
+                if self._is_closing:
+                    request.stop.request(StopReason.SHUTDOWN)
+                self._listing_requests.add(request)
+                self._listing_status_request = request
+            return request
+    def _stop_listing_requests(self):
+            lock = getattr(self, '_listing_lock', None)
+            if lock is not None:
+                with lock:
+                    for request in self._listing_requests:
+                        request.stop.request(StopReason.SHUTDOWN if self._is_closing else StopReason.CANCEL)
+                    self._listing_status_request = None
     def _crawl_listing(
-            self, url: str, dest: str, resolution: str = '',
-            filename_template: str = '', not_before: float = 0):
-        """Crawl a listing URL across all pages; add every video to the queue."""
-        gen = self._build_gen
-        seen: set[str] = set()
-        is_jable = bool(re.match(r'https://(?:www\.)?(?:jable\.tv|fs1\.app)/', url))
-        is_supjav = bool(re.match(r'https://(?:www\.)?supjav\.com/', url))
-        is_hanime1 = bool(re.match(r'https://(?:www\.)?hanime1\.me/', url))
-        is_huangguo = HuangguoBrowser.is_listing_url(url)
-        epoch = self._dlmgr._cancel_epoch
-        fingerprints = set()
-        reason = ''
-        page = 1
-
-        def _cancelled():
-            return (self._is_closing or gen != self._build_gen or
-                    epoch != self._dlmgr._cancel_epoch)
-
-        while not _cancelled():
+                self, url: str, dest: str, resolution: str = '',
+                filename_template: str = '', not_before: float = 0, request=None):
+            request = request or ModernApp._register_listing(self, url, dest)
             try:
-                if is_jable:
-                    if page == 1:
-                        page_url = url
-                    elif '?' in url:
-                        page_url = f'{url}&from={page}'
+                if not request.done.set_running_or_notify_cancel():
+                    return
+                with execution_scope(request.stop):
+                    count = ModernApp._crawl_listing_request(
+                        self, request, resolution, filename_template, not_before)
+                request.done.set_result(count)
+                return count
+            except Exception as error:
+                if not request.done.done():
+                    request.done.set_exception(error)
+                raise
+            finally:
+                with self._listing_lock:
+                    self._listing_requests.discard(request)
+                request.stop.finish()
+    def _crawl_listing_request(self, request, resolution, filename_template, not_before):
+            """Crawl a listing URL across all pages; add every video to the queue."""
+            url, dest = request.url, request.destination
+            gen = self._build_gen
+            seen: set[str] = set()
+            is_jable = bool(re.match(r'https://(?:www\.)?(?:jable\.tv|fs1\.app)/', url))
+            is_supjav = bool(re.match(r'https://(?:www\.)?supjav\.com/', url))
+            is_hanime1 = bool(re.match(r'https://(?:www\.)?hanime1\.me/', url))
+            is_huangguo = HuangguoBrowser.is_listing_url(url)
+            epoch = request.epoch
+            added = 0
+            fingerprints = set()
+            reason = ''
+            page = 1
+
+            def _cancelled():
+                return (self._is_closing or gen != self._build_gen or
+                        request.stopped.is_set() or epoch != self._dlmgr.cancellation_epoch)
+
+            def status(text):
+                def publish():
+                    if (not _cancelled() and self._listing_status_request is request):
+                        self._status_lbl.configure(text=text)
+                self._ui(publish, gen=gen)
+
+            while not _cancelled():
+                try:
+                    if is_huangguo:
+                        page_url = HuangguoBrowser.page_url(url, page)
+                        videos = HuangguoBrowser.fetch_page(page_url, cancel_check=_cancelled)
+                    elif is_jable:
+                        if page == 1:
+                            page_url = url
+                        elif '?' in url:
+                            page_url = f'{url}&from={page}'
+                        else:
+                            page_url = f'{url.rstrip("/")}/?from={page}'
+                        videos = JableTVBrowser.fetch_page(page_url)
+                    elif is_supjav:
+                        page_url = SupJavBrowser.page_url(url, page)
+                        videos = SupJavBrowser.fetch_page(page_url)
+                    elif is_hanime1:
+                        page_url = Hanime1Browser.page_url(url, page)
+                        videos = Hanime1Browser.fetch_page(page_url)
                     else:
-                        page_url = f'{url.rstrip("/")}/?from={page}'
-                    videos = JableTVBrowser.fetch_page(page_url)
-                elif is_supjav:
-                    page_url = SupJavBrowser.page_url(url, page)
-                    videos = SupJavBrowser.fetch_page(page_url)
-                elif is_hanime1:
-                    page_url = Hanime1Browser.page_url(url, page)
-                    videos = Hanime1Browser.fetch_page(page_url)
-                elif is_huangguo:
-                    page_url = HuangguoBrowser.page_url(url, page)
-                    videos = HuangguoBrowser.fetch_page(page_url, cancel_check=_cancelled)
-                else:
-                    page_url = MissAVBrowser.page_url(url, page)
-                    videos = MissAVBrowser.fetch_page(page_url)
-            except concurrent.futures.CancelledError:
-                reason = T('selection_scan_cancelled')
-                break
-            except MirrorsBlockedError as e:
-                print(f'[crawl] page {page} blocked: {e}')
-                reason = T('mirrors_blocked')
-                break
-            except Exception as e:
-                print(f'[crawl] page {page} error: {e}')
-                reason = T('fetch_error')
-                break
+                        page_url = MissAVBrowser.page_url(url, page)
+                        videos = MissAVBrowser.fetch_page(page_url)
+                except DownloadStopped:
+                    break
+                except MirrorsBlockedError as e:
+                    print(f'[crawl] page {page} blocked: {e}')
+                    reason = T('mirrors_blocked')
+                    break
+                except Exception as e:
+                    print(f'[crawl] page {page} error: {e}')
+                    reason = T('fetch_error')
+                    break
 
-            if _cancelled():
-                break
-            if not videos:
-                if page == 1:
-                    print(f'[crawl] No videos found on first page: {url}')
-                break
-            fingerprint = frozenset(str(v.get('url', '')) for v in videos)
-            if fingerprint in fingerprints:
-                reason = T('selection_scan_repeated')
-                break
-            fingerprints.add(fingerprint)
-
-            new_count = 0
-            for v in videos:
                 if _cancelled():
                     break
-                video_url = v.get('url', '')
-                if video_url and video_url not in seen and M3U8Sites.VaildateUrl(video_url):
-                    seen.add(video_url)
-                    new_count += 1
-                    name = v.get('title', '')
-                    candidate = dict(v)
-                    candidate['_site'] = (
-                        'JableTV' if is_jable
-                        else 'SupJav' if is_supjav
-                        else 'Hanime1' if is_hanime1
-                        else 'Huangguo' if is_huangguo
-                        else 'MissAV')
-                    candidate['_source_listing_url'] = url
-                    self._dlmgr.add_item(
-                        video_url, name=name, state='等待中', dest=dest,
-                        source_subtitle_evidence=(
-                            trusted_chinese_subtitle_evidence(candidate)),
-                        resolution=resolution,
-                        filename_template=filename_template,
-                        thumbnail=str(v.get('thumbnail') or ''),
-                        site=candidate['_site'])
-                    self._dlmgr.enqueue(
-                        video_url, dest, not_before=not_before)
-
-            if new_count == 0:
-                reason = T('selection_scan_repeated')
-                break  # No new videos on this page, stop
-
-            self._ui(lambda n=len(seen): self._status_lbl.configure(
-                text=T('crawling_url') + f' ({n})'), gen=gen)
-            page += 1
-            for _ in range(3):
-                if _cancelled():
+                if not videos:
+                    if page == 1:
+                        print(f'[crawl] No videos found on first page: {url}')
                     break
-                time.sleep(0.1)
+                fingerprint = frozenset(str(v.get('url', '')) for v in videos)
+                if fingerprint in fingerprints:
+                    reason = T('selection_scan_repeated')
+                    break
+                fingerprints.add(fingerprint)
 
-        n = len(seen)
-        if _cancelled():
-            reason = T('selection_scan_cancelled')
-        self._ui(lambda: self._status_lbl.configure(
-            text=(T('selection_all_partial', count=n, reason=reason)
-                  if reason else T('crawl_added', n=n))), gen=gen)
+                new_count = 0
+                for v in videos:
+                    if _cancelled():
+                        break
+                    video_url = v.get('url', '')
+                    if video_url and video_url not in seen and M3U8Sites.VaildateUrl(video_url):
+                        seen.add(video_url)
+                        new_count += 1
+                        candidate = dict(v)
+                        candidate['_site'] = (
+                            'JableTV' if is_jable
+                            else 'SupJav' if is_supjav
+                            else 'Hanime1' if is_hanime1
+                            else 'Huangguo' if is_huangguo
+                            else 'MissAV')
+                        candidate['_source_listing_url'] = url
+                        if self._dlmgr.enqueue_listing_video(candidate, dest, epoch,
+                                resolution=resolution, filename_template=filename_template,
+                                not_before=not_before,
+                                cancel_check=lambda: request.stopped.is_set() or self._is_closing):
+                            added += 1
+
+                if new_count == 0:
+                    reason = T('selection_scan_repeated')
+                    break  # No new videos on this page, stop
+
+                status(T('crawling_url') + f' ({len(seen)})')
+                page += 1
+                for _ in range(3):
+                    if _cancelled():
+                        break
+                    time.sleep(0.1)
+
+            status(T('selection_all_partial', count=added, reason=reason)
+                   if reason else T('crawl_added', n=added))
+            return added
 
     def _download_all(self):
         if not self._preflight_download_destination():
@@ -3530,7 +3565,8 @@ class ModernApp(ctk.CTk):
                 dest = self._dest_var.get() or 'download'
                 threading.Thread(
                     target=self._crawl_listing,
-                    args=(url, dest, resolution, filename_template, due),
+                    args=(url, dest, resolution, filename_template, due,
+                      ModernApp._register_listing(self, url, dest)),
                     daemon=True).start()
                 return
         dest = self._dest_var.get() or 'download'
@@ -3706,12 +3742,14 @@ class ModernApp(ctk.CTk):
                 not messagebox.askyesno(
                     T('cancel_all'), T('cancel_all_confirm'))):
             return
+        ModernApp._stop_listing_requests(self)
         self._dlmgr.cancel_all()
 
     def _clear_queue(self):
         if self._dlmgr.get_items() and not messagebox.askyesno(
                 T('clear_list'), T('clear_queue_confirm')):
             return
+        ModernApp._stop_listing_requests(self)
         self._dlmgr.clear_all()
         self._dl_gen += 1
         self._last_download_save_sig = None
@@ -3946,6 +3984,7 @@ class ModernApp(ctk.CTk):
         if not messagebox.askyesno(T('clear_saved_queue'),
                                    T('clear_saved_queue_confirm')):
             return
+        ModernApp._stop_listing_requests(self)
         self._dlmgr.clear_all()
         self._dl_gen += 1
         self._last_download_save_sig = None
@@ -4505,10 +4544,13 @@ class ModernApp(ctk.CTk):
 
     # ── Close ────────────────────────────────────────────────────────
     def _on_close(self):
+        if getattr(self, '_close_save_pending', False):
+            return
         self._is_closing = True
         if not getattr(self, '_startup_complete', True):
             self._close_requested = True
             return
+        self._close_save_pending = True
         if self._dl_drain_id:
             try:
                 self.after_cancel(self._dl_drain_id)
@@ -4519,20 +4561,46 @@ class ModernApp(ctk.CTk):
             self._thumb_executor.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
-        try:
-            with self._dlmgr._lock:
-                for item in self._dlmgr._items.values():
-                    if item.state in (
-                            '準備中', '下載中', '等待中', '等待重試',
-                            '已排程', '字幕準備中', '字幕辨識中',
-                            '字幕翻譯中'):
-                        item.state = '未完成'
-                        item.speed = ''
-                self._dlmgr.save_csv(CSV_PATH)
-        except Exception:
-            pass
-        self._dlmgr.cancel_all(cleanup=False)
-        self.destroy()
+        ModernApp._stop_listing_requests(self)
+        self._close_listings = tuple(getattr(self, '_listing_requests', ()))
+        attempt = ModernApp._start_close_work(self)
+        ModernApp._poll_close_work(self, attempt.future, time.monotonic() + 10)
+
+    def _start_close_work(self):
+        def stop_and_save(deadline):
+            self._dlmgr.cancel_all(cleanup=False, reason=StopReason.SHUTDOWN)
+            require_stopped(self._dlmgr.wait_stopped, deadline)
+            for request in self._close_listings:
+                if not request.stop.finished.wait(remaining(deadline)):
+                    raise StopTimeoutError('Listing is still stopping')
+            self._dlmgr.save_csv(CSV_PATH)
+            return True
+        self._close_attempt = ShutdownAttempt(stop_and_save)
+        return self._close_attempt
+
+    def _poll_close_work(self, future, deadline):
+        error = None
+        if future.done():
+            try:
+                future.result()
+            except Exception as failure:
+                error = str(failure)
+            else:
+                self._close_save_pending = False
+                self.destroy()
+                return
+        elif time.monotonic() >= deadline:
+            error = 'Waiting for background work or saving / 正在等待后台退出或保存'
+        if error is not None:
+            if messagebox.askretrycancel('Close pending / 正在关闭', error):
+                if future.done():
+                    future = ModernApp._start_close_work(self).future
+                deadline = time.monotonic() + 10
+            else:
+                self._close_save_pending = False
+                self.destroy()
+                return
+        self.after(100, lambda: ModernApp._poll_close_work(self, future, deadline))
 
 
 def gui_modern_main(url: str = '', dest: str = 'download', lang: str = 'en'):
@@ -4540,7 +4608,7 @@ def gui_modern_main(url: str = '', dest: str = 'download', lang: str = 'en'):
     app = ModernApp(url=url, dest=dest, lang=lang)
     _crumb("gui_modern_main: app constructed, entering mainloop")
     try:
-        if not app._is_closing:
+        if not app._is_closing or getattr(app, '_close_save_pending', False):
             app.mainloop()
     except tk.TclError:
         # CTk.mainloop calls update() while styling the Windows titlebar.

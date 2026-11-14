@@ -93,25 +93,57 @@ def CreateSiteUrlList(url, silence=False):  # noqa: N802
 
 
 def consoles_main(url, dest=None, max_workers=None):
+    from uav_downloader.core.stop import (
+        StopContext, StopReason, DownloadStopped, StopTimeoutError, console_stop_scope,
+    )
+    from uav_downloader.core.storage import StorageWriteError
     if not url:
-        url = input("輸入支援的網址: ")
-    job = create_site(url, dest, max_workers=max_workers)
-    if job is None:
-        print(f"不支援的網址: {url}")
-        return 2
-    if not job.is_url_vaildate():
-        print(f"無法解析影片: {url}")
-        return 1
-    try:
-        completed = job.start_download()
-    except Exception as exc:
-        print(f"下載錯誤: {exc}")
-        return 1
-    if completed is False:
-        print("下載未完成")
-        return 1
-    print("下載完成!")
-    return 0
+        try:
+            url = input("輸入支援的網址: ")
+        except KeyboardInterrupt:
+            return 130
+    context = StopContext()
+    job = None
+    result = 1
+    with console_stop_scope(context):
+        try:
+            job = create_site(url, dest, max_workers=max_workers)
+            context.check()
+            if job is None:
+                print(f"不支援的網址: {url}")
+                result = 2
+            else:
+                valid = job.is_url_vaildate()
+                context.check()
+                if not valid:
+                    print(f"無法解析影片: {url}")
+                else:
+                    completed = job.start_download()
+                    context.check()
+                    if completed is False:
+                        print("下載未完成")
+                    else:
+                        print("下載完成!")
+                        result = 0
+        except (DownloadStopped, KeyboardInterrupt):
+            context.request(StopReason.SHUTDOWN)
+            print("已請求停止下載，等待工作者退出")
+        except Exception as exc:
+            if isinstance(exc, StorageWriteError):
+                context.request(StopReason.STORAGE_ERROR)
+            print(f"下載錯誤: {exc}")
+        finally:
+            if context.requested.is_set() and job is not None:
+                if hasattr(job, 'request_stop'):
+                    job.request_stop(context.reason, cleanup=False)
+                if hasattr(job, 'cancel_download'):
+                    job.cancel_download(cleanup=False)
+                waiter = getattr(job, 'wait_stopped', None)
+                if callable(waiter) and not waiter(timeout=10.0):
+                    raise StopTimeoutError('Download is still stopping; I/O ownership has not been released')
+    if context.requested.is_set() and context.reason != StopReason.STORAGE_ERROR:
+        return 130
+    return result
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import re
 import threading
 import requests
 from uav_downloader.core.ssl import SharedSSLAdapter, get_shared_ssl_context
+from uav_downloader.core.http import controlled_get, close_response, response_scope, RequestDeadlineExceeded
 try:
     from curl_cffi import requests as _cffi_requests
     _use_cffi = True
@@ -17,6 +18,7 @@ import urllib.request
 import m3u8
 from uav_downloader.core import config
 from uav_downloader.core.storage import StorageWriteError, storage_open
+from uav_downloader.core.stop import StopContext, StopReason, DownloadStopped, current_stop_context, stop_scope, execution_scope
 from Crypto.Cipher import AES
 from uav_downloader.core.config import headers
 import concurrent.futures
@@ -27,11 +29,14 @@ import shutil
 import tempfile
 import ctypes
 import sys
+import hashlib
+from contextlib import nullcontext
 from urllib.parse import urlsplit, urlunsplit, urljoin
 from uav_downloader.core.video_identity import (
     normalize_source_subtitle_evidence,
     trusted_chinese_subtitle_evidence,
 )
+from uav_downloader.core.download_storage import DownloadStorage, identity_hash, task_identity, url_fingerprint
 
 
 class MirrorsBlockedError(Exception):
@@ -199,6 +204,9 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
     saw_untrusted_redirect = False
     http_failures = set()
     for host in order:
+        context = current_stop_context()
+        if context is not None:
+            context.check()
         target = _swap_host(url, host)
         base_hdrs = dict(headers_factory(host) or {}) if headers_factory else {}
         ov = config.get_cf_override(host)
@@ -215,16 +223,26 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
             r = None
             transport_failures = 0
             while transport_failures < 2:             # 1 retry on transport error
+                if context is not None:
+                    context.check()
                 try:
-                    r = scraper.get(
+                    r = controlled_get(scraper,
                         target, timeout=timeout, headers=hdrs or {}, cookies=cookies,
                         **config.proxy_request_kwargs())
                 except Exception:
+                    if context is not None:
+                        context.check()
                     r = None
                     transport_failures += 1
                     continue
+                _check_response_stop(r, context)
                 if r.status_code == 429 and rate_limit_waits:
-                    time.sleep(rate_limit_waits.pop(0))   # rate limited: wait, then same host again
+                    delay = rate_limit_waits.pop(0)
+                    if context is not None:
+                        context.wait(delay)
+                        context.check()
+                    else:
+                        time.sleep(delay)
                     continue
                 break
             if r is None:
@@ -271,13 +289,17 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
 
 # ── Global speed limiter (token bucket) ──────────────────────────
 class _SpeedLimiter:
-    """Thread-safe token-bucket rate limiter shared across all downloads."""
+    """One shared byte budget with wakeable rate changes and bounded stop checks."""
 
-    def __init__(self):
+    STOP_POLL_SECONDS = 0.05
+
+    def __init__(self, *, clock=None):
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+        self._clock = clock or time.monotonic
         self._limit_bps = 0  # 0 = unlimited
         self._tokens = 0.0
-        self._last = time.time()
+        self._last = self._clock()
 
     @property
     def limit_bps(self) -> int:
@@ -286,29 +308,45 @@ class _SpeedLimiter:
             return self._limit_bps
 
     def set_limit(self, mbps: float) -> None:
-        with self._lock:
-            self._limit_bps = int(mbps * 1024 * 1024) if mbps > 0 else 0
-            self._tokens = float(self._limit_bps)
-            self._last = time.time()
+        limit = int(mbps * 1024 * 1024) if mbps > 0 else 0
+        with self._condition:
+            previous = self._limit_bps
+            self._refill_locked()
+            self._limit_bps = limit
+            # Preserve spent budget when adjusting an existing cap. Repeated
+            # settings saves must not grant every downloader a fresh burst.
+            self._tokens = float(limit) if previous <= 0 else min(self._tokens, limit)
+            self._condition.notify_all()
 
-    def acquire(self, nbytes: int) -> None:
-        with self._lock:
-            limit = self._limit_bps
-        if limit <= 0:
-            return
-        while nbytes > 0:
-            with self._lock:
-                now = time.time()
-                self._tokens += (now - self._last) * self._limit_bps
-                self._last = now
-                if self._tokens > self._limit_bps:
-                    self._tokens = float(self._limit_bps)
+    def _refill_locked(self):
+        now = self._clock()
+        elapsed = max(0.0, now - self._last)
+        self._tokens = min(float(self._limit_bps), self._tokens + elapsed * self._limit_bps)
+        self._last = now
+
+    def acquire(self, nbytes: int, cancel_check=None) -> bool:
+        """Return True when permitted, False on stop; never write after False.
+
+        Old one-argument callers can keep ignoring the result. A stop callback
+        must be nonblocking and must not call back into this limiter. Rate
+        changes wake all waiters; stop is checked at most every 50 ms while
+        throttled (excluding OS scheduling). Partial budget is not refunded.
+        """
+        with self._condition:
+            while True:
+                if cancel_check is not None and cancel_check():
+                    return False
+                if self._limit_bps <= 0 or nbytes <= 0:
+                    return True
+                self._refill_locked()
                 take = min(nbytes, int(self._tokens))
                 if take > 0:
                     self._tokens -= take
                     nbytes -= take
-            if nbytes > 0:
-                time.sleep(0.05)
+                if nbytes <= 0:
+                    return True
+                delay = max(0.001, (1 - self._tokens) / self._limit_bps)
+                self._condition.wait(min(self.STOP_POLL_SECONDS, delay))
 
 speed_limiter = _SpeedLimiter()
 
@@ -518,21 +556,53 @@ def _is_cf_block_resp(resp):
         return False
 
 
+def _check_response_stop(response, context):
+    if context is not None and context.requested.is_set():
+        close = getattr(response, 'close', None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+        context.check()
+    return response
+
+
 def _http_get(url, headers=None, timeout=20):
+    context = current_stop_context()
+    if context is not None:
+        context.check()
+    deadline = time.monotonic() + timeout
+    def remaining_budget():
+        if context is not None:
+            context.check()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RequestDeadlineExceeded('HTTP setup or fallback exhausted the request budget')
+        return remaining
     if _use_cffi:
         try:
             cffi_headers = {
                 k: v for k, v in dict(headers or {}).items()
                 if str(k).lower() != 'user-agent'
             }
-            return _get_cffi_session().get(
-                url, headers=cffi_headers, timeout=timeout,
-                **config.proxy_request_kwargs())
+            session = _get_cffi_session()
+            routes = config.proxy_request_kwargs()
+            response = controlled_get(session,
+                url, headers=cffi_headers, timeout=remaining_budget(),
+                **routes)
+            return _check_response_stop(response, context)
+        except (DownloadStopped, RequestDeadlineExceeded):
+            raise
         except Exception:
-            pass
-    return _get_session().get(
-        url, headers=dict(headers or {}), timeout=timeout,
-        **config.proxy_request_kwargs())
+            if context is not None:
+                context.check()
+    session = _get_session()
+    routes = config.proxy_request_kwargs()
+    response = controlled_get(session,
+        url, headers=dict(headers or {}), timeout=remaining_budget(),
+        **routes)
+    return _check_response_stop(response, context)
 
 
 class M3U8Crawler:
@@ -542,6 +612,26 @@ class M3U8Crawler:
     segment_retry_rounds = 6
     segment_retry_base_delay = 1.5
     segment_retry_max_delay = 6.0
+
+    def _stop(self):
+        context = getattr(self, '_stop_context', None)
+        if context is None:
+            self._stop_context = context = current_stop_context() or StopContext()
+        return context
+
+    @property
+    def _cancel_job(self):
+        return self._stop().requested.is_set()
+
+    @_cancel_job.setter
+    def _cancel_job(self, value):
+        context = self._stop()
+        if value:
+            context.request(context.reason or StopReason.CANCEL)
+        # Startup's historical False/None assignments cannot revoke a stop.
+
+    def request_stop(self, reason=StopReason.CANCEL, cleanup=False):
+        self._stop().request(reason, cleanup=cleanup)
 
     @classmethod
     def validate_url(cls, url):
@@ -605,6 +695,7 @@ class M3U8Crawler:
         self._speed_start = 0.0
         self._last_error = None
         self._source_subtitle_evidence = ()
+        self._storage = None
         try:
             self._dirName = self.validate_url(url)
             if not self._dirName: return
@@ -613,9 +704,13 @@ class M3U8Crawler:
                 self._dest_folder = os.path.join(os.getcwd(), self._dirName)
             else:
                 self._dest_folder = os.path.abspath(savepath)
-            self._temp_folder = os.path.join(self._dest_folder, self._dirName)
+            self._storage = DownloadStorage(self._dest_folder,
+                task_identity(self._url, self._dirName, self._resolution_pref))
+            self._temp_folder = str(self._storage.cache)
 
+            self._stop().check()
             self.get_url_infos()
+            self._stop().check()
             self.add_source_video_metadata({'url': self._url})
             if self.is_url_vaildate():
                 if self._targetName:
@@ -629,7 +724,6 @@ class M3U8Crawler:
                             self._filename_template)
                     if len(self._dirName) > 80:
                         self._dirName = self._dirName[:80]
-                        self._temp_folder = os.path.join(self._dest_folder, self._dirName)
                     if not self._targetName.strip():
                         self._targetName = (_sanitize_filename(self._dirName)
                                             or 'video')
@@ -688,16 +782,95 @@ class M3U8Crawler:
                 raise StorageWriteError(self._dest_folder, exc) from exc
 
     def _get_video_savename(self):
+        storage = getattr(self, '_storage', None)
+        if storage is not None and storage.output is not None:
+            return str(storage.output)
         return os.path.join(self._dest_folder, self._targetName + ".mp4")
 
     def _get_image_savename(self):
         if self._imageUrl is None: return None
-        return os.path.join(self._dest_folder, self._targetName + ".jpg")
+        return os.path.splitext(self._get_video_savename())[0] + '.jpg'
 
     def get_url_full(self): return self._url
 
     def is_target_video_exist(self):
+        storage = getattr(self, '_storage', None)
+        if storage is not None:
+            return storage.output_exists()
         return os.path.exists(self._get_video_savename())
+
+    def _reserve_storage_output(self):
+        def candidate(attempt, owner):
+            suffix = '' if attempt == 0 else '_' + owner[:8] + (f'_{attempt}' if attempt > 1 else '')
+            name = _truncate_target_name(self._targetName + suffix, self._dest_folder, owner[:8] + str(attempt))
+            return os.path.join(self._dest_folder, name + '.mp4')
+        self._storage.reserve_output(candidate)
+
+    def _segment_is_reusable(self, index, url):
+        storage = getattr(self, '_storage', None)
+        if storage is not None:
+            return storage.reusable_segment(index, url)
+        return os.path.exists(self._seg_savename(index))
+
+    def _verify_owned_hls_output(self):
+        """Revalidate remote assets before trusting a previous completed file.
+
+        The media path, duration and signatures can stay the same while its
+        content changes. A strong ETag/304 or matching decrypted bytes is
+        required, rather than treating a stable URL as proof of identity.
+        """
+        storage = self._storage
+        if not storage.output_exists():
+            return
+        sources = []
+        changed = False
+        for index, url in enumerate(self._tsList):
+            if self._cancel_job:
+                return
+            previous = storage.segment_record(index)
+            request_headers = self._m3u8_headers()
+            etag = previous.get('etag', '')
+            strong = isinstance(etag, str) and etag.startswith('"') and etag.endswith('"')
+            if strong:
+                request_headers['If-None-Match'] = etag
+            response = (self._media_get(url, timeout=25, extra_headers={'If-None-Match': etag})
+                        if strong else self._media_get(url, timeout=25))
+            try:
+                if self._cancel_job:
+                    return
+                if response.status_code == 304 and strong and previous.get('sha256') and previous.get('bytes', 0) > 0:
+                    current = dict(previous, url_sha256=url_fingerprint(url))
+                elif response.status_code == 200:
+                    data = response.content
+                    if self._key_content:
+                        data = self._make_cipher(index).decrypt(data)
+                    data = self._transform_segment(data)
+                    if not _is_valid_ts_segment(data):
+                        raise RuntimeError('Cannot verify existing output: source segment is invalid')
+                    fresh_etag = (getattr(response, 'headers', {}) or {}).get('ETag',
+                                  (getattr(response, 'headers', {}) or {}).get('etag', ''))
+                    current = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest(),
+                        url_sha256=url_fingerprint(url), etag=fresh_etag if isinstance(fresh_etag, str)
+                        and fresh_etag.startswith('"') and fresh_etag.endswith('"') else '')
+                else:
+                    raise ConnectionError('Cannot verify existing output against its media source; retry when it is available')
+                changed |= (current.get('bytes'), current.get('sha256')) != (previous.get('bytes'), previous.get('sha256'))
+                sources.append(current)
+            finally:
+                close = getattr(response, 'close', None)
+                if callable(close):
+                    close()
+        if changed:
+            # Preserve the previous output and its original provenance. A fresh
+            # content revision receives another cache and a disambiguated name.
+            descriptor = dict(self._media_descriptor,
+                content_revision=identity_hash([(s['bytes'], s['sha256']) for s in sources]))
+            storage.bind_media(descriptor)
+            storage.expect_segments(sources)
+            self._temp_folder = str(storage.cache)
+            self._reserve_storage_output()
+        else:
+            storage.confirm_output_sources(sources)
 
     def is_target_image_exist(self):
         if self._imageUrl is None: return True
@@ -707,32 +880,32 @@ class M3U8Crawler:
         """Merged headers for m3u8 and segment requests."""
         return {**headers, **self._extra_headers}
 
-    def _media_get(self, url, timeout=20):
+    def _media_get(self, url, timeout=20, extra_headers=None):
         """Transport hook for sites needing per-resource/redirect header scope."""
-        return _http_get(url, self._m3u8_headers(), timeout=timeout)
+        return _http_get(url, {**self._m3u8_headers(), **(extra_headers or {})}, timeout=timeout)
 
     def _load_m3u8(self, url):
-        resp = self._media_get(url, timeout=20)
-        status = getattr(resp, 'status_code', 0)
-        if status != 200:
-            if _is_cf_block_resp(resp):
-                raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
-            raise Exception(f"m3u8 取得失敗 (HTTP {status}): {url}")
-        text = resp.text or ''
-        if '#EXTM3U' not in text:
-            content = getattr(resp, 'content', b'') or b''
-            head = content[:3000]
-            if isinstance(head, str):
-                head = head.encode('utf-8', errors='ignore')
-            if _is_cf_block_resp(resp) or b'cloudflare' in head.lower():
-                raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
-            raise Exception(f"m3u8 內容無效（可能被阻擋或改版）: {url}")
-        final_url = str(getattr(resp, 'url', None) or url)
-        playlist = m3u8.loads(text, uri=final_url)
-        # m3u8.base_uri retains only the directory. Query-only child URIs
-        # need the final playlist filename as their RFC 3986 resolution base.
-        playlist._uav_response_url = final_url
-        return playlist
+        with response_scope(self._media_get(url, timeout=20)) as resp:
+            status = getattr(resp, 'status_code', 0)
+            if status != 200:
+                if _is_cf_block_resp(resp):
+                    raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
+                raise Exception(f"m3u8 取得失敗 (HTTP {status}): {url}")
+            text = resp.text or ''
+            if '#EXTM3U' not in text:
+                content = getattr(resp, 'content', b'') or b''
+                head = content[:3000]
+                if isinstance(head, str):
+                    head = head.encode('utf-8', errors='ignore')
+                if _is_cf_block_resp(resp) or b'cloudflare' in head.lower():
+                    raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
+                raise Exception(f"m3u8 內容無效（可能被阻擋或改版）: {url}")
+            final_url = str(getattr(resp, 'url', None) or url)
+            playlist = m3u8.loads(text, uri=final_url)
+            # m3u8.base_uri retains only the directory. Query-only child URIs
+            # need the final playlist filename as their RFC 3986 resolution base.
+            playlist._uav_response_url = final_url
+            return playlist
 
     @staticmethod
     def _playlist_base(playlist, fallback):
@@ -741,17 +914,25 @@ class M3U8Crawler:
 
     def _getm3u8PlayList(self, uri, base_url=None):
         playListUrl = urljoin(base_url or self._m3u8url, uri)
+        self._selected_playlist_url = playListUrl
         m3u8obj = self._load_m3u8(playListUrl)
         variantBase = self._playlist_base(m3u8obj, playListUrl)
         return m3u8obj, variantBase
 
     def _create_m3u8(self):
+        self._selected_playlist_url = self._m3u8url
+        variant = None
         m3u8obj = self._load_m3u8(self._m3u8url)
         downloadurl = self._playlist_base(m3u8obj, self._m3u8url)
         if len(m3u8obj.playlists) > 0:
             # Pick variant based on resolution preference
             best = select_variant(m3u8obj.playlists, self._resolution_pref)
             if best:
+                height, bandwidth = _variant_height_bw(best)
+                stream = getattr(best, 'stream_info', None)
+                variant = dict(height=height, bandwidth=bandwidth,
+                    codecs=getattr(stream, 'codecs', None), audio=getattr(stream, 'audio', None),
+                    video=getattr(stream, 'video', None), resolution=getattr(stream, 'resolution', None))
                 m3u8obj, downloadurl = self._getm3u8PlayList(best.uri, downloadurl)
 
         # Extract key info (store bytes + IV, not a cipher - cipher is NOT thread-safe)
@@ -761,13 +942,13 @@ class M3U8Crawler:
         for key in m3u8obj.keys:
             if key and key.uri:
                 m3u8_key_uri = urljoin(downloadurl, key.uri)
-                resp = self._media_get(m3u8_key_uri, timeout=15)
-                blocked = _is_cf_block_resp(resp)
-                if resp.status_code != 200 or blocked:
-                    if blocked:
-                        raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
-                    raise Exception("AES 金鑰取得失敗")
-                self._key_content = resp.content
+                with response_scope(self._media_get(m3u8_key_uri, timeout=15)) as resp:
+                    blocked = _is_cf_block_resp(resp)
+                    if resp.status_code != 200 or blocked:
+                        if blocked:
+                            raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
+                        raise Exception("AES 金鑰取得失敗")
+                    self._key_content = resp.content
                 self._key_method = getattr(key, 'method', 'AES-128')
                 self._key_iv = getattr(key, 'iv', None)
                 break  # use first key
@@ -781,6 +962,17 @@ class M3U8Crawler:
             self._tsList.append(urljoin(downloadurl, seg.uri))
         if not self._tsList:
             raise Exception("m3u8 無有效片段（可能被阻擋或改版）")
+        # No raw signed URLs or AES material in the persisted descriptor.
+        self._media_descriptor = dict(kind='hls', variant=variant,
+            playlist=url_fingerprint(self._selected_playlist_url, signed=True),
+            sequence=self._media_sequence, key_method=self._key_method, key_iv=self._key_iv,
+            key_sha256=hashlib.sha256(self._key_content or b'').hexdigest(),
+            segments=[dict(url=url_fingerprint(url, signed=True),
+                duration=getattr(segment, 'duration', None),
+                byterange=getattr(segment, 'byterange', None),
+                discontinuity=bool(getattr(segment, 'discontinuity', False)),
+                init=url_fingerprint(getattr(getattr(segment, 'init_section', None), 'uri', ''), signed=True))
+                for url, segment in zip(self._tsList, m3u8obj.segments)])
 
     def _make_cipher(self, seq_num=0):
         """Create a fresh AES cipher for one segment (thread-safe)."""
@@ -812,6 +1004,8 @@ class M3U8Crawler:
 
     def _cancellable_move(self, src, dst):
         """Move src->dst honoring cancel. Fast same-volume rename, else chunked copy."""
+        if self._cancel_job:
+            return False
         try:
             os.replace(src, dst)   # same volume: instant + atomic
             return True
@@ -825,6 +1019,8 @@ class M3U8Crawler:
                     if self._cancel_job:
                         break
                     buf = fi.read(4 * 1024 * 1024)
+                    if self._cancel_job:
+                        break
                     if not buf:
                         try: os.remove(src)
                         except OSError: pass
@@ -839,6 +1035,8 @@ class M3U8Crawler:
             return False
 
     def _mergeMp4Chunks(self):
+        if self._cancel_job:
+            return 0
         start_time = time.time()
         saveName = self._get_video_savename()
         part = saveName + '.part'
@@ -873,7 +1071,15 @@ class M3U8Crawler:
                             print(f"\n片段 {idx} 遺失, 合成失敗!!!", flush=True)
                         return 0
                     with storage_open(seg, 'rb') as f:
-                        shutil.copyfileobj(f, out, 1024 * 1024)
+                        while not self._cancel_job:
+                            data = f.read(1024 * 1024)
+                            if self._cancel_job:
+                                return 0
+                            if not data:
+                                break
+                            out.write(data)
+                        if self._cancel_job:
+                            return 0
                     remaining -= 1
                     print(f'\r合成影片中, 剩餘 {remaining} 個片段', end="")
             print()
@@ -913,7 +1119,40 @@ class M3U8Crawler:
         return spent_time
 
     def _remux_to_mp4(self, merged_ts, out_mp4, workdir):
+        with execution_scope(self._stop()):
+            return self._remux_owned(merged_ts, out_mp4, workdir)
+
+    def _reap_remux_process(self, proc):
+        # The enclosing execution lease, log and work directory stay owned
+        # while the child may still write. The service applies the user-facing
+        # timeout; a failed kill/wait must never acknowledge a fictitious exit.
+        interrupted = None
+        delay = False
+        while True:
+            try:
+                if delay:
+                    time.sleep(0.05)
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=0.3)
+                    return interrupted
+                except subprocess.TimeoutExpired:
+                    delay = False
+            except BaseException as exc:
+                if not isinstance(exc, Exception):
+                    interrupted = exc
+                    self.request_stop(StopReason.SHUTDOWN)
+                delay = True
+
+    def _remux_owned(self, merged_ts, out_mp4, workdir):
+        if self._cancel_job:
+            return False
         ffmpeg = locate_ffmpeg()
+        if self._cancel_job:
+            return False
         if not ffmpeg:
             print('[合成] 找不到 ffmpeg，略過重新封裝', flush=True)
             return False
@@ -928,19 +1167,31 @@ class M3U8Crawler:
         print('正在重新封裝為可正常拖曳的 MP4 ...', flush=True)
         try:
             with storage_open(log_path, 'wb') as errf:
+                if self._cancel_job:
+                    return False
                 proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
                                         stdout=subprocess.DEVNULL, stderr=errf,
                                         **_no_window_kwargs())
                 self._ffmpeg_proc = proc
+                reaped = False
                 try:
                     while True:
+                        if self._cancel_job:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
                         try:
-                            proc.wait(timeout=0.3); break
+                            proc.wait(timeout=0.3)
+                            reaped = True
+                            break
                         except subprocess.TimeoutExpired:
-                            if self._cancel_job:
-                                proc.kill(); proc.wait(); return False
+                            continue
                 finally:
+                    interrupted = self._reap_remux_process(proc) if not reaped else None
                     self._ffmpeg_proc = None
+                    if interrupted is not None:
+                        raise interrupted
         except StorageWriteError:
             raise
         except Exception as e:
@@ -972,19 +1223,44 @@ class M3U8Crawler:
         return False
 
     def _scrape(self, task):
+        try:
+            with stop_scope(self._stop()):
+                self._stop().check()
+                return self._scrape_one(task)
+        except DownloadStopped:
+            return False
+
+    def _scrape_one(self, task):
         """Download and decrypt one segment. task=(seq_num, url)"""
         if self._cancel_job or getattr(self, '_storage_error', None):
             return False
         seq_num, url = task
         saveName = self._seg_savename(seq_num)
-        if os.path.exists(saveName):
+        if self._segment_is_reusable(seq_num, url):
             # Segment already on disk (e.g. from a resumed job) — drop from pending
             with self._speed_lock:
                 self._pending_set.discard((seq_num, url))
             return True
 
+        response = None
         try:
-            response = self._media_get(url, timeout=25)
+            storage = getattr(self, '_storage', None)
+            request_headers = self._m3u8_headers()
+            record = storage.segment_record(seq_num) if storage is not None else {}
+            conditional = bool(record.get('etag') and storage.local_segment_valid(seq_num)) if storage is not None else False
+            if conditional:
+                request_headers['If-None-Match'] = record['etag']
+            response = (self._media_get(url, timeout=25, extra_headers={'If-None-Match': record['etag']})
+                        if conditional else self._media_get(url, timeout=25))
+            if self._cancel_job:
+                return False
+            if response.status_code == 304 and conditional:
+                if storage.revalidate_segment(seq_num, url):
+                    with self._speed_lock:
+                        self._pending_set.discard((seq_num, url))
+                        self._cached_bytes = getattr(self, '_cached_bytes', 0) + record['bytes']
+                    return True
+                return False
             if response.status_code != 200:
                 return False
             content_ts = response.content
@@ -999,16 +1275,28 @@ class M3U8Crawler:
             content_ts = self._transform_segment(content_ts)
             if not _is_valid_ts_segment(content_ts):
                 return False
-            speed_limiter.acquire(len(content_ts))
+            if (speed_limiter.acquire(len(content_ts), cancel_check=lambda: self._cancel_job) is False
+                    or self._cancel_job or getattr(self, '_storage_error', None)):
+                return False
             # Publish only fully written segments. A disk error must not
             # leave a truncated .ts looking resumable on the next run.
             part = saveName + '.part'
             with storage_open(part, 'wb') as f:
                 f.write(content_ts)
+            if self._cancel_job:
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
+                return False
             try:
                 os.replace(part, saveName)
             except OSError as exc:
                 raise StorageWriteError(saveName, exc) from exc
+            if storage is not None:
+                storage.record_segment(seq_num, url, content_ts,
+                    (getattr(response, 'headers', {}) or {}).get('ETag',
+                     (getattr(response, 'headers', {}) or {}).get('etag', '')))
             with self._speed_lock:
                 self._pending_set.discard((seq_num, url))
                 self._bytes_downloaded += len(content_ts)
@@ -1031,6 +1319,8 @@ class M3U8Crawler:
             raise
         except Exception:
             return False
+        finally:
+            close_response(response)
 
     def _startCrawl(self):
         self._storage_error = None
@@ -1056,7 +1346,11 @@ class M3U8Crawler:
             tasks = list(self._pending_set)
             with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
                 self._t2_executor = executor
-                list(executor.map(self._scrape, tasks, timeout=None))
+                try:
+                    list(executor.map(self._scrape, tasks, timeout=None))
+                except concurrent.futures.CancelledError:
+                    if not self._cancel_job:
+                        raise
             self._t2_executor = None
             still_pending = len(self._pending_set)
             if still_pending == 0:
@@ -1068,7 +1362,7 @@ class M3U8Crawler:
                         retry_base_delay * round_num,
                         retry_max_delay)
                     if delay > 0:
-                        time.sleep(delay)
+                        self._stop().wait(delay)
 
         self._t2_executor = None
         spent = time.time() - self._speed_start
@@ -1082,38 +1376,79 @@ class M3U8Crawler:
     def _prepareCrawl(self):
         self._pending_set = set()
         for i, url in enumerate(self._tsList):
-            saveName = self._seg_savename(i)
-            if not os.path.exists(saveName):
+            if not self._segment_is_reusable(i, url):
                 self._pending_set.add((i, url))
         if self._pending_set:
             self._startCrawl()
 
     def download_image(self):
+        if self._cancel_job:
+            return None
         if not self.is_target_image_exist():
             self._create_dest_folder()
+            part = None
             try:
-                response = self._media_get(self._imageUrl, timeout=15)
-                if response.status_code != 200:
-                    return None
-                with storage_open(self._get_image_savename(), 'wb') as fs:
-                    fs.write(response.content)
+                with response_scope(self._media_get(self._imageUrl, timeout=15)) as response:
+                    if response.status_code != 200:
+                        return None
+                    content = response.content
+                    if self._cancel_job:
+                        return None
+                    image = self._get_image_savename()
+                    try:
+                        fd, part = tempfile.mkstemp(prefix='.uav-cover-', suffix='.part', dir=self._dest_folder)
+                        os.close(fd)
+                    except OSError as exc:
+                        raise StorageWriteError(image, exc) from exc
+                    with storage_open(part, 'wb') as fs:
+                        fs.write(content)
+                    if self._cancel_job:
+                        return None
+                    try:
+                        os.replace(part, image)
+                    except OSError as exc:
+                        raise StorageWriteError(image, exc) from exc
             except StorageWriteError:
                 raise
             except Exception:
                 return None
+            finally:
+                if part and os.path.exists(part):
+                    try:
+                        os.remove(part)
+                    except OSError:
+                        pass
         return self._get_image_savename()
 
     def cleanup_temp(self):
-        try:
-            temp = getattr(self, '_temp_folder', None)
-            dest = getattr(self, '_dest_folder', None)
-            if (temp and os.path.isdir(temp) and
-                    os.path.abspath(temp) != os.path.abspath(dest or '')):
-                shutil.rmtree(temp, ignore_errors=True)
-        except Exception:
-            pass
+        storage = getattr(self, '_storage', None)
+        return storage.cleanup() if storage is not None else False
 
     def start_download(self):
+        with execution_scope(self._stop()):
+            try:
+                self._stop().check()
+                return self._start_download_scoped()
+            except DownloadStopped:
+                return False
+
+    def _start_download_scoped(self):
+        storage = getattr(self, '_storage', None)
+        with storage.session() if storage is not None else nullcontext():
+            if self._cancel_job:
+                return False
+            if storage is not None:
+                self._create_m3u8()
+                storage.bind_media(self._media_descriptor)
+                self._temp_folder = str(storage.cache)
+                self._reserve_storage_output()
+                self._verify_owned_hls_output()
+            result = self._start_download_owned()
+            if result and storage is not None and not storage.output_exists():
+                storage.publish_output()
+            return result
+
+    def _start_download_owned(self):
         if self._cancel_job:
             return False
         self._cancel_job = False
@@ -1122,7 +1457,8 @@ class M3U8Crawler:
         self.download_image()
         if not self.is_target_video_exist():
             self._create_temp_folder()
-            self._create_m3u8()
+            if getattr(self, '_storage', None) is None:
+                self._create_m3u8()
             if not self._cancel_job:
                 self._prepareCrawl()
             if not self._cancel_job and not self._pending_set:
@@ -1140,29 +1476,82 @@ class M3U8Crawler:
 
     def cancel_download(self, cleanup=True):
         print("\n取消下載....", flush=True)
-        self._cancel_job = True
-        if self._t2_executor:
-            try: self._t2_executor.shutdown(wait=False, cancel_futures=True)
-            except TypeError: self._t2_executor.shutdown(wait=False)
-            self._t2_executor = None
-        if self._t_executor:
-            try: self._t_executor.shutdown(wait=False, cancel_futures=True)
-            except TypeError: self._t_executor.shutdown(wait=False)
-            self._t_executor = None
+        context = self._stop()
+        context.request(context.reason or StopReason.CANCEL, cleanup=cleanup)
+        with self.__dict__.setdefault('_lifecycle_lock', threading.RLock()):
+            for executor in (getattr(self, '_t2_executor', None), getattr(self, '_t_executor', None)):
+                if executor is not None:
+                    try: executor.shutdown(wait=False, cancel_futures=True)
+                    except TypeError: executor.shutdown(wait=False)
         proc = getattr(self, '_ffmpeg_proc', None)
         if proc is not None:
             try: proc.kill()
             except Exception: pass
-        if cleanup:
+        if context.cleanup_requested:
             self.cleanup_temp()
-        print("\n下載已取消", flush=True)
+        print("\n已請求停止下載", flush=True)
 
     def begin_concurrent_download(self):
-        self._t_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        self._t_future = self._t_executor.submit(self.start_download)
+        context = self._stop()
+        with self.__dict__.setdefault('_lifecycle_lock', threading.RLock()):
+            if context.requested.is_set():
+                if not context.managed:
+                    context.finish()
+                return False
+            if getattr(self, '_t_executor', None) is not None:
+                raise RuntimeError('The previous download executor must retire before starting another')
+            # Reserve before submit: cancellation can happen before the worker
+            # first enters start_download, including cancellation of its Future.
+            reservation = context.activity()
+            reservation.__enter__()
+            try:
+                self._t_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                self._t_future = self._t_executor.submit(self.start_download)
+            except BaseException:
+                if self._t_executor is not None:
+                    self._t_executor.shutdown(wait=False, cancel_futures=True)
+                reservation.__exit__(None, None, None)
+                if not context.managed:
+                    context.finish()
+                raise
+            def completed(future):
+                reservation.__exit__(None, None, None)
+                if not context.managed:
+                    context.finish()
+            self._t_future.add_done_callback(completed)
+        return True
+
+    def wait_stopped(self, timeout=None):
+        """Bounded exit confirmation; callers must request stop separately."""
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+        def remaining():
+            return None if deadline is None else max(0.0, deadline - time.monotonic())
+        context = self._stop()
+        if not context.managed and not context.active_count and getattr(self, '_ffmpeg_proc', None) is None:
+            context.finish()
+        if not context.finished.wait(remaining()):
+            return False
+        for attribute in ('_t2_executor', '_t_executor'):
+            executor = getattr(self, attribute, None)
+            if executor is None:
+                continue
+            executor.shutdown(wait=False)
+            # ThreadPoolExecutor has no timed shutdown API. Keep its owned
+            # thread handles to join with the same deadline (CPython 3.12+).
+            for thread in tuple(executor._threads):
+                if thread is threading.current_thread():
+                    return False
+                thread.join(remaining())
+                if thread.is_alive():
+                    return False
+            if getattr(self, attribute, None) is executor:
+                setattr(self, attribute, None)
+        return not context.active_count and getattr(self, '_ffmpeg_proc', None) is None
 
     def is_concurrent_dowload_completed(self):
         if not self._t_future or not self._t_future.done():
+            return False
+        if not self.wait_stopped(timeout=0):
             return False
         self._t_future = None
         return True
@@ -1170,7 +1559,8 @@ class M3U8Crawler:
     def end_concurrent_download(self):
         if self._t_executor:
             self._t_executor.shutdown(wait=False)
-            self._t_executor = None
+            if self._stop().finished.is_set():
+                self.wait_stopped(timeout=0)
 
 
 class SiteUrlList_M3U8:

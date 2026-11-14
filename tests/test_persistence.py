@@ -271,7 +271,8 @@ def test_clear_then_save_writes_header_only(tmp_path):
         rows = list(csv.reader(f))
     assert rows == [[
         '狀態', '名稱', '進度', '速度', '網址', '目標',
-        '字幕來源證據', '工作 ID', '網站', '解析度',
+        '字幕來源證據', '已保存位元組', '總位元組', '檔案位元組', '大小類型',
+        '已完成片段', '總片段', '工作 ID', '網站', '解析度',
         '檔名範本', '縮圖', '錯誤', '錯誤代碼',
         '重試次數', '排程時間', '建立時間', '更新時間',
     ]]
@@ -383,7 +384,7 @@ def test_restart_active_download_cancels_then_requeues_same_item_first(
     assert old_task.cancelled.is_set()
     assert old_task.job.cancel_calls == [True]
     assert (item.state, item.progress, item.speed, item.error) == (
-        '等待中', 0, '', '')
+        '重新排隊中', 47, '', '')
 
     # The replacement must only start after the old worker reaches its safe
     # completion point, and it must be placed ahead of older queued work.
@@ -447,8 +448,9 @@ def test_restart_waits_for_old_cleanup_before_starting_replacement(
     completion_thread = threading.Thread(
         target=manager._complete_download, args=(task, '已取消'))
     completion_thread.start()
-    completion_thread.join(0.05)
-    assert completion_thread.is_alive()
+    completion_thread.join(1)
+    assert not completion_thread.is_alive()
+    assert manager._active[url] is task and not task.stop.finished.is_set()
     assert started == []
 
     allow_cleanup_finish.set()

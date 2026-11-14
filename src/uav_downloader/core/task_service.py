@@ -3,6 +3,7 @@ import os
 import queue
 import threading
 from uav_downloader.core.service_errors import StopTimeoutError
+from uav_downloader.core.stop import StopReason
 import time
 import shutil
 from concurrent.futures import Future
@@ -363,7 +364,7 @@ class TaskService:
                     ('未完成', row[1], row[2], '', *row[4:])
                     if row[0] in ACTIVE_STATES or row[0] in QUEUED_STATES else row
                     for row in rows[1:])
-            self.manager.cancel_all(cleanup=False)
+            self.manager.cancel_all(cleanup=False, reason=StopReason.SHUTDOWN)
             if self._abandoned.is_set():
                 raise RuntimeError('Close was abandoned')
             deadline = time.monotonic() + self.stop_timeout

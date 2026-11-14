@@ -1,7 +1,7 @@
 """Non-blocking barriers for commands owned by different desktop services."""
 from concurrent.futures import Future
 import threading
-from uav_downloader.core.service_errors import StopTimeoutError
+from uav_downloader.core.stop import StopTimeoutError
 
 
 def all_completed(futures):

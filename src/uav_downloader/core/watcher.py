@@ -1,4 +1,5 @@
 """Shared Watcher scheduling, persistence and download worker without GUI imports."""
+from uav_downloader.core.stop import StopContext, StopReason, DownloadStopped, current_stop_context, execution_scope
 import calendar
 from concurrent.futures import CancelledError
 import json
@@ -447,9 +448,11 @@ class SmallToolWorker:
     """Background worker that scans selected site/category combos and downloads new videos."""
 
     def __init__(self, log_fn, status_fn=None, storage=None):
+        self._storage = storage
         self._log = log_fn
         self._status = status_fn
-        self._stop = threading.Event()
+        self._run_stop = StopContext(managed=True)
+        self._stop = self._run_stop.requested
         self._thread: Optional[threading.Thread] = None
         self._control = threading.Condition(threading.RLock())
         self._run_generation = 0
@@ -458,8 +461,7 @@ class SmallToolWorker:
         self._scan_active = False
         self._manual_requested = False
         self._schedule_revision = 0
-        self._storage = storage
-        self._seen = storage.load_seen() if storage is not None else load_seen()
+        self._seen = load_seen()
         self._seen_lock = threading.Lock()
         self._progress = None  # (done, total, speed_bps, title) or None
         self._progress_lock = threading.Lock()
@@ -504,7 +506,7 @@ class SmallToolWorker:
         # scheduled retry that could repeatedly write to the failing device.
         self._log(f'[STORAGE-ERR] {error}')
         with self._control:
-            self._stop.set()
+            self._run_stop.request(StopReason.STORAGE_ERROR)
             self._manual_requested = False
             self._control.notify_all()
         self._set_status('st_storage_failed', ERROR_C)
@@ -519,17 +521,37 @@ class SmallToolWorker:
             if ((self._thread and self._thread.is_alive()) or
                     self._scan_lock.locked()):
                 return False
-            self._stop.clear()
+            context = self._run_stop = StopContext(managed=True)
+            self._stop = context.requested
             self._manual_requested = False
             self._run_generation += 1
             generation = self._run_generation
             self._mode = mode
             target = self._run if mode == 'monitor' else self._run_once
             self._thread = threading.Thread(
-                target=target, args=(generation,), daemon=True)
+                target=self._execute_run, args=(target, generation, context), daemon=True)
             thread = self._thread
-        thread.start()
+            # Register and start under the same lock: another start/stop must
+            # not mistake a registered, not-yet-started thread for a dead run.
+            try:
+                thread.start()
+            except BaseException:
+                context.finish()
+                self._thread = None
+                self._mode = None
+                raise
         return True
+
+    def _execute_run(self, target, generation, context):
+        try:
+            with execution_scope(context):
+                context.check()
+                target(generation)
+        except DownloadStopped:
+            pass
+        finally:
+            self._finish_run()
+            context.finish()
 
     def start_monitoring(self) -> bool:
         return self._start('monitor')
@@ -541,9 +563,9 @@ class SmallToolWorker:
         """Backward-compatible alias for continuous monitoring."""
         return self.start_monitoring()
 
-    def stop(self):
+    def stop(self, reason=StopReason.CANCEL, *, cleanup=True):
         with self._control:
-            self._stop.set()
+            self._run_stop.request(reason, cleanup=cleanup)
             self._manual_requested = False
             # Invalidate callbacks already queued by the old run.
             self._run_generation += 1
@@ -555,13 +577,21 @@ class SmallToolWorker:
             site_obj = self._active_site
         if site_obj and hasattr(site_obj, 'cancel_download'):
             try:
-                site_obj.cancel_download()
+                context = self._run_stop
+                if hasattr(site_obj, 'request_stop'):
+                    site_obj.request_stop(context.reason or StopReason.CANCEL,
+                                          cleanup=context.cleanup_requested)
+                site_obj.cancel_download(cleanup=context.cleanup_requested)
             except Exception:
                 pass
 
     def is_running(self) -> bool:
         with self._control:
             return self._thread is not None and self._thread.is_alive()
+
+    def is_stopping(self) -> bool:
+        with self._control:
+            return bool(self._stop.is_set() and self._thread is not None and self._thread.is_alive())
 
     def is_monitoring(self) -> bool:
         with self._control:
@@ -686,6 +716,8 @@ class SmallToolWorker:
                 self._set_status(
                     'st_idle' if scan_ok else 'st_detect_failed',
                     TEXT_DIM if scan_ok else WARNING)
+        except DownloadStopped:
+            pass
         except Exception as e:
             self._log(f'[ERROR] scan failed: {e}')
             self._set_status('st_detect_failed', WARNING)
@@ -723,6 +755,8 @@ class SmallToolWorker:
 
                 try:
                     scan_ok = self._perform_scan(generation)
+                except DownloadStopped:
+                    scan_ok = False
                 except Exception as e:
                     scan_ok = False
                     self._log(f'[ERROR] scan failed: {e}')
@@ -1397,6 +1431,13 @@ class SmallToolWorker:
         return True
 
     def _download_one(self, video: dict, dest: str, subtitle_mode: Optional[str] = None):
+        context = current_stop_context() or self._run_stop
+        if context.requested.is_set():
+            return
+        with execution_scope(context):
+            return self._download_one_owned(video, dest, subtitle_mode)
+
+    def _download_one_owned(self, video: dict, dest: str, subtitle_mode: Optional[str] = None):
         vurl = video['url']
         title = video.get('title', '') or vurl.rstrip('/').split('/')[-1]
         site = video.get('_site', '?')
@@ -1409,6 +1450,8 @@ class SmallToolWorker:
         site_obj = None
         try:
             site_obj = M3U8Sites.CreateSite(vurl, dest)
+            if self._stop.is_set():
+                return
             source_subtitle_evidence = (
                 trusted_chinese_subtitle_evidence(video))
             if (
@@ -1425,6 +1468,8 @@ class SmallToolWorker:
 
             # Wire up progress callback for the progress bar
             def _on_progress(done, total, speed):
+                if self._stop.is_set():
+                    return
                 with self._progress_lock:
                     self._progress = (done, total, speed, title)
 
@@ -1432,6 +1477,11 @@ class SmallToolWorker:
             with self._active_site_lock:
                 self._active_site = site_obj
             ok = site_obj.start_download()
+            if self._stop.is_set():
+                self._log('  [CANCELLED]')
+                if self._run_stop.cleanup_requested:
+                    self._cleanup_temp(site_obj)
+                return
             if ok is False and not getattr(site_obj, '_cancel_job', False):
                 self._log('  [ERR] download failed')
                 self._cleanup_temp(site_obj)
@@ -1439,7 +1489,8 @@ class SmallToolWorker:
 
             if getattr(site_obj, '_cancel_job', False):
                 self._log('  [CANCELLED]')
-                self._cleanup_temp(site_obj)
+                if self._run_stop.cleanup_requested:
+                    self._cleanup_temp(site_obj)
                 return
             subtitle_mode = normalize_subtitle_mode(
                 self._subtitle_mode if subtitle_mode is None else subtitle_mode)
@@ -1531,11 +1582,15 @@ class SmallToolWorker:
                 except Exception as exc:
                     self._log(f'  [SUBTITLE-ERR] {T("subtitle_failed", error=str(exc))}')
                     return 'subtitle_failed'
+            if self._stop.is_set():
+                return
             self._log(f'  [OK] {title}')
             self._mark_seen(vurl, title, video=video)
         except StorageWriteError as exc:
             self._halt_for_storage_error(exc)
             return 'storage_failed'
+        except DownloadStopped:
+            return
         except DownloadIncompleteError as e:
             # Each crawler stores validated segments in a URL-specific temp
             # folder.  Preserve those files so the next unattended check only
@@ -1548,6 +1603,10 @@ class SmallToolWorker:
                 self._cleanup_temp(site_obj)
             return 'blocked'
         except Exception as e:
+            if self._stop.is_set():
+                if site_obj and self._run_stop.cleanup_requested:
+                    self._cleanup_temp(site_obj)
+                return
             self._log(f'  [ERR] {e}')
             if site_obj:
                 self._cleanup_temp(site_obj)
@@ -1560,12 +1619,13 @@ class SmallToolWorker:
 
     def _cleanup_temp(self, site_obj):
         """Remove temp folder with partial segment clips if final video doesn't exist."""
+        if self._stop.is_set() and not self._run_stop.cleanup_requested:
+            return
         try:
             if site_obj.is_target_video_exist():
                 return  # Video completed, nothing to clean
-            temp = getattr(site_obj, '_temp_folder', None)
-            if temp and os.path.isdir(temp):
-                shutil.rmtree(temp, ignore_errors=True)
+            cleanup = getattr(site_obj, 'cleanup_temp', None)
+            if callable(cleanup) and cleanup():
                 self._log(f'  [CLEANUP] removed partial clips')
         except Exception:
             pass

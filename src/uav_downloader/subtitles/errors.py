@@ -1,4 +1,4 @@
-"""Localized subtitle errors shared by desktop and headless consumers."""
+"""Localized subtitle errors shared by GUI and headless task consumers."""
 from uav_downloader.i18n.locales import T
 from uav_downloader.subtitles.settings import get_translation_settings
 

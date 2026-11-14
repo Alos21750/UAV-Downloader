@@ -256,7 +256,7 @@ def test_cancel_all_cancels_local_subtitle_item(monkeypatch, tmp_path):
     assert started.wait(2)
 
     manager.cancel_all()
-    assert manager.get_items()[0].state == '已取消'
+    assert manager.get_items()[0].state == '取消中'
 
     release.set()
     assert _wait_until(lambda: manager.subtitle_active_count == 0)

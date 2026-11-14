@@ -147,4 +147,10 @@ def test_dirname_is_capped_for_temp_folder(tmp_path):
     site = _make_site(tmp_path, dirname, 'ABCD-001 title')
 
     assert len(site._dirName) == 80
-    assert site._temp_folder == os.path.join(site.dest_folder(), 'x' * 80)
+    # Full resource identity, rather than the truncated display ID, bounds
+    # cache paths and distinguishes IDs sharing the same 80-character prefix.
+    other = _make_site(tmp_path, 'x' * 150 + 'different', 'same title')
+    assert site._temp_folder != other._temp_folder
+    segment = site._seg_savename(0)
+    assert len(segment.encode('utf-16-le')) // 2 <= 255
+    assert os.path.commonpath([site._temp_folder, site.dest_folder()]) == site.dest_folder()

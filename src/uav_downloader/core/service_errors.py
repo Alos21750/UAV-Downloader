@@ -1,4 +1,2 @@
-"""Errors crossing desktop shutdown barriers."""
-
-class StopTimeoutError(TimeoutError):
-    pass
+"""Shared service error type for cooperative shutdown."""
+from uav_downloader.core.stop import StopTimeoutError

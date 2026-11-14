@@ -135,8 +135,12 @@ class SiteMissAV(M3U8Crawler):
     _scraper_lock = threading.Lock()
 
     def _scrape(self, task):
-        with self._segment_request_gate:
+        if not self._stop().acquire(self._segment_request_gate):
+            return False
+        try:
             return super()._scrape(task)
+        finally:
+            self._segment_request_gate.release()
 
     @classmethod
     def _get_scraper(cls):

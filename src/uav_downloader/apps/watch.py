@@ -1,3 +1,6 @@
+from uav_downloader.core.shutdown import ShutdownAttempt, require_stopped, remaining
+from uav_downloader.core.stop import StopTimeoutError
+from uav_downloader.core.stop import StopContext, StopReason, DownloadStopped, current_stop_context, execution_scope
 #!/usr/bin/env python
 # coding: utf-8
 """UAV Watcher — unattended downloader with site/category/date selection.
@@ -220,55 +223,6 @@ from uav_downloader.ui.translation_settings import (
 # one-file builds should be able to paint the window before importing requests,
 # FFmpeg discovery, and the subtitle runtime; those are only needed after a
 # video has finished downloading.
-_VALID_SUBTITLE_MODES = {'none', 'ja', 'en', 'zh', 'all'}
-
-
-def normalize_subtitle_mode(value) -> str:
-    mode = str(value or 'none').strip().lower()
-    return mode if mode in _VALID_SUBTITLE_MODES else 'none'
-
-
-def generate_subtitles(*args, **kwargs):
-    from uav_downloader.subtitles.engine import generate_subtitles as _generate_subtitles
-    return _generate_subtitles(*args, **kwargs)
-from uav_downloader.core.video_identity import (
-    DEFAULT_VERSION_PREFERENCE,
-    VALID_VERSION_PREFERENCES,
-    dedupe_video_candidates,
-    normalize_source_subtitle_evidence,
-    normalize_version_preference,
-    site_from_url,
-    trusted_chinese_subtitle_evidence,
-    url_slug,
-    video_code,
-    video_versions,
-)
-from uav_downloader.ui.theme import (
-    ACCENT, ACCENT_HOVER, ACCENT_DIM, SUCCESS, WARNING, ERROR_C, ERROR_DIM,
-    BG_DARK, BG_CARD, BG_CARD_HOVER, BG_INPUT, BG_HEADER, BG_SECTION,
-    BG_BADGE, TEXT_PRI, TEXT_SEC, TEXT_DIM, BORDER, BORDER_HOVER,
-    BORDER_CARD, WHITE, CARD_RADIUS, CONTROL_RADIUS, color_for_mode,
-    category_columns_for_width,
-)
-from uav_downloader.core import paths as product_paths
-from uav_downloader.core.storage import StorageWriteError
-from uav_downloader.metadata import APP_DISPLAY_NAMES, VERSION
-
-# Optional direct-fetch fallback for diagnostics / when cloudscraper struggles
-try:
-    import cloudscraper
-    from bs4 import BeautifulSoup
-except Exception:
-    cloudscraper = None
-    BeautifulSoup = None
-
-# ── Constants ────────────────────────────────────────────────────────
-APP_NAME = APP_DISPLAY_NAMES['watch']
-APP_VERSION = VERSION
-DEFAULT_WINDOW_WIDTH = 1180
-DEFAULT_WINDOW_HEIGHT = 780
-MIN_WINDOW_WIDTH = 760
-MIN_WINDOW_HEIGHT = 440
 from uav_downloader.core.watcher import (
     APP_DIR,
     _yesterday,
@@ -322,6 +276,70 @@ from uav_downloader.core.watcher import (
     SmallToolWorker,
 )
 
+_VALID_SUBTITLE_MODES = {'none', 'ja', 'en', 'zh', 'all'}
+
+
+def normalize_subtitle_mode(value) -> str:
+    mode = str(value or 'none').strip().lower()
+    return mode if mode in _VALID_SUBTITLE_MODES else 'none'
+
+
+def generate_subtitles(*args, **kwargs):
+    from uav_downloader.subtitles.engine import generate_subtitles as _generate_subtitles
+    return _generate_subtitles(*args, **kwargs)
+from uav_downloader.core.video_identity import (
+    DEFAULT_VERSION_PREFERENCE,
+    VALID_VERSION_PREFERENCES,
+    dedupe_video_candidates,
+    normalize_source_subtitle_evidence,
+    normalize_version_preference,
+    site_from_url,
+    trusted_chinese_subtitle_evidence,
+    url_slug,
+    video_code,
+    video_versions,
+)
+from uav_downloader.ui.theme import (
+    ACCENT, ACCENT_HOVER, ACCENT_DIM, SUCCESS, WARNING, ERROR_C, ERROR_DIM,
+    BG_DARK, BG_CARD, BG_CARD_HOVER, BG_INPUT, BG_HEADER, BG_SECTION,
+    BG_BADGE, TEXT_PRI, TEXT_SEC, TEXT_DIM, BORDER, BORDER_HOVER,
+    BORDER_CARD, WHITE, CARD_RADIUS, CONTROL_RADIUS, color_for_mode,
+    category_columns_for_width,
+)
+from uav_downloader.core import paths as product_paths
+from uav_downloader.core.storage import StorageWriteError
+from uav_downloader.metadata import APP_DISPLAY_NAMES, VERSION
+
+# Optional direct-fetch fallback for diagnostics / when cloudscraper struggles
+try:
+    import cloudscraper
+    from bs4 import BeautifulSoup
+except Exception:
+    cloudscraper = None
+    BeautifulSoup = None
+
+# ── Constants ────────────────────────────────────────────────────────
+APP_NAME = APP_DISPLAY_NAMES['watch']
+APP_VERSION = VERSION
+DEFAULT_WINDOW_WIDTH = 1180
+DEFAULT_WINDOW_HEIGHT = 780
+MIN_WINDOW_WIDTH = 760
+MIN_WINDOW_HEIGHT = 440
+# A configured baseline can span thousands of listing pages. End-of-list,
+# known entries, baseline dates and repeated pages bound each scan instead.
+# Keep the optional limits available for diagnostics/tests, disabled by default.
+
+
+
+
+
+
+
+
+
+
+
+
 def _initial_window_size(
         work_width: int, work_height: int) -> tuple[int, int]:
     horizontal_margin = 24
@@ -332,9 +350,11 @@ def _initial_window_size(
         320, int(work_height) - vertical_margin))
     return width, height
 
+
 def _settings_viewport_height(window_height: int | float) -> int:
     """Keep advanced settings usable without pushing the main controls away."""
     return max(104, min(260, int(window_height) - 290))
+
 
 def _logical_work_area(window) -> tuple[int, int]:
     try:
@@ -365,6 +385,73 @@ def _logical_work_area(window) -> tuple[int, int]:
         max(1, round(window.winfo_screenheight() / scaling)),
     )
 
+# ── Site / category registry ────────────────────────────────────────
+# The grouped stable-ID registry lives in smalltool_categories.py.
+
+if getattr(sys, 'frozen', False):
+    APP_DIR = os.path.dirname(sys.executable)
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ── Persistence ──────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ── Downloader core ──────────────────────────────────────────────────
+
+
+# ── GUI ──────────────────────────────────────────────────────────────
 class SmallToolApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -2826,6 +2913,8 @@ class SmallToolApp(ctk.CTk):
             pass
 
     def _on_close(self):
+        if self._is_closing:
+            return
         self._is_closing = True
         self._build_gen += 1
         self._cancel_category_work()
@@ -2838,8 +2927,7 @@ class SmallToolApp(ctk.CTk):
                     popup.destroy()
             except tk.TclError:
                 pass
-        self._worker.stop()
-        self._worker.cancel_active_download()
+        self._worker.stop(StopReason.SHUTDOWN, cleanup=False)
         try:
             patch = {
                 'selected_targets': self._get_selected_targets(),
@@ -2865,15 +2953,47 @@ class SmallToolApp(ctk.CTk):
                     pass
                 else:
                     patch['baseline_date'] = candidate
-            update_config(patch, remove=('missav_version_preference',))
-        except Exception:
-            pass
-        self._worker.wait_until_stopped(timeout=1.5)
-        try:
-            self.destroy()
-        except tk.TclError:
-            pass
+            self._close_patch = patch
+        except Exception as error:
+            # Widget reads happen only on Tk's thread; do not silently discard
+            # a malformed final draft or run Tk access in the background.
+            self._close_capture_error = error
+            self._close_patch = None
+        attempt = SmallToolApp._start_close_work(self)
+        SmallToolApp._poll_close_work(self, attempt.future, time.monotonic()+10)
 
+    def _start_close_work(self):
+        def stop_and_save(deadline):
+            self._worker.cancel_active_download()
+            require_stopped(self._worker.wait_until_stopped, deadline)
+            if getattr(self, '_close_capture_error', None) is not None:
+                raise self._close_capture_error
+            update_config(self._close_patch, remove=('missav_version_preference',))
+            return True
+        self._close_attempt = ShutdownAttempt(stop_and_save)
+        return self._close_attempt
+
+    def _poll_close_work(self, future, deadline):
+        error = None
+        if future.done():
+            try:
+                future.result()
+            except Exception as failure:
+                error = 'Background work is still stopping' if isinstance(failure, StopTimeoutError) else str(failure)
+            else:
+                self.destroy()
+                return
+        elif time.monotonic() >= deadline:
+            error = 'Waiting for background work or saving'
+        if error is not None:
+            if messagebox.askretrycancel('Close pending / 正在关闭', error+'\n\n'+'Retry waits again; Cancel exits without waiting. / 重试继续等待，取消直接退出。'):
+                if future.done():
+                    future = SmallToolApp._start_close_work(self).future
+                deadline = time.monotonic()+10
+            else:
+                self.destroy()  # Explicit exit without waiting; no fake stop acknowledgement.
+                return
+        self.after(100, lambda: SmallToolApp._poll_close_work(self, future, deadline))
 
 def main():
     app = SmallToolApp()

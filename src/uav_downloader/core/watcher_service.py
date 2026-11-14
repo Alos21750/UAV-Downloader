@@ -154,7 +154,11 @@ class WatcherService:
             return dict(config=cfg, result=result)
         if action in {'stop', 'close', 'abandon'}:
             if self.worker is not None:
-                self.worker.stop()
+                if action == 'close':
+                    from uav_downloader.core.stop import StopReason
+                    self.worker.stop(StopReason.SHUTDOWN, cleanup=False)
+                else:
+                    self.worker.stop()
                 self.worker.cancel_active_download()
                 if action == 'close':
                     if not self.worker.wait_until_stopped(timeout=self.stop_timeout):

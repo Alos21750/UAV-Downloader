@@ -573,7 +573,8 @@ def test_modern_cancel_all_cancels_queued_subtitles_and_blocks_stale_finish(
     assert manager.pending_count == 0
     assert manager.subtitle_active_count == 1
     assert manager.subtitle_pending_count == 0
-    assert all(item.state == '已取消' for item in manager.get_items())
+    assert all(item.state == ('取消中' if item.url in manager._subtitle_active else '已取消')
+               for item in manager.get_items())
     assert all(job._cancel_job for job in jobs.values())
 
     release_subtitle.set()
@@ -607,7 +608,7 @@ def test_modern_cancel_blocks_stale_download_progress(monkeypatch, tmp_path):
     assert download_started.wait(2)
     manager.cancel_all()
     item = manager.get_items()[0]
-    assert item.state == '已取消'
+    assert item.state == '取消中'
     assert item.progress == 0
     assert item.speed == ''
 

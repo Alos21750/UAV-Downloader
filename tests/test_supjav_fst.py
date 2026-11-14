@@ -20,7 +20,7 @@ def _player(links, order=('hls4', 'hls3', 'hls2'), media_type='hls', packed=True
 def _resolve(body, embed_url='https://fc2stream.example/e/video', name='FST'):
     class Scraper:
         def get(self, url, **kwargs):
-            return SimpleNamespace(status_code=200, text=body, url=embed_url)
+            return SimpleNamespace(status_code=200, text=body, content=body.encode(), url=embed_url, close=lambda: None)
     return supjav.SiteSupJav.__new__(supjav.SiteSupJav)._resolve_server(Scraper(), name, 'abc')
 
 
@@ -62,11 +62,11 @@ def test_fst_uses_final_host_after_http_redirects():
         def get(self, url, **kwargs):
             requested.append(url)
             if len(requested) == 1:
-                return SimpleNamespace(status_code=302, url=url,
+                return SimpleNamespace(status_code=302, url=url, content=b'',
                                        headers={'Location': 'https://final.example/e/video'},
                                        close=lambda: None)
             return SimpleNamespace(status_code=200, url=url,
-                                   text=_player({'hls4': '/stream/master.m3u8'}))
+                                   text=_player({'hls4': '/stream/master.m3u8'}), content=b'', close=lambda: None)
 
     url, headers = supjav.SiteSupJav.__new__(supjav.SiteSupJav)._resolve_server(
         Scraper(), 'FST', 'abc')

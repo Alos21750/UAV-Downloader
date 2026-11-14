@@ -151,9 +151,9 @@ def test_listing_download_collects_beyond_fifty_pages(monkeypatch):
         _is_closing=False, _build_gen=1,
         _ui=lambda callback, **kw: callback(),
         _status_lbl=SimpleNamespace(configure=lambda **kw: None),
-        _dlmgr=SimpleNamespace(_cancel_epoch=0, add_item=lambda *a, **kw: None,
-                               enqueue=lambda url, *a, **kw: enqueued.append(url)),
+        _dlmgr=browse.DownloadManager(max_concurrent=32),
     )
+    app._dlmgr._start_download_thread = lambda task: (enqueued.append(task.url), app._dlmgr._complete_download(task, '已下載'))
     browse.ModernApp._crawl_listing(app, 'https://missav.ai/en/new', 'download')
     assert len(enqueued) == 53
     assert calls[-1] == 54
@@ -186,10 +186,10 @@ def test_select_results_stops_repeated_page_and_reports_incomplete(monkeypatch):
 
 def test_cancel_all_during_listing_fetch_does_not_enqueue_more(monkeypatch):
     enqueued = []
-    manager = SimpleNamespace(_cancel_epoch=0, add_item=lambda *a, **kw: None,
-                              enqueue=lambda url, *a, **kw: enqueued.append(url))
+    manager = browse.DownloadManager()
+    manager._start_download_thread = lambda task: enqueued.append(task.url)
     def fetch(page):
-        manager._cancel_epoch += 1
+        manager.cancel_all()
         return [{'url': 'https://missav.ai/en/abc-1'}]
     monkeypatch.setattr(browse.MissAVBrowser, 'page_url', lambda url, page: str(page))
     monkeypatch.setattr(browse.MissAVBrowser, 'fetch_page', fetch)

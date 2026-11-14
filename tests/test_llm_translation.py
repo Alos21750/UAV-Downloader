@@ -614,14 +614,18 @@ def test_cancellation_before_request():
     assert not session.calls
 
 
-def test_cancellation_between_retry_attempts():
-    checks = iter([False, False, False, False, True])
+def test_cancellation_between_retry_attempts(monkeypatch):
+    cancelled = [False]
     session = FakeSession([FakeResponse(429)])
+    def cancel_during_backoff(*args):
+        cancelled[0] = True
+        llm._check_cancelled(lambda: cancelled[0])
+    monkeypatch.setattr(llm, '_retry_wait', cancel_during_backoff)
 
     with pytest.raises(llm.LlmTranslationCancelled):
         llm.translate_cues(
             ['入力'], _settings(max_retries=2), api_key='secret',
-            session=session, cancel_check=lambda: next(checks))
+            session=session, cancel_check=lambda: cancelled[0])
     assert len(session.calls) == 1
 
 

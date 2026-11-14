@@ -1,3 +1,5 @@
+from uav_downloader.core.http import controlled_get
+from uav_downloader.core.stop import current_stop_context
 """Public Huangguo short-drama metadata and ordinary HLS support.
 
 Only the public page payload is interpreted, as JSON. No private API, account,
@@ -84,6 +86,9 @@ def _operation(cancel_check=None, deadline=None):
 
 
 def _check_control():
+    context = current_stop_context()
+    if context is not None:
+        context.check()
     control = getattr(_local, 'control', None)
     if not control:
         return
@@ -281,7 +286,7 @@ def _get(url, *, header_factory=None, timeout=20, page=False):
             if control and control['deadline'] is not None:
                 request_timeout = max(0.01, min(timeout, control['deadline'] - time.monotonic()))
             try:
-                response = session.get(url, headers=headers, timeout=request_timeout,
+                response = controlled_get(session, url, headers=headers, timeout=request_timeout,
                                        allow_redirects=False, stream=page,
                                        **_proxy_kwargs())
             except (requests.Timeout, requests.ConnectionError) as exc:
@@ -506,8 +511,9 @@ class SiteHuangguo(M3U8Crawler):
             headers.update({'x-cdn-auth': cdn['auth'], 'x-cdn-app': cdn['app']})
         return headers
 
-    def _media_get(self, url, timeout=20):
-        return _get(url, header_factory=self._media_headers, timeout=timeout)
+    def _media_get(self, url, timeout=20, extra_headers=None):
+        return _get(url, header_factory=lambda target: {**self._media_headers(target),
+                    **(extra_headers or {})}, timeout=timeout)
 
     def _load_m3u8(self, url):
         try:

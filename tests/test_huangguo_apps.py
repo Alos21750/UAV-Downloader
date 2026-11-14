@@ -59,11 +59,14 @@ def test_huangguo_listing_crawl_queues_each_numbered_episode(monkeypatch):
         return _episodes('2026-10-10') if len(fetched) == 1 else []
 
     monkeypatch.setattr(browser, 'fetch_page', fetch)
-    monkeypatch.setattr(task_queue.time, 'sleep', lambda _seconds: None)
-    manager = SimpleNamespace(
-        _cancel_epoch=0,
-        add_item=lambda url, **kwargs: added.append((url, kwargs)),
-        enqueue=lambda url, dest, **kwargs: enqueued.append((url, dest)))
+    monkeypatch.setattr(browse.time, 'sleep', lambda _seconds: None)
+    manager = browse.DownloadManager(max_concurrent=32)
+    original_add = manager.add_item
+    def add(url, **kwargs):
+        added.append((url, kwargs))
+        return original_add(url, **kwargs)
+    monkeypatch.setattr(manager, 'add_item', add)
+    monkeypatch.setattr(manager, '_start_download_thread', lambda task: enqueued.append((task.url, task.dest)))
     app = SimpleNamespace(
         _build_gen=1, _is_closing=False, _dlmgr=manager,
         _status_lbl=SimpleNamespace(configure=lambda **_kwargs: None),
