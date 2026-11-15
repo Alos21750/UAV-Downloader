@@ -357,10 +357,13 @@ def set_notify_on_complete(value):
 
 
 def normalize_speed_limit_mbps(value):
+    import math
     try:
         parsed = float(str(value).strip())
     except (TypeError, ValueError):
         parsed = 0.0
+    if not math.isfinite(parsed):
+        return 0.0
     return max(0.0, min(parsed, MAX_SPEED_LIMIT_MBPS))
 
 

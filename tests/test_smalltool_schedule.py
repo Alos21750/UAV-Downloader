@@ -243,6 +243,6 @@ def test_window_size_stays_inside_scaled_work_area():
 
 def test_advanced_settings_viewport_is_bounded_for_small_windows():
     assert jable_smalltool._settings_viewport_height(320) == 104
-    assert jable_smalltool._settings_viewport_height(440) == 150
-    assert jable_smalltool._settings_viewport_height(680) == 260
-    assert jable_smalltool._settings_viewport_height(900) == 260
+    assert jable_smalltool._settings_viewport_height(440) == 140
+    assert jable_smalltool._settings_viewport_height(680) == 410
+    assert jable_smalltool._settings_viewport_height(900) == 630

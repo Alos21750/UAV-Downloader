@@ -1824,6 +1824,58 @@ for _language, _preview in {
     STRINGS[_language].update(zip(
         ('preview_browser', 'preview_opened', 'preview_failed'), _preview))
 
+for _language, _bandwidth in {
+    'en': ('Download cap', '0 = unlimited · Enter to apply', 'Total media bandwidth for this app, not per task. 0 = unlimited; decimals allowed (0.01–10000). MB/s uses 1024² bytes; brief network bursts may occur. Other app instances and AI model downloads are separate.', '01  Monitoring scope', '02  Download preferences', '03  AI subtitles'),
+    'zh': ('下載速度上限', '0 = 不限速 · Enter 套用', '限制本程式所有影片下載的合計速度，不是每個任務各自上限。0 = 不限速，可輸入小數（0.01–10000）。MB/s 以 1024² 位元組計，網路可能短暫突波；其他程式視窗與 AI 模型下載另外計算。', '01  監控範圍', '02  下載偏好', '03  AI 字幕'),
+    'zh-Hans': ('下载速度上限', '0 = 不限速 · Enter 应用', '限制本程序所有视频下载的合计速度，而非每个任务。0 = 不限速，支持小数（0.01–10000）。MB/s 按 1024² 字节计算，网络可能短暂突发；其他程序实例与 AI 模型下载单独计算。', '01  监控范围', '02  下载偏好', '03  AI 字幕'),
+    'ja': ('ダウンロード上限', '0 = 無制限 · Enter で適用', 'このアプリ内の動画ダウンロード合計速度。0 = 無制限、小数可（0.01–10000）。MB/s は 1024² バイト。短い通信バースト、別プロセス、AI モデルの取得は別扱いです。', '01  監視範囲', '02  ダウンロード設定', '03  AI 字幕'),
+    'th': ('จำกัดความเร็วดาวน์โหลด', '0 = ไม่จำกัด · Enter เพื่อใช้', 'จำกัดความเร็วรวมของวิดีโอในแอปนี้ ไม่ใช่ต่อรายการ 0 = ไม่จำกัด รองรับทศนิยม 0.01–10000; MB/s = 1024² ไบต์ อาจมีช่วงสั้นที่เร็วกว่า แอปอื่นและการโหลดโมเดล AI แยกต่างหาก', '01  ขอบเขตการติดตาม', '02  การดาวน์โหลด', '03  คำบรรยาย AI'),
+}.items():
+    STRINGS[_language].update(zip(('bandwidth_title', 'bandwidth_quick_hint',
+        'speed_limit_desc', 'settings_scope', 'settings_download', 'settings_subtitles'), _bandwidth))
+
+# Common queue controls should stay in the selected UI language.
+_QUEUE_UI_KEYS = (
+    'select_page_btn', 'select_all_results_btn', 'clear_selection_btn',
+    'queue_filter_all', 'queue_filter_active', 'queue_filter_queued',
+    'queue_filter_failed', 'queue_filter_done', 'queue_filter_paused',
+    'pause_all', 'pause_short', 'resume_short', 'import_urls', 'paste_urls',
+    'export_queue', 'queue_filter_empty', 'queue_start_hint',
+)
+for _language, _labels in {
+    'en': (
+        'Select page', 'Select all results', 'Clear', 'All', 'Active', 'Queued',
+        'Failed', 'History', 'Paused', 'Pause all', 'Pause', 'Resume',
+        'Import URLs', 'Paste URLs', 'Export', 'No items match this filter.',
+        'Paste a video page URL above, import a URL list, or select videos in Browse.',
+    ),
+    'zh': (
+        '選取本頁', '選取全部結果', '清除選取', '全部', '進行中', '排隊中',
+        '失敗', '歷史紀錄', '已暫停', '全部暫停', '暫停', '繼續',
+        '匯入網址', '貼上網址', '匯出清單', '此篩選條件沒有符合的項目。',
+        '在上方貼上影片頁網址、匯入網址清單，或到「瀏覽」選取影片。',
+    ),
+    'zh-Hans': (
+        '选择本页', '选择全部结果', '清除选择', '全部', '进行中', '排队中',
+        '失败', '历史记录', '已暂停', '全部暂停', '暂停', '继续',
+        '导入网址', '粘贴网址', '导出列表', '此筛选条件没有匹配的项目。',
+        '在上方粘贴视频页网址、导入网址列表，或到“浏览”选择视频。',
+    ),
+    'ja': (
+        'このページを選択', '全結果を選択', '選択解除', 'すべて', '実行中', '待機中',
+        '失敗', '履歴', '一時停止', 'すべて一時停止', '一時停止', '再開',
+        'URLを読込', 'URLを貼付', '書き出し', 'この条件に一致する項目はありません。',
+        '上に動画ページのURLを貼り付けるか、URL一覧を読み込むか、ブラウズで動画を選んでください。',
+    ),
+    'th': (
+        'เลือกหน้านี้', 'เลือกผลลัพธ์ทั้งหมด', 'ล้าง', 'ทั้งหมด', 'กำลังทำงาน', 'รอคิว',
+        'ล้มเหลว', 'ประวัติ', 'พักไว้', 'พักทั้งหมด', 'พัก', 'ทำต่อ',
+        'นำเข้า URL', 'วาง URL', 'ส่งออก', 'ไม่มีรายการตรงกับตัวกรองนี้',
+        'วาง URL หน้าวิดีโอด้านบน นำเข้ารายการ URL หรือเลือกวิดีโอในหน้าค้นหา',
+    ),
+}.items():
+    STRINGS[_language].update(zip(_QUEUE_UI_KEYS, _labels))
+
 STATE_LABELS = {
     '下載中': {'en': 'Downloading', 'th': 'กำลังดาวน์โหลด', 'zh': '下載中', 'zh-Hans': '下载中', 'ja': 'ダウンロード中'},
     '字幕準備中': {'en': 'Subtitle setup', 'th': 'เตรียมคำบรรยาย', 'zh': '字幕準備', 'zh-Hans': '字幕准备', 'ja': '字幕準備'},

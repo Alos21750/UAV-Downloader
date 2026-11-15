@@ -408,7 +408,9 @@ def _initial_window_size(
 
 def _settings_viewport_height(window_height: int | float) -> int:
     """Keep advanced settings usable without pushing the main controls away."""
-    return max(104, min(260, int(window_height) - 290))
+    height = int(window_height)
+    reserved = 300 if height < 560 else 270
+    return max(104, min(720, height - reserved))
 
 
 def _logical_work_area(window) -> tuple[int, int]:
@@ -2143,6 +2145,8 @@ class SmallToolApp(ctk.CTk):
         self._cfg.pop('missav_version_preference', None)
         from uav_downloader.sites.base import set_resolution_pref
         set_resolution_pref(self._cfg['resolution'])
+        from uav_downloader.sites.base import speed_limiter
+        speed_limiter.set_limit(config.get_speed_limit_mbps())
         self._log_queue: list[str] = []
         self._log_lock = threading.Lock()
         self._is_closing = False
@@ -2292,6 +2296,8 @@ class SmallToolApp(ctk.CTk):
             self._apply_language(code)
 
     def _snapshot_ui_state(self) -> dict:
+        from uav_downloader.ui.bandwidth import commit_bandwidth_controls
+        commit_bandwidth_controls(self)
         check_state = 'normal'
         if hasattr(self, '_check_now_btn'):
             try:
@@ -2574,10 +2580,13 @@ class SmallToolApp(ctk.CTk):
             logical_height = event.height
         if hasattr(self, '_settings_scroll'):
             try:
-                self._settings_scroll.configure(
-                    height=_settings_viewport_height(logical_height))
+                viewport = _settings_viewport_height(logical_height)
+                if viewport != getattr(self, '_last_settings_height', None):
+                    self._settings_scroll.configure(height=viewport)
+                    self._last_settings_height = viewport
             except (tk.TclError, AttributeError):
                 pass
+        self._reflow_settings(logical_width)
         columns = category_columns_for_width(logical_width)
         if columns == self._category_columns:
             return
@@ -2703,9 +2712,20 @@ class SmallToolApp(ctk.CTk):
             corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
             border_width=1, border_color=BORDER_HOVER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
-            font=(font_family, 10, 'bold'),
+            font=(font_family, 12, 'bold'),
             command=self._toggle_settings)
         self._settings_toggle_btn.pack(side='left', padx=(6, 0))
+
+        quick = ctk.CTkFrame(cfg_card, fg_color='transparent')
+        quick.grid(row=1, column=0, columnspan=3, sticky='ew', padx=16, pady=(0, 10))
+        ctk.CTkLabel(quick, text=T('bandwidth_title'), text_color=TEXT_SEC,
+                     font=(font_family, 12, 'bold')).pack(side='left', padx=(0, 12))
+        from uav_downloader.ui.bandwidth import BandwidthControl
+        self._bandwidth_control = BandwidthControl(
+            quick, value=config.get_speed_limit_mbps(), command=self._on_bandwidth_change)
+        self._bandwidth_control.pack(side='left')
+        ctk.CTkLabel(quick, text=T('bandwidth_quick_hint'), text_color=TEXT_DIM,
+                     font=(font_family, 11)).pack(side='left', padx=16)
 
         settings_scroll = ctk.CTkScrollableFrame(
             cfg_card,
@@ -2714,8 +2734,11 @@ class SmallToolApp(ctk.CTk):
             fg_color='transparent', corner_radius=0,
             scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=BORDER_HOVER)
+        # CTk's scrollbar otherwise requests 200 px even when the viewport is
+        # smaller, pushing the fixed action row outside a short window.
+        settings_scroll._scrollbar.configure(height=0)
         settings_scroll.grid(
-            row=1, column=0, columnspan=3, padx=(8, 4),
+            row=2, column=0, columnspan=3, padx=(8, 4),
             pady=(0, 10), sticky='ew')
         settings_scroll.grid_columnconfigure(1, weight=1)
         self._settings_scroll = settings_scroll
@@ -2731,7 +2754,7 @@ class SmallToolApp(ctk.CTk):
             placeholder_text=T('proxy_url_placeholder'), height=34,
             corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
             border_color=BORDER, border_width=1,
-            text_color=TEXT_PRI, font=(font_family, 10))
+            text_color=TEXT_PRI, font=(font_family, 12))
         proxy_entry.grid(
             row=0, column=1, padx=8, pady=(2, 2), sticky='ew')
         proxy_actions = ctk.CTkFrame(
@@ -2741,26 +2764,26 @@ class SmallToolApp(ctk.CTk):
             proxy_actions, text=T('proxy_save'), width=58, height=34,
             corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
             hover_color=ACCENT_HOVER, text_color=WHITE,
-            font=(font_family, 9, 'bold'), command=self._on_proxy_save).pack(
+            font=(font_family, 11, 'bold'), command=self._on_proxy_save).pack(
                 side='left')
         ctk.CTkButton(
             proxy_actions, text=T('proxy_windows'), width=70, height=34,
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER_HOVER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-            font=(font_family, 9), command=self._on_proxy_windows).pack(
+            font=(font_family, 11), command=self._on_proxy_windows).pack(
                 side='left', padx=(6, 0))
         ctk.CTkButton(
             proxy_actions, text=T('proxy_clear'), width=58, height=34,
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER_HOVER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
-            font=(font_family, 9), command=self._on_proxy_clear).pack(
+            font=(font_family, 11), command=self._on_proxy_clear).pack(
                 side='left', padx=(6, 0))
 
         self._proxy_status_lbl = ctk.CTkLabel(
             settings_scroll, text='', text_color=TEXT_DIM,
-            font=(font_family, 9), anchor='w')
+            font=(font_family, 11), anchor='w')
         self._proxy_status_lbl.grid(
             row=1, column=1, columnspan=2, padx=8, pady=(0, 4), sticky='w')
         self._refresh_proxy_status()
@@ -2770,13 +2793,19 @@ class SmallToolApp(ctk.CTk):
             row=2, column=0, columnspan=3, padx=8, pady=(2, 8),
             sticky='ew')
 
-        date_group = ctk.CTkFrame(options, fg_color='transparent')
-        date_group.pack(fill='x', expand=True)
+        options.grid_columnconfigure((0, 1), weight=1, uniform='settings')
+        date_group = ctk.CTkFrame(options, fg_color=BG_INPUT, corner_radius=CARD_RADIUS)
+        date_group.grid(row=0, column=0, sticky='nsew', padx=(0, 8), pady=8)
+        ctk.CTkLabel(date_group, text=T('settings_scope'), text_color=TEXT_PRI,
+                     font=(font_family, 14, 'bold')).pack(anchor='w', padx=12, pady=12)
+        scope_card = date_group
+        date_group = ctk.CTkFrame(scope_card, fg_color='transparent')
+        date_group.pack(fill='both', expand=True, padx=14, pady=(0, 14))
         date_controls = ctk.CTkFrame(date_group, fg_color='transparent')
         date_controls.pack(fill='x')
         ctk.CTkLabel(
             date_controls, text=T('st_baseline_date'), text_color=TEXT_SEC,
-            font=(font_family, 10, 'bold')).pack(side='left')
+            font=(font_family, 12, 'bold')).pack(side='left')
         self._date_var = tk.StringVar(value=self._cfg.get('baseline_date', DEFAULT_BASELINE_DATE))
         ctk.CTkEntry(
             date_controls, textvariable=self._date_var, width=116, height=34,
@@ -2789,7 +2818,7 @@ class SmallToolApp(ctk.CTk):
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER_HOVER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-            font=(font_family, 9, 'bold'), command=self._open_calendar).pack(
+            font=(font_family, 11, 'bold'), command=self._open_calendar).pack(
                 side='left', padx=(0, 6))
         self._date_preset_var = tk.StringVar(value=T('st_date_quick'))
         ctk.CTkOptionMenu(
@@ -2801,12 +2830,12 @@ class SmallToolApp(ctk.CTk):
             text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
             dropdown_hover_color=BG_CARD_HOVER,
             dropdown_text_color=TEXT_PRI,
-            font=(font_family, 9), dropdown_font=(font_family, 9)).pack(
+            font=(font_family, 11), dropdown_font=(font_family, 11)).pack(
                 side='left')
 
         ctk.CTkLabel(
             date_group, text=T('st_date_hint'), text_color=TEXT_DIM,
-            font=(font_family, 9), wraplength=440, justify='left').pack(
+            font=(font_family, 11), wraplength=440, justify='left').pack(
                 anchor='w', pady=(4, 0))
 
         site_settings_row = ctk.CTkFrame(date_group, fg_color='transparent')
@@ -2816,11 +2845,11 @@ class SmallToolApp(ctk.CTk):
             width=178, height=34, corner_radius=CONTROL_RADIUS,
             fg_color='transparent', border_width=1,
             border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
-            text_color=TEXT_PRI, font=(font_family, 9, 'bold'),
+            text_color=TEXT_PRI, font=(font_family, 11, 'bold'),
             command=self._open_site_settings).pack(side='left')
         self._site_settings_summary_lbl = ctk.CTkLabel(
             site_settings_row, text='', text_color=TEXT_DIM,
-            font=(font_family, 9), anchor='w')
+            font=(font_family, 11), anchor='w')
         self._site_settings_summary_lbl.pack(
             side='left', padx=(10, 0), fill='x', expand=True)
         self._refresh_site_settings_summary()
@@ -2831,21 +2860,29 @@ class SmallToolApp(ctk.CTk):
             date_group, text=T('st_huangguo_collection'),
             variable=self._huangguo_collection_var,
             command=self._on_huangguo_collection_change,
-            font=(font_family, 10), text_color=TEXT_PRI,
+            font=(font_family, 12), text_color=TEXT_PRI,
             fg_color=ACCENT, hover_color=ACCENT_HOVER).pack(
                 anchor='w', pady=(12, 0))
         ctk.CTkLabel(
             date_group, text=T('st_huangguo_collection_hint'),
-            text_color=TEXT_DIM, font=(font_family, 9),
+            text_color=TEXT_DIM, font=(font_family, 11),
             wraplength=440, justify='left').pack(anchor='w', pady=(3, 0))
 
-        res_group = ctk.CTkFrame(options, fg_color='transparent')
-        res_group.pack(fill='x', pady=(12, 0))
+        res_group = ctk.CTkFrame(options, fg_color=BG_INPUT, corner_radius=CARD_RADIUS)
+        res_group.grid(row=0, column=1, sticky='nsew', padx=(8, 0), pady=8)
+        ctk.CTkLabel(res_group, text=T('settings_download'), text_color=TEXT_PRI,
+                     font=(font_family, 14, 'bold')).pack(anchor='w', padx=12, pady=12)
+        self._settings_download_card = res_group
+        res_group = ctk.CTkFrame(self._settings_download_card, fg_color='transparent')
+        res_group.pack(fill='both', expand=True, padx=14, pady=(0, 14))
+        ctk.CTkLabel(res_group, text=T('speed_limit_desc'), text_color=TEXT_DIM,
+                     font=(font_family, 11), wraplength=400, justify='left').pack(
+                         anchor='w', pady=(0, 12))
         quality_row = ctk.CTkFrame(res_group, fg_color='transparent')
         quality_row.pack(fill='x')
         ctk.CTkLabel(
             quality_row, text=T('st_resolution'), text_color=TEXT_SEC,
-            font=(font_family, 10, 'bold'), width=108, anchor='e').pack(
+            font=(font_family, 12, 'bold'), width=108, anchor='e').pack(
                 side='left', padx=(0, 8))
         self._res_var = tk.StringVar(value=self._resolution_label())
         ctk.CTkOptionMenu(
@@ -2856,13 +2893,13 @@ class SmallToolApp(ctk.CTk):
             text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
             dropdown_hover_color=BG_CARD_HOVER,
             dropdown_text_color=TEXT_PRI,
-            font=(font_family, 10), dropdown_font=(font_family, 10)).pack(side='left')
+            font=(font_family, 12), dropdown_font=(font_family, 12)).pack(side='left')
 
         filename_row = ctk.CTkFrame(res_group, fg_color='transparent')
         filename_row.pack(fill='x', pady=(6, 0))
         ctk.CTkLabel(
             filename_row, text=T('filename_mode_setting'),
-            text_color=TEXT_SEC, font=(font_family, 10, 'bold'),
+            text_color=TEXT_SEC, font=(font_family, 12, 'bold'),
             width=108, anchor='e').pack(side='left', padx=(0, 8))
         self._filename_mode_var = tk.StringVar(
             value=self._filename_mode_label())
@@ -2875,18 +2912,18 @@ class SmallToolApp(ctk.CTk):
             text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
             dropdown_hover_color=BG_CARD_HOVER,
             dropdown_text_color=TEXT_PRI,
-            font=(font_family, 10), dropdown_font=(font_family, 10)).pack(
+            font=(font_family, 12), dropdown_font=(font_family, 12)).pack(
                 side='left')
         ctk.CTkLabel(
             res_group, text=T('filename_mode_desc'), text_color=TEXT_DIM,
-            font=(font_family, 8), wraplength=286,
-            justify='right').pack(anchor='e', pady=(3, 0))
+            font=(font_family, 11), wraplength=286,
+            justify='left').pack(anchor='w', padx=(116, 0), pady=(3, 0))
 
         workers_row = ctk.CTkFrame(res_group, fg_color='transparent')
         workers_row.pack(fill='x', pady=(6, 0))
         ctk.CTkLabel(
             workers_row, text=T('max_workers_per_video_setting'),
-            text_color=TEXT_SEC, font=(font_family, 10, 'bold'),
+            text_color=TEXT_SEC, font=(font_family, 12, 'bold'),
             width=108, anchor='e').pack(side='left', padx=(0, 8))
         self._workers_var = tk.StringVar(
             value=str(config.get_max_workers_per_video()))
@@ -2900,22 +2937,22 @@ class SmallToolApp(ctk.CTk):
         self._workers_entry.bind('<FocusOut>', self._on_workers_change)
         ctk.CTkLabel(
             workers_row, text=T('max_n', n=config.MAX_WORKERS_PER_VIDEO),
-            text_color=TEXT_DIM, font=(font_family, 9)).pack(
+            text_color=TEXT_DIM, font=(font_family, 11)).pack(
                 side='left', padx=(8, 0))
         ctk.CTkLabel(
             res_group,
             text=T(
                 'max_workers_per_video_desc',
                 n=config.MAX_WORKERS_PER_VIDEO),
-            text_color=TEXT_DIM, font=(font_family, 8),
-            wraplength=286, justify='right').pack(
-                anchor='e', pady=(3, 0))
+            text_color=TEXT_DIM, font=(font_family, 11),
+            wraplength=286, justify='left').pack(
+                anchor='w', padx=(116, 0), pady=(3, 0))
 
         version_row = ctk.CTkFrame(res_group, fg_color='transparent')
         version_row.pack(fill='x', pady=(6, 0))
         ctk.CTkLabel(
             version_row, text=T('st_version_preference'), text_color=TEXT_SEC,
-            font=(font_family, 10, 'bold'), width=108, anchor='e').pack(
+            font=(font_family, 12, 'bold'), width=108, anchor='e').pack(
                 side='left', padx=(0, 8))
         self._version_var = tk.StringVar(value=self._version_label())
         ctk.CTkOptionMenu(
@@ -2927,14 +2964,24 @@ class SmallToolApp(ctk.CTk):
             text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
             dropdown_hover_color=BG_CARD_HOVER,
             dropdown_text_color=TEXT_PRI,
-            font=(font_family, 10), dropdown_font=(font_family, 10)).pack(
+            font=(font_family, 12), dropdown_font=(font_family, 12)).pack(
                 side='left')
 
+        res_group = ctk.CTkFrame(options, fg_color=BG_INPUT, corner_radius=CARD_RADIUS)
+        res_group.grid(row=1, column=0, columnspan=2, sticky='ew', pady=8)
+        ctk.CTkLabel(res_group, text=T('settings_subtitles'), text_color=TEXT_PRI,
+                     font=(font_family, 14, 'bold')).pack(anchor='w', padx=12, pady=12)
+        self._settings_cards = (scope_card, self._settings_download_card, res_group)
+        self._settings_columns = None
+        self._reflow_settings(self.winfo_width())
+        subtitle_card = res_group
+        res_group = ctk.CTkFrame(subtitle_card, fg_color='transparent')
+        res_group.pack(fill='both', expand=True, padx=14, pady=(0, 14))
         subtitle_row = ctk.CTkFrame(res_group, fg_color='transparent')
         subtitle_row.pack(fill='x', pady=(6, 0))
         ctk.CTkLabel(
             subtitle_row, text=T('subtitle_setting'), text_color=TEXT_SEC,
-            font=(font_family, 10, 'bold'), width=108, anchor='e').pack(
+            font=(font_family, 12, 'bold'), width=108, anchor='e').pack(
                 side='left', padx=(0, 8))
         self._subtitle_var = tk.StringVar(value=self._subtitle_label())
         ctk.CTkOptionMenu(
@@ -2945,14 +2992,14 @@ class SmallToolApp(ctk.CTk):
             button_hover_color=ACCENT, text_color=TEXT_PRI,
             dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_CARD_HOVER,
             dropdown_text_color=TEXT_PRI,
-            font=(font_family, 9), dropdown_font=(font_family, 9)).pack(
+            font=(font_family, 11), dropdown_font=(font_family, 11)).pack(
                 side='left')
 
         recognition_row = ctk.CTkFrame(res_group, fg_color='transparent')
         recognition_row.pack(fill='x', pady=(6, 0))
         ctk.CTkLabel(
             recognition_row, text=T('recognition_quality_setting'),
-            text_color=TEXT_SEC, font=(font_family, 10, 'bold'),
+            text_color=TEXT_SEC, font=(font_family, 12, 'bold'),
             width=108, anchor='e').pack(side='left', padx=(0, 8))
         self._recognition_quality_var = tk.StringVar(
             value=self._recognition_quality_label())
@@ -2966,19 +3013,19 @@ class SmallToolApp(ctk.CTk):
             dropdown_fg_color=BG_CARD,
             dropdown_hover_color=BG_CARD_HOVER,
             dropdown_text_color=TEXT_PRI,
-            font=(font_family, 9), dropdown_font=(font_family, 9)).pack(
+            font=(font_family, 11), dropdown_font=(font_family, 11)).pack(
                 side='left')
         ctk.CTkLabel(
             res_group, text=T('recognition_quality_desc'),
-            text_color=TEXT_DIM, font=(font_family, 8),
-            wraplength=286, justify='right').pack(
-                anchor='e', pady=(3, 0))
+            text_color=TEXT_DIM, font=(font_family, 11),
+            wraplength=380, justify='left').pack(
+                anchor='w', padx=(116, 0), pady=(3, 0))
 
         translation_row = ctk.CTkFrame(res_group, fg_color='transparent')
         translation_row.pack(fill='x', pady=(6, 0))
         ctk.CTkLabel(
             translation_row, text=T('translation_provider_setting'),
-            text_color=TEXT_SEC, font=(font_family, 10, 'bold'),
+            text_color=TEXT_SEC, font=(font_family, 12, 'bold'),
             width=108, anchor='e').pack(side='left', padx=(0, 8))
         translation_controls = ctk.CTkFrame(
             translation_row, fg_color='transparent', width=178, height=34)
@@ -2987,7 +3034,7 @@ class SmallToolApp(ctk.CTk):
         self._translation_provider_status_lbl = ctk.CTkLabel(
             translation_controls,
             text=translation_provider_summary(short=True),
-            text_color=TEXT_SEC, font=(font_family, 9),
+            text_color=TEXT_SEC, font=(font_family, 11),
             anchor='w')
         self._translation_provider_status_lbl.pack(
             side='left', fill='x', expand=True)
@@ -2996,13 +3043,13 @@ class SmallToolApp(ctk.CTk):
             width=64, height=32, corner_radius=CONTROL_RADIUS,
             fg_color='transparent', border_width=1,
             border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
-            text_color=TEXT_PRI, font=(font_family, 9, 'bold'),
+            text_color=TEXT_PRI, font=(font_family, 11, 'bold'),
             command=self._open_translation_settings).pack(side='right')
         ctk.CTkLabel(
             res_group, text=T('translation_provider_hint'),
-            text_color=TEXT_DIM, font=(font_family, 8),
-            wraplength=286, justify='right').pack(
-                anchor='e', pady=(3, 0))
+            text_color=TEXT_DIM, font=(font_family, 11),
+            wraplength=380, justify='left').pack(
+                anchor='w', padx=(116, 0), pady=(3, 0))
         # Apply saved preference immediately (before auto-start)
         from uav_downloader.sites.base import set_resolution_pref
         set_resolution_pref(self._cfg.get('resolution', 'highest'))
@@ -3028,7 +3075,7 @@ class SmallToolApp(ctk.CTk):
             font=(font_family, 13, 'bold')).pack(side='left')
         self._selected_count_lbl = ctk.CTkLabel(
             selection_header, text=f'0 {T("selected")}', text_color=TEXT_DIM,
-            font=(font_family, 10, 'bold'))
+            font=(font_family, 12, 'bold'))
         self._selected_count_lbl.pack(side='left', padx=(10, 0))
 
         self._categories_toggle_btn = ctk.CTkButton(
@@ -3036,7 +3083,7 @@ class SmallToolApp(ctk.CTk):
             width=104, height=32, corner_radius=CONTROL_RADIUS,
             fg_color='transparent', hover_color=BG_CARD_HOVER,
             border_width=1, border_color=BORDER,
-            text_color=TEXT_SEC, font=(font_family, 9, 'bold'),
+            text_color=TEXT_SEC, font=(font_family, 11, 'bold'),
             command=self._toggle_categories)
         self._categories_toggle_btn.pack(side='right')
 
@@ -3050,7 +3097,7 @@ class SmallToolApp(ctk.CTk):
             width=200, height=32,
             corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
             border_color=BORDER, border_width=1,
-            text_color=TEXT_PRI, font=(font_family, 10))
+            text_color=TEXT_PRI, font=(font_family, 12))
         filter_entry.pack(side='left')
         self._category_filter_var.trace_add('write', self._schedule_category_filter)
         self._build_category_tabs(selection, font_family)
@@ -3091,7 +3138,7 @@ class SmallToolApp(ctk.CTk):
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER_HOVER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-            font=(font_family, 10, 'bold'),
+            font=(font_family, 12, 'bold'),
             command=self._open_schedule)
         self._schedule_btn.pack(side='left', padx=(8, 0))
 
@@ -3100,7 +3147,7 @@ class SmallToolApp(ctk.CTk):
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER_HOVER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
-            font=(font_family, 10),
+            font=(font_family, 12),
             command=self._toggle_activity)
         self._activity_toggle_btn.pack(side='left', padx=(8, 0))
 
@@ -3110,7 +3157,7 @@ class SmallToolApp(ctk.CTk):
         status_box.pack(side='right')
         self._status_lbl = ctk.CTkLabel(
             status_box, text=T(self._status_key), text_color=self._status_fg,
-            font=(font_family, 10, 'bold'))
+            font=(font_family, 12, 'bold'))
         self._status_lbl.pack(padx=12, pady=6)
 
         # ── Download progress bar ───────────────────────────────────
@@ -3122,7 +3169,7 @@ class SmallToolApp(ctk.CTk):
 
         self._prog_title = ctk.CTkLabel(
             prog_outer, text=T('st_progress_idle'), text_color=TEXT_SEC,
-            font=(font_family, 10, 'bold'), anchor='w')
+            font=(font_family, 12, 'bold'), anchor='w')
         self._prog_title.pack(fill='x', padx=14, pady=(10, 4))
 
         bar_row = ctk.CTkFrame(prog_outer, fg_color='transparent')
@@ -3158,7 +3205,7 @@ class SmallToolApp(ctk.CTk):
             font=(font_family, 11, 'bold')).pack(side='left')
         self._schedule_summary_lbl = ctk.CTkLabel(
             activity_header, text=self._schedule_summary_text(),
-            text_color=TEXT_DIM, font=(font_family, 9))
+            text_color=TEXT_DIM, font=(font_family, 11))
         self._schedule_summary_lbl.pack(side='right')
 
         self._log_box = ctk.CTkTextbox(
@@ -3191,6 +3238,26 @@ class SmallToolApp(ctk.CTk):
                     text=self._schedule_summary_text())
             except tk.TclError:
                 pass
+
+    def _reflow_settings(self, width):
+        if not hasattr(self, '_settings_cards'):
+            return
+        columns = 2 if width >= 1120 else 1
+        if columns == self._settings_columns:
+            return
+        self._settings_columns = columns
+        scope, download, subtitles = self._settings_cards
+        scope.grid_configure(row=0, column=0, padx=(0, 8) if columns == 2 else 0)
+        download.grid_configure(row=0 if columns == 2 else 1, column=columns - 1,
+                                padx=(8, 0) if columns == 2 else 0)
+        subtitles.grid_configure(row=1 if columns == 2 else 2, columnspan=columns)
+        scope.master.grid_columnconfigure(1, weight=1 if columns == 2 else 0,
+                                           uniform='settings' if columns == 2 else '')
+
+    def _on_bandwidth_change(self, value):
+        from uav_downloader.sites.base import speed_limiter
+        value = config.set_speed_limit_mbps(value)
+        speed_limiter.set_limit(value)
 
     def _toggle_settings(self):
         self._set_settings_expanded(not self._settings_expanded)
@@ -3336,7 +3403,7 @@ class SmallToolApp(ctk.CTk):
             text_color=TEXT_PRI, font=('Consolas', 11)).pack(side='left')
         ctk.CTkLabel(
             interval_controls, text=T('st_schedule_hours'),
-            text_color=TEXT_SEC, font=(ui_font(), 10)).pack(
+            text_color=TEXT_SEC, font=(ui_font(), 12)).pack(
                 side='left', padx=(8, 0))
 
         ctk.CTkRadioButton(
@@ -3356,13 +3423,13 @@ class SmallToolApp(ctk.CTk):
         ctk.CTkLabel(
             body, text=T(
                 'st_schedule_local_time', zone=zone, offset=offset),
-            text_color=TEXT_SEC, font=(ui_font(), 10),
+            text_color=TEXT_SEC, font=(ui_font(), 12),
             anchor='w').grid(
                 row=2, column=0, columnspan=2,
                 padx=18, pady=(12, 4), sticky='ew')
         ctk.CTkLabel(
             body, text=T('st_schedule_hint'), text_color=TEXT_DIM,
-            font=(ui_font(), 9), justify='left', wraplength=390,
+            font=(ui_font(), 11), justify='left', wraplength=390,
             anchor='w').grid(
                 row=3, column=0, columnspan=2,
                 padx=18, pady=(4, 18), sticky='ew')
@@ -3417,14 +3484,14 @@ class SmallToolApp(ctk.CTk):
             actions, text=T('st_schedule_save'), height=40,
             corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
             hover_color=ACCENT_HOVER, text_color=WHITE,
-            font=(ui_font(), 10, 'bold'),
+            font=(ui_font(), 12, 'bold'),
             command=save_schedule).pack(side='left', expand=True, fill='x')
         ctk.CTkButton(
             actions, text=T('st_calendar_cancel'), height=40,
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
-            font=(ui_font(), 10), command=close_popup).pack(
+            font=(ui_font(), 12), command=close_popup).pack(
                 side='left', expand=True, fill='x', padx=(8, 0))
 
         popup.protocol('WM_DELETE_WINDOW', close_popup)
@@ -3835,7 +3902,7 @@ class SmallToolApp(ctk.CTk):
             for column, weekday in enumerate(weekdays):
                 ctk.CTkLabel(
                     grid, text=weekday, text_color=TEXT_DIM,
-                    font=(ui_font(), 9, 'bold')).grid(
+                    font=(ui_font(), 11, 'bold')).grid(
                         row=0, column=column, padx=2, pady=(10, 6))
 
             weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(
@@ -3857,7 +3924,7 @@ class SmallToolApp(ctk.CTk):
                         text_color=WHITE if is_selected else TEXT_PRI,
                         border_width=1 if is_today and not is_selected else 0,
                         border_color=ACCENT,
-                        font=(ui_font(), 10, 'bold' if is_selected else 'normal'),
+                        font=(ui_font(), 12, 'bold' if is_selected else 'normal'),
                         command=lambda value=day_value: choose_day(value)).grid(
                             row=row, column=column, padx=2, pady=2)
 
@@ -3874,14 +3941,14 @@ class SmallToolApp(ctk.CTk):
             footer, text=T('st_date_today'), height=36,
             corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
             hover_color=ACCENT_HOVER, text_color=WHITE,
-            font=(ui_font(), 10, 'bold'),
+            font=(ui_font(), 12, 'bold'),
             command=lambda: choose_day(today)).pack(side='left', expand=True, fill='x')
         ctk.CTkButton(
             footer, text=T('st_calendar_cancel'), height=36,
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
-            font=(ui_font(), 10), command=close_popup).pack(
+            font=(ui_font(), 12), command=close_popup).pack(
                 side='left', expand=True, fill='x', padx=(8, 0))
 
         popup.protocol('WM_DELETE_WINDOW', close_popup)
@@ -3936,7 +4003,7 @@ class SmallToolApp(ctk.CTk):
                 anchor='w', padx=22, pady=(18, 4))
         ctk.CTkLabel(
             header, text=T('st_site_settings_desc'), text_color=TEXT_DIM,
-            font=(ui_font(), 10), justify='left', wraplength=760).pack(
+            font=(ui_font(), 12), justify='left', wraplength=760).pack(
                 anchor='w', padx=22, pady=(0, 16))
 
         content = ctk.CTkScrollableFrame(
@@ -3974,14 +4041,14 @@ class SmallToolApp(ctk.CTk):
                 checkbox_width=18, checkbox_height=18,
                 fg_color=ACCENT, hover_color=ACCENT_HOVER,
                 border_color=BORDER_HOVER, checkmark_color=WHITE,
-                text_color=TEXT_SEC, font=(ui_font(), 9))
+                text_color=TEXT_SEC, font=(ui_font(), 11))
             folder_check.grid(
                 row=1, column=0, padx=(14, 8), pady=5, sticky='w')
             folder_entry = ctk.CTkEntry(
                 card, textvariable=folder_var, height=34,
                 corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
                 border_color=BORDER, border_width=1,
-                text_color=TEXT_PRI, font=(ui_font(), 9))
+                text_color=TEXT_PRI, font=(ui_font(), 11))
             folder_entry.grid(
                 row=1, column=1, columnspan=2, padx=8, pady=5,
                 sticky='ew')
@@ -3990,7 +4057,7 @@ class SmallToolApp(ctk.CTk):
                 corner_radius=CONTROL_RADIUS, fg_color='transparent',
                 border_width=1, border_color=BORDER_HOVER,
                 hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-                font=(ui_font(), 9))
+                font=(ui_font(), 11))
             folder_button.grid(
                 row=1, column=3, padx=(8, 14), pady=5)
 
@@ -4004,7 +4071,7 @@ class SmallToolApp(ctk.CTk):
                 checkbox_width=18, checkbox_height=18,
                 fg_color=ACCENT, hover_color=ACCENT_HOVER,
                 border_color=BORDER_HOVER, checkmark_color=WHITE,
-                text_color=TEXT_SEC, font=(ui_font(), 9))
+                text_color=TEXT_SEC, font=(ui_font(), 11))
             date_check.grid(
                 row=2, column=0, padx=(14, 8), pady=(5, 12), sticky='w')
             date_entry = ctk.CTkEntry(
@@ -4019,7 +4086,7 @@ class SmallToolApp(ctk.CTk):
                 corner_radius=CONTROL_RADIUS, fg_color='transparent',
                 border_width=1, border_color=BORDER_HOVER,
                 hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-                font=(ui_font(), 9))
+                font=(ui_font(), 11))
             date_button.grid(
                 row=2, column=2, padx=8, pady=(5, 12), sticky='w')
 
@@ -4076,7 +4143,7 @@ class SmallToolApp(ctk.CTk):
         footer.grid(row=2, column=0, sticky='ew')
         status_label = ctk.CTkLabel(
             footer, text='', text_color=ERROR_C,
-            font=(ui_font(), 9), anchor='w')
+            font=(ui_font(), 11), anchor='w')
         status_label.pack(side='left', padx=18, fill='x', expand=True)
 
         def close_popup():
@@ -4119,14 +4186,14 @@ class SmallToolApp(ctk.CTk):
             footer, text=T('st_site_settings_save'), width=116, height=38,
             corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
             hover_color=ACCENT_HOVER, text_color=WHITE,
-            font=(ui_font(), 10, 'bold'), command=save_settings).pack(
+            font=(ui_font(), 12, 'bold'), command=save_settings).pack(
                 side='right', padx=(8, 18), pady=12)
         ctk.CTkButton(
             footer, text=T('st_calendar_cancel'), width=92, height=38,
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
-            font=(ui_font(), 10), command=close_popup).pack(
+            font=(ui_font(), 12), command=close_popup).pack(
                 side='right', pady=12)
 
         popup.protocol('WM_DELETE_WINDOW', close_popup)
@@ -4598,6 +4665,8 @@ class SmallToolApp(ctk.CTk):
             pass
 
     def _on_close(self):
+        from uav_downloader.ui.bandwidth import commit_bandwidth_controls
+        commit_bandwidth_controls(self)
         self._is_closing = True
         self._build_gen += 1
         self._cancel_category_work()

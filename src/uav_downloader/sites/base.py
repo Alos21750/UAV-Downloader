@@ -275,9 +275,10 @@ class _SpeedLimiter:
 
     def __init__(self):
         self._lock = threading.Lock()
+        self._changed = threading.Condition(self._lock)
         self._limit_bps = 0  # 0 = unlimited
         self._tokens = 0.0
-        self._last = time.time()
+        self._last = time.monotonic()
 
     @property
     def limit_bps(self) -> int:
@@ -286,29 +287,34 @@ class _SpeedLimiter:
             return self._limit_bps
 
     def set_limit(self, mbps: float) -> None:
-        with self._lock:
-            self._limit_bps = int(mbps * 1024 * 1024) if mbps > 0 else 0
-            self._tokens = float(self._limit_bps)
-            self._last = time.time()
+        limit = int(config.normalize_speed_limit_mbps(mbps) * 1024 * 1024)
+        with self._changed:
+            if limit == self._limit_bps:
+                return
+            self._limit_bps = limit
+            self._tokens = 0.0
+            self._last = time.monotonic()
+            self._changed.notify_all()
 
-    def acquire(self, nbytes: int) -> None:
-        with self._lock:
-            limit = self._limit_bps
-        if limit <= 0:
-            return
+    def acquire(self, nbytes: int, cancel_check=None) -> bool:
+        """Share one process-wide budget; wake on cap changes or cancellation."""
         while nbytes > 0:
-            with self._lock:
-                now = time.time()
+            if cancel_check is not None and cancel_check():
+                return False
+            with self._changed:
+                if self._limit_bps <= 0:
+                    return True
+                now = time.monotonic()
                 self._tokens += (now - self._last) * self._limit_bps
                 self._last = now
-                if self._tokens > self._limit_bps:
-                    self._tokens = float(self._limit_bps)
+                self._tokens = min(self._tokens, max(1, self._limit_bps * 0.1))
                 take = min(nbytes, int(self._tokens))
                 if take > 0:
                     self._tokens -= take
                     nbytes -= take
-            if nbytes > 0:
-                time.sleep(0.05)
+                if nbytes > 0:
+                    self._changed.wait(timeout=min(0.05, max(0.001, nbytes / self._limit_bps)))
+        return True
 
 speed_limiter = _SpeedLimiter()
 
@@ -518,7 +524,13 @@ def _is_cf_block_resp(resp):
         return False
 
 
-def _http_get(url, headers=None, timeout=20):
+def _http_get(url, headers=None, timeout=20, stream=False):
+    if stream:
+        # requests streams synchronously; curl_cffi's background receive queue
+        # can consume the whole network response while our reader is throttled.
+        return _get_session().get(
+            url, headers=dict(headers or {}), timeout=timeout, stream=True,
+            **config.proxy_request_kwargs())
     if _use_cffi:
         try:
             cffi_headers = {
@@ -707,9 +719,10 @@ class M3U8Crawler:
         """Merged headers for m3u8 and segment requests."""
         return {**headers, **self._extra_headers}
 
-    def _media_get(self, url, timeout=20):
+    def _media_get(self, url, timeout=20, stream=False):
         """Transport hook for sites needing per-resource/redirect header scope."""
-        return _http_get(url, self._m3u8_headers(), timeout=timeout)
+        options = {'stream': True} if stream else {}
+        return _http_get(url, self._m3u8_headers(), timeout=timeout, **options)
 
     def _load_m3u8(self, url):
         resp = self._media_get(url, timeout=20)
@@ -983,11 +996,27 @@ class M3U8Crawler:
                 self._pending_set.discard((seq_num, url))
             return True
 
+        response = None
         try:
-            response = self._media_get(url, timeout=25)
+            throttled = speed_limiter.limit_bps > 0
+            options = {'stream': True} if throttled else {}
+            response = self._media_get(url, timeout=25, **options)
             if response.status_code != 200:
                 return False
-            content_ts = response.content
+            if throttled:
+                payload = bytearray()
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if self._cancel_job:
+                        return False
+                    if chunk:
+                        if speed_limiter.acquire(len(chunk), cancel_check=lambda: bool(self._cancel_job)) is False:
+                            return False
+                        payload.extend(chunk)
+                content_ts = bytes(payload)
+            else:
+                content_ts = response.content
+                if speed_limiter.acquire(len(content_ts), cancel_check=lambda: bool(self._cancel_job)) is False:
+                    return False
             if not content_ts:
                 return False
             if self._key_content:
@@ -999,7 +1028,6 @@ class M3U8Crawler:
             content_ts = self._transform_segment(content_ts)
             if not _is_valid_ts_segment(content_ts):
                 return False
-            speed_limiter.acquire(len(content_ts))
             # Publish only fully written segments. A disk error must not
             # leave a truncated .ts looking resumable on the next run.
             part = saveName + '.part'
@@ -1031,6 +1059,14 @@ class M3U8Crawler:
             raise
         except Exception:
             return False
+
+        finally:
+            close = getattr(response, 'close', None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass  # Cleanup must not replace the download outcome.
 
     def _startCrawl(self):
         self._storage_error = None

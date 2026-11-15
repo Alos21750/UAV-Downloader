@@ -1770,7 +1770,7 @@ class ModernApp(ctk.CTk):
             note = self._short_update_note(info)
             if note:
                 ctk.CTkLabel(
-                    body, text=note, font=(ui_font(), 10),
+                    body, text=note, font=(ui_font(), 12),
                     text_color=TEXT_DIM, wraplength=360, justify='left'
                 ).pack(anchor='w', pady=(8, 0))
 
@@ -2036,7 +2036,7 @@ class ModernApp(ctk.CTk):
                 '10 MB/s', '15 MB/s']
 
     def _speed_label(self):
-        return T('unlimited') if self._speed_mbps == 0 else f'{int(self._speed_mbps)} MB/s'
+        return T('unlimited') if self._speed_mbps == 0 else f'{self._speed_mbps:g} MB/s'
 
     def _resolution_values(self):
         return [T('resolution_highest'), '1080p', '720p', '480p', '360p',
@@ -2155,6 +2155,8 @@ class ModernApp(ctk.CTk):
             return default
 
     def _apply_language(self, code):
+        from uav_downloader.ui.bandwidth import commit_bandwidth_controls
+        commit_bandwidth_controls(self)
         self._rebuilding = True
         from uav_downloader.sites.base import get_resolution_pref, set_resolution_pref
 
@@ -2267,7 +2269,7 @@ class ModernApp(ctk.CTk):
                      text_color=TEXT_SEC).pack(side='left', padx=10, pady=4)
         self._update_badge = ctk.CTkLabel(
             version_box, text=T('update_new_badge'),
-            font=(ui_font(), 10, 'bold'), text_color=ACCENT)
+            font=(ui_font(), 12, 'bold'), text_color=ACCENT)
         try:
             self._update_badge.configure(cursor='hand2')
         except Exception:
@@ -2385,7 +2387,7 @@ class ModernApp(ctk.CTk):
             width=112, height=36, corner_radius=CONTROL_RADIUS,
             fg_color='transparent', border_width=1,
             border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
-            text_color=TEXT_PRI, font=(ui_font(), 10, 'bold'))
+            text_color=TEXT_PRI, font=(ui_font(), 12, 'bold'))
         self._hanime_filter_btn.pack()
 
         self._search_var = ctk.StringVar()
@@ -2430,7 +2432,7 @@ class ModernApp(ctk.CTk):
                       fg_color='transparent', border_width=1,
                       border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER,
-                      text_color=TEXT_PRI, font=(ui_font(), 10)).pack(
+                      text_color=TEXT_PRI, font=(ui_font(), 12)).pack(
                           side='right', padx=(0, 8))
         ctk.CTkButton(actions, text=T('select_page_btn'), command=self._select_all_on_page,
                       width=92, height=34, corner_radius=CONTROL_RADIUS,
@@ -2443,7 +2445,7 @@ class ModernApp(ctk.CTk):
                       width=62, height=34, corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=0,
                       hover_color=BG_CARD_HOVER,
-                      text_color=TEXT_DIM, font=(ui_font(), 10)).pack(
+                      text_color=TEXT_DIM, font=(ui_font(), 12)).pack(
                           side='right', padx=(0, 4))
 
         # ── Content area: sidebar + grid ────────────────────────────
@@ -2610,16 +2612,12 @@ class ModernApp(ctk.CTk):
         speed = ctk.CTkFrame(bar, fg_color='transparent')
         speed.grid(row=0, column=1, pady=10)
         ctk.CTkLabel(speed, text=T('speed_limit'), text_color=TEXT_DIM,
-                     font=(ui_font(), 10)).pack(side='left', padx=(0, 8))
+                     font=(ui_font(), 12)).pack(side='left', padx=(0, 8))
         self._speed_var = ctk.StringVar(value=self._speed_label())
-        ctk.CTkOptionMenu(
-            speed, values=self._speed_values(), variable=self._speed_var,
-            command=self._on_speed_change, width=118, height=38,
-            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
-            button_color=BORDER_HOVER, button_hover_color=ACCENT,
-            text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
-            dropdown_hover_color=BG_CARD_HOVER, dropdown_text_color=TEXT_PRI,
-            font=(ui_font(), 10), dropdown_font=(ui_font(), 10)).pack(side='left')
+        from uav_downloader.ui.bandwidth import BandwidthControl
+        self._toolbar_bandwidth = BandwidthControl(
+            speed, value=self._speed_mbps, command=self._on_speed_change)
+        self._toolbar_bandwidth.pack(side='left')
 
         destructive = ctk.CTkFrame(bar, fg_color='transparent')
         destructive.grid(row=0, column=2, padx=(8, 16), pady=10, sticky='e')
@@ -2666,7 +2664,7 @@ class ModernApp(ctk.CTk):
             selected_hover_color=ACCENT_HOVER,
             unselected_color=BG_INPUT,
             unselected_hover_color=BG_CARD_HOVER,
-            text_color=TEXT_PRI, font=(ui_font(), 10, 'bold')).pack(
+            text_color=TEXT_PRI, font=(ui_font(), 12, 'bold')).pack(
                 side='left', padx=16, pady=8)
 
         # ── Download list ───────────────────────────────────────────
@@ -2706,7 +2704,7 @@ class ModernApp(ctk.CTk):
         self._update_status_lbl.pack(anchor='w', pady=(3, 0))
 
         self._update_note_lbl = ctk.CTkLabel(
-            left_info, text='', text_color=TEXT_DIM, font=(ui_font(), 10),
+            left_info, text='', text_color=TEXT_DIM, font=(ui_font(), 12),
             wraplength=620, justify='left')
         self._update_note_lbl.pack(anchor='w', pady=(1, 0))
 
@@ -2781,7 +2779,7 @@ class ModernApp(ctk.CTk):
                       command=self._pick_dest).pack(side='left')
         ctk.CTkLabel(grp, text=T('save_location_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
+                     font=(ui_font(), 12)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
 
         # Speed limit
         row_speed = ctk.CTkFrame(grp, fg_color='transparent')
@@ -2789,17 +2787,13 @@ class ModernApp(ctk.CTk):
         ctk.CTkLabel(row_speed, text=T('speed_limit_setting'), text_color=TEXT_PRI,
                      font=(ui_font(), 12, 'bold'), width=116,
                      anchor='w').pack(side='left')
-        ctk.CTkOptionMenu(row_speed, values=self._speed_values(),
-                          variable=self._speed_var,
-                          command=self._on_speed_change, width=130, height=34,
-                          corner_radius=8,
-                          fg_color=BG_INPUT, button_color=BORDER_HOVER,
-                          button_hover_color=ACCENT, text_color=TEXT_PRI,
-                          dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_CARD_HOVER,
-                          dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
+        from uav_downloader.ui.bandwidth import BandwidthControl
+        self._bandwidth_control = BandwidthControl(
+            row_speed, value=self._speed_mbps, command=self._on_speed_change)
+        self._bandwidth_control.pack(side='left', padx=10)
         ctk.CTkLabel(grp, text=T('speed_limit_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
+                     font=(ui_font(), 11), wraplength=560, justify='left').pack(anchor='w', padx=(136, 20), pady=(4, 14))
 
         # Concurrent downloads
         row_conc = ctk.CTkFrame(grp, fg_color='transparent')
@@ -2818,10 +2812,10 @@ class ModernApp(ctk.CTk):
         self._conc_entry.bind('<FocusOut>', self._on_conc_change)
         ctk.CTkLabel(row_conc, text=T('max_n', n=MAX_CONCURRENT),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 10)).pack(side='left')
+                     font=(ui_font(), 12)).pack(side='left')
         ctk.CTkLabel(grp, text=T('concurrent_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
+                     font=(ui_font(), 12)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
 
         # Segment workers used inside each individual video download
         row_workers = ctk.CTkFrame(grp, fg_color='transparent')
@@ -2843,13 +2837,13 @@ class ModernApp(ctk.CTk):
         ctk.CTkLabel(
             row_workers,
             text=T('max_n', n=config.MAX_WORKERS_PER_VIDEO),
-            text_color=TEXT_DIM, font=(ui_font(), 10)).pack(side='left')
+            text_color=TEXT_DIM, font=(ui_font(), 12)).pack(side='left')
         ctk.CTkLabel(
             grp,
             text=T(
                 'max_workers_per_video_desc',
                 n=config.MAX_WORKERS_PER_VIDEO),
-            text_color=TEXT_DIM, font=(ui_font(), 10),
+            text_color=TEXT_DIM, font=(ui_font(), 12),
             wraplength=SETTINGS_INLINE_HELP_WRAP,
             justify='left', anchor='w').pack(
                 anchor='w', padx=(136, 20), pady=(0, 10))
@@ -2873,14 +2867,14 @@ class ModernApp(ctk.CTk):
         self._slow_requeue_entry.bind('<FocusOut>', self._on_slow_requeue_change)
         ctk.CTkLabel(
             row_slow_requeue, text=T('slow_requeue_unit'),
-            text_color=TEXT_DIM, font=(ui_font(), 10)).pack(side='left')
+            text_color=TEXT_DIM, font=(ui_font(), 12)).pack(side='left')
         ctk.CTkLabel(
             grp,
             text=T(
                 'slow_requeue_desc',
                 grace=SLOW_REQUEUE_GRACE_SECONDS,
                 n=SLOW_REQUEUE_MAX_ATTEMPTS),
-            text_color=TEXT_DIM, font=(ui_font(), 10),
+            text_color=TEXT_DIM, font=(ui_font(), 12),
             wraplength=SETTINGS_INLINE_HELP_WRAP,
             justify='left', anchor='w').pack(
                 anchor='w', padx=(136, 20), pady=(0, 10))
@@ -2903,7 +2897,7 @@ class ModernApp(ctk.CTk):
                           dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
         ctk.CTkLabel(grp, text=T('resolution_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
+                     font=(ui_font(), 12)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
 
         # Shared output filename policy (Browser and Watcher).
         row_filename = ctk.CTkFrame(grp, fg_color='transparent')
@@ -2925,7 +2919,7 @@ class ModernApp(ctk.CTk):
             dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
         ctk.CTkLabel(
             grp, text=T('filename_mode_desc'), text_color=TEXT_DIM,
-            font=(ui_font(), 10), wraplength=620,
+            font=(ui_font(), 12), wraplength=620,
             justify='left', anchor='w').pack(
                 anchor='w', padx=(136, 20), pady=(0, 10))
 
@@ -2946,7 +2940,7 @@ class ModernApp(ctk.CTk):
         template_entry.bind('<FocusOut>', self._on_filename_template_change)
         ctk.CTkLabel(
             grp, text=T('filename_template_desc'), text_color=TEXT_DIM,
-            font=(ui_font(), 10), wraplength=620,
+            font=(ui_font(), 12), wraplength=620,
             justify='left', anchor='w').pack(
                 anchor='w', padx=(136, 20), pady=(0, 10))
 
@@ -2968,7 +2962,7 @@ class ModernApp(ctk.CTk):
         schedule_entry.bind('<FocusOut>', self._on_download_schedule_change)
         ctk.CTkLabel(
             grp, text=T('download_schedule_desc'), text_color=TEXT_DIM,
-            font=(ui_font(), 10), wraplength=620,
+            font=(ui_font(), 12), wraplength=620,
             justify='left', anchor='w').pack(
                 anchor='w', padx=(136, 20), pady=(0, 10))
 
@@ -2989,10 +2983,10 @@ class ModernApp(ctk.CTk):
         minimum_entry.bind('<FocusOut>', self._on_minimum_free_change)
         ctk.CTkLabel(
             row_safety, text='GB', text_color=TEXT_DIM,
-            font=(ui_font(), 10)).pack(side='left')
+            font=(ui_font(), 12)).pack(side='left')
         ctk.CTkLabel(
             grp, text=T('minimum_free_desc'), text_color=TEXT_DIM,
-            font=(ui_font(), 10), wraplength=620,
+            font=(ui_font(), 12), wraplength=620,
             justify='left', anchor='w').pack(
                 anchor='w', padx=(136, 20), pady=(0, 10))
 
@@ -3013,7 +3007,7 @@ class ModernApp(ctk.CTk):
         retry_entry.bind('<FocusOut>', self._on_auto_retry_change)
         ctk.CTkLabel(
             grp, text=T('auto_retry_desc'), text_color=TEXT_DIM,
-            font=(ui_font(), 10), wraplength=620,
+            font=(ui_font(), 12), wraplength=620,
             justify='left', anchor='w').pack(
                 anchor='w', padx=(136, 20), pady=(0, 10))
 
@@ -3031,7 +3025,7 @@ class ModernApp(ctk.CTk):
             progress_color=ACCENT).pack(side='left', padx=10)
         ctk.CTkLabel(
             grp, text=T('notify_complete_desc'), text_color=TEXT_DIM,
-            font=(ui_font(), 10), wraplength=SETTINGS_INLINE_HELP_WRAP,
+            font=(ui_font(), 12), wraplength=SETTINGS_INLINE_HELP_WRAP,
             justify='left', anchor='w').pack(
                 anchor='w', padx=(136, 20), pady=(0, 10))
 
@@ -3071,7 +3065,7 @@ class ModernApp(ctk.CTk):
             dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
         ctk.CTkLabel(
             grp, text=T('recognition_quality_desc'),
-            text_color=TEXT_DIM, font=(ui_font(), 9),
+            text_color=TEXT_DIM, font=(ui_font(), 11),
             wraplength=SETTINGS_INLINE_HELP_WRAP,
             justify='left', anchor='w').pack(
                 anchor='w', padx=(136, 20), pady=(0, 4))
@@ -3084,7 +3078,7 @@ class ModernApp(ctk.CTk):
             width=116, anchor='w').pack(side='left')
         self._translation_provider_status_lbl = ctk.CTkLabel(
             row_translation, text=translation_provider_summary(),
-            text_color=TEXT_SEC, font=(ui_font(), 10),
+            text_color=TEXT_SEC, font=(ui_font(), 12),
             anchor='w')
         self._translation_provider_status_lbl.pack(
             side='left', fill='x', expand=True, padx=10)
@@ -3093,11 +3087,11 @@ class ModernApp(ctk.CTk):
             width=86, height=34, corner_radius=8,
             fg_color='transparent', border_width=1,
             border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
-            text_color=TEXT_PRI, font=(ui_font(), 10, 'bold'),
+            text_color=TEXT_PRI, font=(ui_font(), 12, 'bold'),
             command=self._open_translation_settings).pack(side='right')
         ctk.CTkLabel(
             grp, text=T('subtitle_desc'), text_color=TEXT_DIM,
-            font=(ui_font(), 10),
+            font=(ui_font(), 12),
             wraplength=SETTINGS_INLINE_HELP_WRAP,
             justify='left', anchor='w').pack(
                 anchor='w', padx=(136, 20), pady=(0, 22))
@@ -3114,7 +3108,7 @@ class ModernApp(ctk.CTk):
                      text_color=TEXT_PRI).pack(side='left')
         ctk.CTkLabel(proxy, text=T('proxy_card_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 10)).pack(anchor='w', padx=20, pady=(0, 12))
+                     font=(ui_font(), 12)).pack(anchor='w', padx=20, pady=(0, 12))
 
         ctk.CTkFrame(proxy, height=1, fg_color=BORDER).pack(fill='x', padx=20)
 
@@ -3150,12 +3144,12 @@ class ModernApp(ctk.CTk):
             border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
             text_color=TEXT_PRI, command=self._on_proxy_clear).pack(side='left')
         self._proxy_status_lbl = ctk.CTkLabel(
-            proxy_actions, text='', text_color=TEXT_SEC, font=(ui_font(), 10))
+            proxy_actions, text='', text_color=TEXT_SEC, font=(ui_font(), 12))
         self._proxy_status_lbl.pack(side='left', padx=12)
         self._refresh_proxy_status()
 
         ctk.CTkLabel(proxy, text=T('proxy_help'),
-                     text_color=TEXT_DIM, font=(ui_font(), 9),
+                     text_color=TEXT_DIM, font=(ui_font(), 11),
                      wraplength=720, justify='left').pack(
                          anchor='w', padx=20, pady=(6, 18))
 
@@ -3171,7 +3165,7 @@ class ModernApp(ctk.CTk):
                      text_color=TEXT_PRI).pack(side='left')
         ctk.CTkLabel(cf, text=T('cf_card_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 10)).pack(anchor='w', padx=20, pady=(0, 12))
+                     font=(ui_font(), 12)).pack(anchor='w', padx=20, pady=(0, 12))
 
         ctk.CTkFrame(cf, height=1, fg_color=BORDER).pack(fill='x', padx=20)
 
@@ -3229,12 +3223,12 @@ class ModernApp(ctk.CTk):
                       command=self._on_cf_clear).pack(side='left')
 
         self._cf_status_lbl = ctk.CTkLabel(cf, text='', text_color=TEXT_SEC,
-                                           font=(ui_font(), 10))
+                                           font=(ui_font(), 12))
         self._cf_status_lbl.pack(anchor='w', padx=(146, 20), pady=(6, 4))
 
         ctk.CTkLabel(cf, text=T('cf_help'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 9),
+                     font=(ui_font(), 11),
                      wraplength=720,
                      justify='left').pack(anchor='w', padx=20, pady=(4, 18))
 
@@ -3253,7 +3247,7 @@ class ModernApp(ctk.CTk):
                      text_color=TEXT_PRI).pack(side='left')
         ctk.CTkLabel(queue, text=T('queue_card_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 10)).pack(anchor='w', padx=20, pady=(0, 12))
+                     font=(ui_font(), 12)).pack(anchor='w', padx=20, pady=(0, 12))
 
         ctk.CTkFrame(queue, height=1, fg_color=BORDER).pack(fill='x', padx=20)
 
@@ -3317,7 +3311,7 @@ class ModernApp(ctk.CTk):
 
         ctk.CTkLabel(about_body, text=T('disclaimer'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 10)).pack(anchor='w', pady=(10, 0))
+                     font=(ui_font(), 12)).pack(anchor='w', pady=(10, 0))
 
     # ── Browse logic ─────────────────────────────────────────────────
     def _load_categories(self):
@@ -3559,7 +3553,7 @@ class ModernApp(ctk.CTk):
                 ctk.CTkLabel(title_row, text=badge_text,
                              text_color='#FFFFFF', fg_color=badge_color,
                              corner_radius=4, width=34, height=18,
-                             font=(ui_font(), 9, 'bold')).pack(
+                             font=(ui_font(), 11, 'bold')).pack(
                     side='left', padx=(0, 6), anchor='n')
             ctk.CTkLabel(title_row, text=title_text, text_color=TEXT_PRI,
                          font=(ui_font(), 11),
@@ -3579,7 +3573,7 @@ class ModernApp(ctk.CTk):
                 border_color=BORDER_HOVER,
                 hover_color=ACCENT_HOVER if is_sel else BG_CARD_HOVER,
                 text_color=('#FFFFFF', '#FFFFFF') if is_sel else TEXT_PRI,
-                font=(ui_font(), 10, 'bold') if is_sel else (ui_font(), 10),
+                font=(ui_font(), 12, 'bold') if is_sel else (ui_font(), 10),
                 command=lambda u=url: self._toggle_select(u)
             )
             sel_btn.pack(side='right')
@@ -3589,7 +3583,7 @@ class ModernApp(ctk.CTk):
                 corner_radius=CONTROL_RADIUS, fg_color='transparent',
                 border_width=1, border_color=BORDER_HOVER,
                 hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-                font=(ui_font(), 10),
+                font=(ui_font(), 12),
                 command=lambda u=url: self._preview_video(u),
             ).pack(side='right', padx=(0, 6))
 
@@ -3697,7 +3691,7 @@ class ModernApp(ctk.CTk):
                     border_width=0 if is_sel else 1,
                     hover_color=ACCENT_HOVER if is_sel else BG_CARD_HOVER,
                     text_color=WHITE if is_sel else TEXT_PRI,
-                    font=(ui_font(), 10, 'bold') if is_sel else (ui_font(), 10))
+                    font=(ui_font(), 12, 'bold') if is_sel else (ui_font(), 10))
             except Exception:
                 pass
         self._update_selection_count()
@@ -3726,7 +3720,7 @@ class ModernApp(ctk.CTk):
                 border_width=0 if is_sel else 1,
                 hover_color=ACCENT_HOVER if is_sel else BG_CARD_HOVER,
                 text_color=WHITE if is_sel else TEXT_PRI,
-                font=(ui_font(), 10, 'bold') if is_sel else (ui_font(), 10))
+                font=(ui_font(), 12, 'bold') if is_sel else (ui_font(), 10))
         except Exception:
             pass
 
@@ -3983,7 +3977,7 @@ class ModernApp(ctk.CTk):
                 anchor='w', padx=22, pady=(18, 4))
         ctk.CTkLabel(
             header, text=T('hanime_filter_desc'), text_color=TEXT_DIM,
-            font=(ui_font(), 10), justify='left', wraplength=840).pack(
+            font=(ui_font(), 12), justify='left', wraplength=840).pack(
                 anchor='w', padx=22, pady=(0, 16))
 
         fields = ctk.CTkFrame(
@@ -4005,14 +3999,14 @@ class ModernApp(ctk.CTk):
         def add_entry(row, column, label_key, variable):
             ctk.CTkLabel(
                 fields, text=T(label_key), text_color=TEXT_SEC,
-                font=(ui_font(), 10, 'bold'), anchor='w').grid(
+                font=(ui_font(), 12, 'bold'), anchor='w').grid(
                     row=row, column=column, padx=(14, 8), pady=7,
                     sticky='w')
             entry = ctk.CTkEntry(
                 fields, textvariable=variable, height=34,
                 corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
                 border_color=BORDER, border_width=1,
-                text_color=TEXT_PRI, font=(ui_font(), 10))
+                text_color=TEXT_PRI, font=(ui_font(), 12))
             entry.grid(
                 row=row, column=column + 1, padx=(0, 14), pady=7,
                 sticky='ew')
@@ -4021,7 +4015,7 @@ class ModernApp(ctk.CTk):
         def add_menu(row, column, label_key, variable, values):
             ctk.CTkLabel(
                 fields, text=T(label_key), text_color=TEXT_SEC,
-                font=(ui_font(), 10, 'bold'), anchor='w').grid(
+                font=(ui_font(), 12, 'bold'), anchor='w').grid(
                     row=row, column=column, padx=(14, 8), pady=7,
                     sticky='w')
             menu = ctk.CTkOptionMenu(
@@ -4032,7 +4026,7 @@ class ModernApp(ctk.CTk):
                 dropdown_fg_color=BG_CARD,
                 dropdown_hover_color=BG_CARD_HOVER,
                 dropdown_text_color=TEXT_PRI,
-                font=(ui_font(), 9), dropdown_font=(ui_font(), 9))
+                font=(ui_font(), 11), dropdown_font=(ui_font(), 11))
             menu.grid(
                 row=row, column=column + 1, padx=(0, 14), pady=7,
                 sticky='ew')
@@ -4063,7 +4057,7 @@ class ModernApp(ctk.CTk):
             font=(ui_font(), 12, 'bold')).pack(side='left')
         selected_count = ctk.CTkLabel(
             tags_header, text='', text_color=ACCENT,
-            font=(ui_font(), 9, 'bold'))
+            font=(ui_font(), 11, 'bold'))
         selected_count.pack(side='left', padx=(10, 0))
         tag_search_var = tk.StringVar()
         ctk.CTkEntry(
@@ -4071,7 +4065,7 @@ class ModernApp(ctk.CTk):
             placeholder_text=T('hanime_filter_tag_search'), width=260,
             height=32, corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
             border_color=BORDER, border_width=1, text_color=TEXT_PRI,
-            font=(ui_font(), 10)).pack(side='right')
+            font=(ui_font(), 12)).pack(side='right')
 
         tag_scroll = ctk.CTkScrollableFrame(
             tags_card, fg_color='transparent', corner_radius=0,
@@ -4132,7 +4126,7 @@ class ModernApp(ctk.CTk):
                     text=(T(group_key[group_id]) if group_id in group_key
                           else T('hanime_filter_other_tags')),
                     text_color=TEXT_SEC,
-                    font=(ui_font(), 10, 'bold')).pack(
+                    font=(ui_font(), 12, 'bold')).pack(
                         anchor='w', padx=10, pady=(8, 4))
                 grid = ctk.CTkFrame(group, fg_color='transparent')
                 grid.pack(fill='x', padx=8, pady=(0, 8))
@@ -4145,7 +4139,7 @@ class ModernApp(ctk.CTk):
                         corner_radius=4, border_width=1,
                         fg_color=ACCENT, hover_color=ACCENT_HOVER,
                         border_color=BORDER_HOVER, checkmark_color=WHITE,
-                        text_color=TEXT_SEC, font=(ui_font(), 9),
+                        text_color=TEXT_SEC, font=(ui_font(), 11),
                         command=update_selected_count).grid(
                             row=index // 3, column=index % 3, sticky='w',
                             padx=6, pady=2)
@@ -4205,21 +4199,21 @@ class ModernApp(ctk.CTk):
             footer, text=T('hanime_filter_apply'), width=116, height=38,
             corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
             hover_color=ACCENT_HOVER, text_color=WHITE,
-            font=(ui_font(), 10, 'bold'), command=apply_filter).pack(
+            font=(ui_font(), 12, 'bold'), command=apply_filter).pack(
                 side='right', padx=(8, 18), pady=12)
         ctk.CTkButton(
             footer, text=T('hanime_filter_reset'), width=92, height=38,
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER_HOVER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-            font=(ui_font(), 10), command=clear_form).pack(
+            font=(ui_font(), 12), command=clear_form).pack(
                 side='right', pady=12)
         ctk.CTkButton(
             footer, text=T('st_calendar_cancel'), width=92, height=38,
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
-            font=(ui_font(), 10), command=close_popup).pack(
+            font=(ui_font(), 12), command=close_popup).pack(
                 side='right', padx=(0, 8), pady=12)
 
         popup.protocol('WM_DELETE_WINDOW', close_popup)
@@ -4327,7 +4321,7 @@ class ModernApp(ctk.CTk):
         if self._site_key != 'JableTV':
             ctk.CTkLabel(self._sidebar, text=T('tags_jable_only'),
                          text_color=TEXT_DIM,
-                         font=(ui_font(), 10)).pack(pady=20)
+                         font=(ui_font(), 12)).pack(pady=20)
             return
 
         tags = JableTVBrowser.SIDEBAR_TAGS
@@ -4342,7 +4336,7 @@ class ModernApp(ctk.CTk):
                 text=f'{arrow} {display_group_name} ({len(tag_list)})',
                 fg_color='transparent', hover_color=BG_CARD_HOVER,
                 text_color=TEXT_SEC, anchor='w',
-                font=(ui_font(), 10, 'bold'),
+                font=(ui_font(), 12, 'bold'),
                 height=30, corner_radius=8,
                 command=lambda g=group_name: self._toggle_group(g))
             hdr.pack(fill='x', padx=6, pady=1)
@@ -4355,7 +4349,7 @@ class ModernApp(ctk.CTk):
                         self._sidebar, text=display_name,
                         fg_color='transparent', hover_color=BG_CARD_HOVER,
                         text_color=TEXT_SEC, anchor='w',
-                        font=(ui_font(), 10),
+                        font=(ui_font(), 12),
                         height=26, corner_radius=8,
                         command=lambda u=tag_url, n=display_name: self._on_tag_click(u, n))
                     btn.pack(fill='x', padx=(18, 6), pady=0)
@@ -4385,7 +4379,7 @@ class ModernApp(ctk.CTk):
                 anchor='w', padx=20, pady=(16, 2))
         ctk.CTkLabel(
             header, text=T('selection_preview_desc', count=len(ordered)),
-            text_color=TEXT_DIM, font=(ui_font(), 10)).pack(
+            text_color=TEXT_DIM, font=(ui_font(), 12)).pack(
                 anchor='w', padx=20, pady=(0, 14))
 
         options = ctk.CTkFrame(popup, fg_color=BG_CARD)
@@ -4394,7 +4388,7 @@ class ModernApp(ctk.CTk):
         template_var = ctk.StringVar(value=config.get_filename_template())
         ctk.CTkLabel(
             options, text=T('selection_preview_resolution'),
-            text_color=TEXT_SEC, font=(ui_font(), 10, 'bold')).grid(
+            text_color=TEXT_SEC, font=(ui_font(), 12, 'bold')).grid(
                 row=0, column=0, padx=(14, 8), pady=12, sticky='w')
         ctk.CTkOptionMenu(
             options, values=self._resolution_values(),
@@ -4405,7 +4399,7 @@ class ModernApp(ctk.CTk):
                 row=0, column=1, padx=(0, 18), pady=12, sticky='w')
         ctk.CTkLabel(
             options, text=T('selection_preview_template'),
-            text_color=TEXT_SEC, font=(ui_font(), 10, 'bold')).grid(
+            text_color=TEXT_SEC, font=(ui_font(), 12, 'bold')).grid(
                 row=0, column=2, padx=(0, 8), pady=12, sticky='w')
         template_entry = ctk.CTkEntry(
             options, textvariable=template_var, height=32,
@@ -4438,7 +4432,7 @@ class ModernApp(ctk.CTk):
             title = str(video.get('title') or url.rstrip('/').split('/')[-1])
             ctk.CTkLabel(
                 labels, text=title, text_color=TEXT_PRI,
-                font=(ui_font(), 10, 'bold'), anchor='w').pack(fill='x')
+                font=(ui_font(), 12, 'bold'), anchor='w').pack(fill='x')
             ctk.CTkLabel(
                 labels,
                 text=f'{site_name(url)} · {video_code(url, title)} · {url}',
@@ -4448,7 +4442,7 @@ class ModernApp(ctk.CTk):
             ctk.CTkLabel(
                 listing,
                 text=T('selection_preview_more', count=len(ordered) - 200),
-                text_color=TEXT_DIM, font=(ui_font(), 10)).pack(
+                text_color=TEXT_DIM, font=(ui_font(), 12)).pack(
                     anchor='w', padx=12, pady=10)
 
         footer = ctk.CTkFrame(popup, fg_color=BG_HEADER, corner_radius=0)
@@ -5045,19 +5039,21 @@ class ModernApp(ctk.CTk):
 
     def _on_speed_change(self, val):
         from uav_downloader.sites.base import speed_limiter
+        from uav_downloader.ui.bandwidth import parse_bandwidth
         val = str(val)
-        if val == T('unlimited') or not val[:1].isdigit():
-            self._speed_mbps = 0
-            speed_limiter.set_limit(0)
-            config.set_speed_limit_mbps(0)
-            return
         try:
-            mbps = float(val.split()[0])
+            mbps = 0.0 if val == T('unlimited') else parse_bandwidth(val.split()[0])
         except (ValueError, IndexError):
             return
         self._speed_mbps = mbps
         speed_limiter.set_limit(mbps)
         config.set_speed_limit_mbps(mbps)
+        if hasattr(self, '_speed_var'):
+            self._speed_var.set(self._speed_label())
+        for name in ('_bandwidth_control', '_toolbar_bandwidth'):
+            control = getattr(self, name, None)
+            if control is not None:
+                control.set_value(mbps)
 
     def _on_res_change(self, val):
         from uav_downloader.sites.base import set_resolution_pref
@@ -5335,14 +5331,17 @@ class ModernApp(ctk.CTk):
 
             # Toggle empty placeholder
             if not items:
+                empty_text = (T('queue_filter_empty') if all_items else
+                              T('dl_list_empty') + '\n\n' + T('queue_start_hint'))
                 if self._dl_empty_lbl is None:
                     self._dl_empty_lbl = ctk.CTkLabel(
                         self._dl_scroll,
-                        text=(T('queue_filter_empty') if all_items
-                              else T('dl_list_empty')),
+                        text=empty_text, wraplength=600,
                         text_color=TEXT_DIM,
                         font=(ui_font(), 13))
-                    self._dl_empty_lbl.pack(pady=40)
+                    self._dl_empty_lbl.pack(pady=56)
+                elif self._dl_empty_lbl.cget('text') != empty_text:
+                    self._dl_empty_lbl.configure(text=empty_text)
             else:
                 if self._dl_empty_lbl is not None:
                     try:
@@ -5377,7 +5376,9 @@ class ModernApp(ctk.CTk):
                 if i.state in {'已下載', '未偵測到日語語音'})
             if done:
                 parts.append(f'{state_label("已下載")} {done}')
-            self._status_lbl.configure(text='  |  '.join(parts) if parts else T('status_ready'))
+            status_text = '  |  '.join(parts) if parts else T('status_ready')
+            if self._status_lbl.cget('text') != status_text:
+                self._status_lbl.configure(text=status_text)
             self._autosave_downloads(all_items)
             busy = bool(a or p or subtitle_active or subtitle_pending)
             if busy:
@@ -5434,7 +5435,7 @@ class ModernApp(ctk.CTk):
             state_holder.pack_propagate(False)
             state_lbl = ctk.CTkLabel(
                 state_holder, text=state_label(item.state) if item.state else '—',
-                text_color=color, font=(ui_font(), 10, 'bold'))
+                text_color=color, font=(ui_font(), 12, 'bold'))
             state_lbl.pack(fill='both', expand=True, padx=6)
 
             thumb_holder = ctk.CTkFrame(
@@ -5444,7 +5445,7 @@ class ModernApp(ctk.CTk):
             thumb_holder.pack_propagate(False)
             thumb_lbl = ctk.CTkLabel(
                 thumb_holder, text='', text_color=TEXT_DIM,
-                font=(ui_font(), 8))
+                font=(ui_font(), 11))
             thumb_lbl.pack(fill='both', expand=True)
 
             remove_btn = ctk.CTkButton(
@@ -5470,7 +5471,7 @@ class ModernApp(ctk.CTk):
                 corner_radius=CONTROL_RADIUS,
                 fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                 hover_color=BG_CARD_HOVER,
-                text_color=ACCENT, font=(ui_font(), 10, 'bold'),
+                text_color=ACCENT, font=(ui_font(), 12, 'bold'),
                 command=lambda u=item.url: self._handle_download_action(u))
 
             metrics = ctk.CTkFrame(row, fg_color='transparent')
@@ -5752,6 +5753,8 @@ class ModernApp(ctk.CTk):
 
     # ── Close ────────────────────────────────────────────────────────
     def _on_close(self):
+        from uav_downloader.ui.bandwidth import commit_bandwidth_controls
+        commit_bandwidth_controls(self)
         self._is_closing = True
         if not getattr(self, '_startup_complete', True):
             self._close_requested = True

@@ -263,7 +263,7 @@ def _session(kind='page'):
     return session
 
 
-def _get(url, *, header_factory=None, timeout=20, page=False):
+def _get(url, *, header_factory=None, timeout=20, page=False, stream=False):
     """Bound redirects; rebuild headers after validating every destination."""
     session = _session('page' if page else 'media')
     transient_attempt = 0
@@ -283,7 +283,7 @@ def _get(url, *, header_factory=None, timeout=20, page=False):
                 request_timeout = max(0.01, min(timeout, control['deadline'] - time.monotonic()))
             try:
                 response = session.get(url, headers=headers, timeout=request_timeout,
-                                       allow_redirects=False, stream=page,
+                                       allow_redirects=False, stream=page or stream,
                                        **_proxy_kwargs())
             except (requests.Timeout, requests.ConnectionError) as exc:
                 _check_control()
@@ -590,8 +590,9 @@ class SiteHuangguo(M3U8Crawler):
             headers.update({'x-cdn-auth': cdn['auth'], 'x-cdn-app': cdn['app']})
         return headers
 
-    def _media_get(self, url, timeout=20):
-        return _get(url, header_factory=self._media_headers, timeout=timeout)
+    def _media_get(self, url, timeout=20, stream=False):
+        options = {'stream': True} if stream else {}
+        return _get(url, header_factory=self._media_headers, timeout=timeout, **options)
 
     def _load_m3u8(self, url):
         try:
