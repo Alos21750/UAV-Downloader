@@ -47,8 +47,22 @@ with exact normalized-text equality.
 ## Publication status
 
 No new executable release has been published by this maintenance review.
-Frozen-build verification and public asset verification remain required before
-any release claim. A separate packaging audit identified an unresolved source
-and notice mapping for the bundled Gyan FFmpeg binary; adding notices alone is
-not evidence that the matching complete source/build inputs are available.
-This does not change UAV's current license or resume the paused relicensing work.
+Candidate `55029f3` on `maintenance/20261115` passed Windows workflow
+[43664630292](https://github.com/Alos21750/UAV-Downloader/actions/runs/43664630292),
+including all 1,267 tests, a source-built LGPL FFmpeg, source/binary mapping,
+system DLL imports, H.264/HEVC remux, AAC/Opus PCM extraction and Unicode paths.
+The exact FFmpeg binary/source/provenance attestations were verified against
+that branch and source digest. Local out-of-tree builds of Browser, Watcher and
+portable Watcher also succeeded; their embedded FFmpeg and notices match the
+reviewed payload byte-for-byte.
+
+The old Gyan corresponding-source gap is not retroactively solved. The new
+candidate instead uses the independently built FFmpeg and ships its exact
+source/build recipe. This does not change UAV's license or resume relicensing.
+
+**Remaining gate:** actual visible-window inspection was blocked by the computer
+control tool: `Computer Use was not approved to use uav_browser`. A launched
+process/window listing is not a passed GUI check. Master publication, final
+master-ref CI attestations, visible GUI checks, release upload and anonymous
+asset re-download verification are still pending. No issue is closed on the
+basis of this incomplete release gate.
