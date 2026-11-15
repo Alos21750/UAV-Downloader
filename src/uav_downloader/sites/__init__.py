@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from . import hanime1, huangguo, jabletv, missav, supjav
 from .legacy import sites_91porn, sites_javdb
+from uav_downloader.core.transfer_lifetime import cancel_and_wait
 
 
 FEATURED_SITE_CLASSES = (
@@ -104,6 +105,9 @@ def consoles_main(url, dest=None, max_workers=None):
         return 1
     try:
         completed = job.start_download()
+    except KeyboardInterrupt:
+        cancel_and_wait(job)
+        return 130
     except Exception as exc:
         print(f"下載錯誤: {exc}")
         return 1

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+from uav_downloader.core.transfer_lifetime import reap_process
 import tempfile
 import threading
 import time
@@ -268,13 +269,12 @@ def _stop_process(process):
         return
     try:
         process.terminate()
-    except ProcessLookupError:
-        return
+    except OSError:
+        pass
     try:
         process.wait(timeout=3)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        reap_process(process)
 
 
 def _run_ffmpeg(command, *, cancel_check, timeout):
@@ -316,7 +316,7 @@ def _run_ffmpeg(command, *, cancel_check, timeout):
         _cancel(cancel_check)
     finally:
         _stop_process(process)
-        reader.join(timeout=5)
+        reader.join()
     if storage_error[0]:
         raise StorageWriteError('collection temporary output',
                                 OSError(errno.EIO, 'FFmpeg reported a storage write failure'))

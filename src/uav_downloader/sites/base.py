@@ -17,6 +17,7 @@ import urllib.request
 import m3u8
 from uav_downloader.core import config
 from uav_downloader.core.storage import StorageWriteError, storage_open
+from uav_downloader.core.transfer_lifetime import owned_transfer, transfer_lifetime, reap_process
 from Crypto.Cipher import AES
 from uav_downloader.core.config import headers
 import concurrent.futures
@@ -812,6 +813,8 @@ class M3U8Crawler:
 
     def _cancellable_move(self, src, dst):
         """Move src->dst honoring cancel. Fast same-volume rename, else chunked copy."""
+        if self._cancel_job:
+            return False
         try:
             os.replace(src, dst)   # same volume: instant + atomic
             return True
@@ -838,6 +841,7 @@ class M3U8Crawler:
         except Exception:
             return False
 
+    @owned_transfer
     def _mergeMp4Chunks(self):
         start_time = time.time()
         saveName = self._get_video_savename()
@@ -912,8 +916,11 @@ class M3U8Crawler:
             except OSError: pass
         return spent_time
 
+    @owned_transfer
     def _remux_to_mp4(self, merged_ts, out_mp4, workdir):
         ffmpeg = locate_ffmpeg()
+        if self._cancel_job:
+            return False
         if not ffmpeg:
             print('[合成] 找不到 ffmpeg，略過重新封裝', flush=True)
             return False
@@ -938,8 +945,12 @@ class M3U8Crawler:
                             proc.wait(timeout=0.3); break
                         except subprocess.TimeoutExpired:
                             if self._cancel_job:
-                                proc.kill(); proc.wait(); return False
+                                try: proc.kill()
+                                except OSError: pass
                 finally:
+                    # Never clear the handle/release the work directory while
+                    # the child may still be writing, even when kill/wait fails.
+                    reap_process(proc)
                     self._ffmpeg_proc = None
         except StorageWriteError:
             raise
@@ -1056,7 +1067,11 @@ class M3U8Crawler:
             tasks = list(self._pending_set)
             with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
                 self._t2_executor = executor
-                list(executor.map(self._scrape, tasks, timeout=None))
+                try:
+                    list(executor.map(self._scrape, tasks, timeout=None))
+                except BaseException:
+                    self._cancel_job = True
+                    raise
             self._t2_executor = None
             still_pending = len(self._pending_set)
             if still_pending == 0:
@@ -1104,6 +1119,10 @@ class M3U8Crawler:
         return self._get_image_savename()
 
     def cleanup_temp(self):
+        """Request cleanup; the admitted transfer performs it after its I/O."""
+        transfer_lifetime(self).request_cleanup()
+
+    def _cleanup_temp_now(self):
         try:
             temp = getattr(self, '_temp_folder', None)
             dest = getattr(self, '_dest_folder', None)
@@ -1113,10 +1132,10 @@ class M3U8Crawler:
         except Exception:
             pass
 
+    @owned_transfer
     def start_download(self):
         if self._cancel_job:
             return False
-        self._cancel_job = False
         self._progress_unit = 'preparing'
         self._create_dest_folder()
         self.download_image()
@@ -1140,37 +1159,61 @@ class M3U8Crawler:
 
     def cancel_download(self, cleanup=True):
         print("\n取消下載....", flush=True)
-        self._cancel_job = True
+        lifetime = transfer_lifetime(self)
+        with lifetime.condition:
+            self._cancel_job = True
+            if cleanup:
+                lifetime.request_cleanup()
         if self._t2_executor:
             try: self._t2_executor.shutdown(wait=False, cancel_futures=True)
             except TypeError: self._t2_executor.shutdown(wait=False)
-            self._t2_executor = None
         if self._t_executor:
             try: self._t_executor.shutdown(wait=False, cancel_futures=True)
             except TypeError: self._t_executor.shutdown(wait=False)
-            self._t_executor = None
         proc = getattr(self, '_ffmpeg_proc', None)
         if proc is not None:
             try: proc.kill()
             except Exception: pass
-        if cleanup:
-            self.cleanup_temp()
-        print("\n下載已取消", flush=True)
+        print("\n已請求取消下載", flush=True)
+
+    def wait_stopped(self, timeout=None):
+        return transfer_lifetime(self).wait(timeout)
 
     def begin_concurrent_download(self):
-        self._t_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        self._t_future = self._t_executor.submit(self.start_download)
+        lifetime = transfer_lifetime(self)
+        if not lifetime.enter(reserved=True):
+            return
+        released = False
+        release_lock = threading.Lock()
+        def release():
+            nonlocal released
+            with release_lock:
+                if not released:
+                    released = True
+                    lifetime.leave(reserved=True)
+        def run():
+            try:
+                return self.start_download()
+            finally:
+                release()
+        try:
+            self._t_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            self._t_future = self._t_executor.submit(run)
+        except BaseException:
+            release()
+            raise
+        self._t_future.add_done_callback(lambda future: release() if future.cancelled() else None)
 
     def is_concurrent_dowload_completed(self):
         if not self._t_future or not self._t_future.done():
+            return False
+        if not self.wait_stopped(timeout=0):
             return False
         self._t_future = None
         return True
 
     def end_concurrent_download(self):
-        if self._t_executor:
-            self._t_executor.shutdown(wait=False)
-            self._t_executor = None
+        return self.wait_stopped()
 
 
 class SiteUrlList_M3U8:

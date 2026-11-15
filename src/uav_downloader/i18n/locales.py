@@ -1850,6 +1850,15 @@ STATE_LABELS = {
 }
 
 # Active language - set before GUI init
+for _code, _message in {
+    'en': 'Could not save the queue. The window remains open; close it again to retry.',
+    'zh': '無法儲存佇列。視窗保持開啟，請再次關閉以重試儲存。',
+    'zh-Hans': '无法保存队列。窗口保持打开，请再次关闭以重试保存。',
+    'ja': 'キューを保存できませんでした。ウィンドウをもう一度閉じると再試行します。',
+    'th': 'บันทึกคิวไม่สำเร็จ หน้าต่างจะยังเปิดอยู่ กรุณาปิดอีกครั้งเพื่อลองใหม่',
+}.items():
+    STRINGS[_code]['queue_close_save_failed'] = _message
+
 _current_lang = 'en'
 
 
