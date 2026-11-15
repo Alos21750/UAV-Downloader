@@ -1,7 +1,7 @@
 # UI / bandwidth development checkpoint — 2026-11-15
 
-Status: preparing v3.7.0 for the user's requested public release. The original
-checkpoint was local-only; publication evidence is recorded below when complete.
+Status: v3.7.0 is publicly released. The original checkpoint was local-only;
+completed publication evidence is recorded below.
 Tauri/React and licensing work remain paused and untouched.
 
 ## Implemented
@@ -51,10 +51,43 @@ Tauri/React and licensing work remain paused and untouched.
 Evidence is local to `C:\jable_build\ui-refresh-20261115\evidence`.
 The isolated source preview launcher is `C:\jable_build\preview_uav_ui_20261115.py`.
 
-## Remaining release gates / limitations
+## Release evidence
 
-- No version bump, Windows package build, CI push, tag, asset upload, or public
-  release verification has been performed for this candidate.
+- Release: https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.7.0
+- Exact source/tag: `9f947796b7d2de85a3d26c6436697c1dea32dd37`. Implementation
+  `94bb4cd` was merged with the remote automated star-history SVG update; no
+  application or packaged input changed during that merge.
+- Final merged-source local tests: **1417 passed, 1 skipped** (25.55 seconds).
+  Windows CI **43700446893**: **1418 passed**, successful build, provenance and
+  media-operation checks. All eight artifact attestations verified against the
+  exact source, master ref, official workflow and GitHub-hosted runners.
+- Out-of-tree local and exact CI artifacts each passed seven actual visible
+  launch/normal-close cases: Browser fresh/second/normal, Watcher fresh/second,
+  portable fresh/second. All exit codes were zero; no forced termination. Isolated
+  QA profiles used a dead loopback proxy and empty monitoring selections.
+- CI Watcher accepted 2.5 MB/s, applied it on focus loss, and saved the exact value
+  on normal close. Source-stage tests additionally verified restored values and
+  Browser control synchronization. No live media download was performed.
+- Evidence: `C:\jable_build\evidence-v370-local-r1` and
+  `C:\jable_build\evidence-v370-ci-r1`; handoff image `watcher-second.png` in CI
+  evidence. All QA windows closed normally.
+- Exact CI assets: `C:\jable_build\ci-v370-r1`; FFmpeg bundle:
+  `C:\jable_build\ffmpeg-ci-v370-r1`. Original attested portable ZIP was published
+  unchanged. Embedded FFmpeg SHA-256:
+  `0468a9a3ac5684a66952056e4a1ad78a3277fc658211c129e79b3701f5ed8758`.
+- Exactly five public assets were anonymously downloaded to
+  `C:\jable_build\public-v370-r1`; all byte lengths and SHA-256 values match CI
+  (`public-verification.json`). UTF-8 release notes were anonymously read back
+  with an exact normalized-text match; latest stable release and tag verified.
+- Master Docker run **43700446900** succeeded, including both architectures'
+  offline runtime checks; public GHCR `latest` matches the exact source on amd64
+  and arm64. Tag run **43701768567** also succeeded; public GHCR `v3.7.0`
+  was anonymously verified for both architectures and the same exact revision.
+- No unrelated issue/PR comments or closures, no relicensing, and no paused
+  Tauri/React migration were included.
+
+## Limitations
+
 - The pre-release independent review caught the transport swap in the first
   candidate. It is now fixed: limited base HLS retains curl_cffi Chrome transport
   and the same cookie jar, uses a synchronous throttled content callback rather
@@ -68,7 +101,7 @@ The isolated source preview launcher is `C:\jable_build\preview_uav_ui_20261115.
 - This is application-level average media throttling, not an OS-wide hard network
   shaper; socket buffers, concurrent reads, and protocol overhead can cause bursts.
 - Full-size widgets/popups in every language and DPI combination have not all been
-  visually reverified. Full frozen-app and release checks remain mandatory.
+  visually reverified; the specific native and frozen checks above passed.
 
 ## User's collection-format question
 
