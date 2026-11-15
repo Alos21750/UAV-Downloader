@@ -498,6 +498,78 @@ def _get_cffi_session():
     return session
 
 
+def _get_cffi_limited_session(timeout):
+    from curl_cffi import CurlOpt
+    session = getattr(_cffi_tls, 'limited_session', None)
+    if session is None:
+        session = _cffi_requests.Session(
+            impersonate='chrome', cookies=_get_cffi_session().cookies.jar)
+        _cffi_tls.limited_session = session
+    # Intentional callback waits must not consume a total transfer deadline.
+    # Keep connection and stalled-network protection, isolated from ordinary GETs.
+    session.curl_options.update({
+        CurlOpt.TIMEOUT_MS: 0,
+        CurlOpt.CONNECTTIMEOUT_MS: int(timeout * 1000),
+        CurlOpt.LOW_SPEED_LIMIT: 1,
+        CurlOpt.LOW_SPEED_TIME: max(1, int(timeout)),
+    })
+    return session
+
+
+class _MediaDownloadCancelled(Exception):
+    pass
+
+
+def _http_get_limited(url, headers, timeout, cancel_check):
+    if cancel_check is not None and cancel_check():
+        raise _MediaDownloadCancelled()
+    if _use_cffi:
+        from curl_cffi.curl import CURL_WRITEFUNC_ERROR
+        payload = bytearray()
+        callback_error = None
+
+        def receive(chunk):
+            nonlocal callback_error
+            try:
+                if speed_limiter.acquire(len(chunk), cancel_check=cancel_check) is False:
+                    raise _MediaDownloadCancelled()
+                payload.extend(chunk)
+                return len(chunk)
+            except Exception as exc:
+                # CFFI callbacks must return libcurl's explicit abort sentinel;
+                # zero/short returns are normalized to success by curl_cffi.
+                callback_error = exc
+                return CURL_WRITEFUNC_ERROR
+
+        try:
+            response = _get_cffi_limited_session(timeout).get(
+                url, headers={k: v for k, v in dict(headers or {}).items()
+                              if str(k).lower() != 'user-agent'},
+                timeout=timeout, content_callback=receive,
+                **config.proxy_request_kwargs())
+        except Exception:
+            if callback_error is not None:
+                raise callback_error
+            if cancel_check is not None and cancel_check():
+                raise _MediaDownloadCancelled()
+            # A transport failure may use the established shared-SSL fallback,
+            # but partial curl bytes must never be mixed into its response.
+            payload.clear()
+        else:
+            if callback_error is not None:
+                response.close()
+                raise callback_error
+            if cancel_check is not None and cancel_check():
+                response.close()
+                raise _MediaDownloadCancelled()
+            response.content = bytes(payload)
+            response._uav_bandwidth_accounted = True
+            return response
+    return _get_session().get(
+        url, headers=dict(headers or {}), timeout=timeout, stream=True,
+        **config.proxy_request_kwargs())
+
+
 def _is_cf_block_resp(resp):
     try:
         if getattr(resp, 'status_code', None) not in (403, 429, 503):
@@ -524,13 +596,11 @@ def _is_cf_block_resp(resp):
         return False
 
 
-def _http_get(url, headers=None, timeout=20, stream=False):
+def _http_get(url, headers=None, timeout=20, stream=False, cancel_check=None):
     if stream:
-        # requests streams synchronously; curl_cffi's background receive queue
-        # can consume the whole network response while our reader is throttled.
-        return _get_session().get(
-            url, headers=dict(headers or {}), timeout=timeout, stream=True,
-            **config.proxy_request_kwargs())
+        # A synchronous write callback applies backpressure inside curl itself;
+        # stream=True would instead fill curl_cffi's unbounded receive queue.
+        return _http_get_limited(url, headers, timeout, cancel_check)
     if _use_cffi:
         try:
             cffi_headers = {
@@ -721,7 +791,7 @@ class M3U8Crawler:
 
     def _media_get(self, url, timeout=20, stream=False):
         """Transport hook for sites needing per-resource/redirect header scope."""
-        options = {'stream': True} if stream else {}
+        options = {'stream': True, 'cancel_check': lambda: bool(self._cancel_job)} if stream else {}
         return _http_get(url, self._m3u8_headers(), timeout=timeout, **options)
 
     def _load_m3u8(self, url):
@@ -1001,9 +1071,11 @@ class M3U8Crawler:
             throttled = speed_limiter.limit_bps > 0
             options = {'stream': True} if throttled else {}
             response = self._media_get(url, timeout=25, **options)
-            if response.status_code != 200:
+            if self._cancel_job or response.status_code != 200:
                 return False
-            if throttled:
+            if getattr(response, '_uav_bandwidth_accounted', False):
+                content_ts = response.content
+            elif throttled:
                 payload = bytearray()
                 for chunk in response.iter_content(chunk_size=64 * 1024):
                     if self._cancel_job:

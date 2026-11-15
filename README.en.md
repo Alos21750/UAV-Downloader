@@ -38,6 +38,14 @@
 
 ## Three workflows, one download core
 
+### v3.7.0: clearer desktop UI and custom bandwidth limits
+
+- More readable small text, aligned explanations and improved light/dark contrast. Watcher settings use responsive cards and preserve the action row in short windows.
+- Enter a custom **MB/s cap** in Watcher's main screen or Browser's download toolbar/settings, e.g. `2.5`. `0` is unlimited; supported range is `0.01–10000`. Enter, focus loss and normal window close save the preference.
+- All media workers **in one app process share the cap**. MB/s retains the 1024²-byte convention; socket buffers can cause brief bursts. Other app instances and AI model downloads are separate.
+- More responsive cancellation/unlimited changes, less redundant UI repainting, localized queue controls and useful empty-queue guidance.
+- Huangguo collections still require compatible streams: **no automatic transcoding** in this release. Matching visible resolution does not guarantee identical codec, time-base or audio settings; incompatible inputs stop safely and retain episode caches.
+
 ### v3.6.0: Huangguo collections — all episodes, one MP4
 
 - In **UAV Watcher → Show settings**, enable **Huangguo: combine all episodes into one MP4**. It is off by default; ordinary per-episode downloads stay unchanged. Changes take effect on the next scan and apply only to Huangguo jobs in Watcher.

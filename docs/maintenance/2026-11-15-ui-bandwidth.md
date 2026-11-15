@@ -1,7 +1,8 @@
 # UI / bandwidth development checkpoint — 2026-11-15
 
-Status: locally tested source candidate, **not a published release**. The public
-release remains v3.6.0. Tauri/React and licensing work remain paused and untouched.
+Status: preparing v3.7.0 for the user's requested public release. The original
+checkpoint was local-only; publication evidence is recorded below when complete.
+Tauri/React and licensing work remain paused and untouched.
 
 ## Implemented
 
@@ -32,9 +33,9 @@ release remains v3.6.0. Tauri/React and licensing work remain paused and untouch
 
 ## Verified
 
-- Full suite: **1407 passed, 1 skipped** (20.31 seconds), using Python 3.12 and
+- Full release-candidate suite: **1417 passed, 1 skipped** (28.48 seconds), using Python 3.12 and
   `UAV_FFMPEG_BUNDLE=C:\jable_build\ffmpeg-ci-v360-ae16079`.
-- 24 bandwidth/UI regression tests include concurrent shared-budget timing, real
+- 34 bandwidth/UI/transport regression tests include concurrent shared-budget timing, real
   local HTTP segment downloads, cancellation, unlimited wake-up, invalid input,
   control synchronization, locale coverage, and responsive layout no-op behavior.
 - Isolated source UI profiles were used; a dead loopback proxy prevented loading
@@ -54,11 +55,16 @@ The isolated source preview launcher is `C:\jable_build\preview_uav_ui_20261115.
 
 - No version bump, Windows package build, CI push, tag, asset upload, or public
   release verification has been performed for this candidate.
-- Limited base HLS transport uses synchronous `requests` with the existing shared
-  SSL adapter because curl_cffi's streaming queue can prefetch beyond a reader-side
-  cap. Representative real-CDN compatibility still needs verification, especially
-  sites that depend on curl_cffi's transport fingerprint. Do not treat the local
-  HTTP integration test as that live compatibility gate.
+- The pre-release independent review caught the transport swap in the first
+  candidate. It is now fixed: limited base HLS retains curl_cffi Chrome transport
+  and the same cookie jar, uses a synchronous throttled content callback rather
+  than its eager streaming queue, and keeps connection/stall timeouts without a
+  total deadline consumed by intentional waits. Callback cancellation uses the
+  explicit curl abort sentinel and never restarts through fallback. The existing
+  shared-SSL requests fallback and Huangguo's separate scoped transport remain.
+  New tests exercise real local curl transfers, shared caps, cancellation,
+  unlimited changes, cookie identity, timeouts and partial-failure isolation.
+  No claim of full live-video E2E is made.
 - This is application-level average media throttling, not an OS-wide hard network
   shaper; socket buffers, concurrent reads, and protocol overhead can cause bursts.
 - Full-size widgets/popups in every language and DPI combination have not all been

@@ -84,8 +84,9 @@ def test_invalid_ui_edit_preserves_previous_cap():
     assert values == ['2.5'] and not calls
 
 
-def test_stream_transport_uses_shared_synchronous_session(monkeypatch):
+def test_stream_transport_without_cffi_uses_shared_synchronous_session(monkeypatch):
     calls = []
+    monkeypatch.setattr(base, '_use_cffi', False)
     monkeypatch.setattr(base, '_get_session', lambda: SimpleNamespace(get=lambda *a, **k: calls.append((a, k))))
     monkeypatch.setattr(base, '_get_cffi_session', lambda: pytest.fail('background prefetch bypasses limit'))
     base._http_get('https://example.test/segment.ts', {'Referer': 'fixture'}, stream=True)
@@ -172,7 +173,7 @@ def test_refresh_labels_cover_every_supported_language():
 
 
 def test_real_http_segments_share_limit(monkeypatch, tmp_path):
-    """Local HTTP integration: streamed media, concurrent workers, real timing."""
+    """Fallback HTTP integration: streamed media, concurrent workers, real timing."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     import requests
     payload = (b'\x47' + b'\x11' * 187) * 1024
@@ -192,6 +193,7 @@ def test_real_http_segments_share_limit(monkeypatch, tmp_path):
     limiter = base._SpeedLimiter()
     limiter.set_limit(0.5)
     monkeypatch.setattr(base, 'speed_limiter', limiter)
+    monkeypatch.setattr(base, '_use_cffi', False)
     monkeypatch.setattr(base, '_get_session', lambda: session)
     monkeypatch.setattr(config, 'proxy_request_kwargs', lambda: {})
     crawler = base.M3U8Crawler.__new__(base.M3U8Crawler)
