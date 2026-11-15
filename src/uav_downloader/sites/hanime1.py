@@ -14,6 +14,7 @@ try:
 except ImportError:
     _use_cffi = False
 from bs4 import BeautifulSoup
+from requests.exceptions import RequestException
 
 from uav_downloader.core import config
 from uav_downloader.i18n import sites as site_i18n
@@ -28,6 +29,9 @@ HANIME1_ROOT = 'https://hanime1.me'
 HANIME1_HOME = HANIME1_ROOT + '/'
 _BLOCKED_STATUS = frozenset({403, 429, 503})
 _browser_local = threading.local()
+_METADATA_REQUEST_ERRORS = (MirrorsBlockedError, RequestException)
+if _use_cffi:
+    _METADATA_REQUEST_ERRORS += (cffi_requests.RequestsError,)
 
 HANIME1_FILTER_SORTS = (
     '最新上市', '最新上傳', '本日排行', '本週排行', '本月排行',
@@ -210,18 +214,41 @@ def _clean_text(value):
     return ' '.join(html.unescape(str(value or '')).replace('\xa0', ' ').split())
 
 
-def _extract_title(soup):
+def _extract_title(soup, *, download_page=False):
     heading = soup.select_one('h3.video-details-wrapper')
-    if heading:
-        title = _clean_text(heading.get_text(' ', strip=True))
-        if title:
+    candidates = [heading.get_text(' ', strip=True)] if heading else []
+    for selector in ('meta[property="og:title"][content]',
+                     'meta[name="twitter:title"][content]'):
+        meta = soup.select_one(selector)
+        if meta:
+            candidates.append(meta['content'])
+    if soup.title:
+        candidates.append(soup.title.get_text(' ', strip=True))
+
+    for value in candidates:
+        title = _clean_text(value)
+        title = re.sub(r'(?:^|\s+)-\s+Hanime1\.me$', '', title, flags=re.I)
+        title = re.sub(r'(?:^|\s+)-\s+H動漫/裏番/線上看$', '', title)
+        if download_page:
+            title = re.sub(r'^(?:下載|下载|Download)(?:\s+|$)', '', title, flags=re.I)
+        if title and title.casefold() not in {'hanime1', 'hanime1.me', 'h動漫/裏番/線上看'}:
             return title
-    meta = soup.select_one('meta[property="og:title"][content]')
-    title = _clean_text(meta.get('content')) if meta else ''
-    title = re.sub(r'\s+-\s+Hanime1\.me\s*$', '', title, flags=re.I)
-    if title:
-        return title
-    return _clean_text(soup.title.get_text(' ', strip=True) if soup.title else '')
+    return ''
+
+
+def _matches_download_url(url, video_id):
+    """Only use metadata and sources from the same video's download page."""
+    try:
+        parsed = urlsplit(url)
+        ids = [value for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+               if key == 'v']
+        return (parsed.scheme == 'https'
+                and parsed.hostname in {'hanime1.me', 'www.hanime1.me'}
+                and parsed.port in {None, 443}
+                and not parsed.username and not parsed.password
+                and parsed.path == '/download' and ids == [video_id])
+    except ValueError:
+        return False
 
 
 def _extract_image(soup):
@@ -383,6 +410,7 @@ class SiteHanime1(SiteSupJav):
         self._direct_url = None
         self._direct_referer = None
         self._m3u8url = None
+        video_id = self.validate_url(self._url)
         with _make_scraper() as scraper:
             _prime_session(scraper)
             response = _request(scraper, self._url)
@@ -391,17 +419,24 @@ class SiteHanime1(SiteSupJav):
                 raise Exception(f'Hanime1 影片頁讀取失敗 (HTTP {status})')
             soup = BeautifulSoup(response.content, 'html.parser')
             sources = _extract_sources(soup)
+            title = _extract_title(soup)
 
-            # Older/alternate pages may put the signed URLs only on /download.
-            if not sources:
-                video_id = self.validate_url(self._url)
+            # Some watch pages provide playable sources but omit the title.
+            if not sources or not title:
                 download_url = f'{HANIME1_ROOT}/download?v={video_id}'
-                download_response = _request(scraper, download_url)
-                download_status = int(
-                    getattr(download_response, 'status_code', 0) or 0)
-                if download_status == 200:
-                    sources = _extract_sources(BeautifulSoup(
-                        download_response.content, 'html.parser'))
+                try:
+                    download_response = _request(scraper, download_url)
+                except _METADATA_REQUEST_ERRORS:
+                    # Optional metadata must not block a known playable source.
+                    if not sources:
+                        raise
+                else:
+                    final_url = str(getattr(download_response, 'url', download_url))
+                    if (download_response.status_code == 200
+                            and _matches_download_url(final_url, video_id)):
+                        download_page = BeautifulSoup(download_response.content, 'html.parser')
+                        sources = sources or _extract_sources(download_page)
+                        title = title or _extract_title(download_page, download_page=True)
 
         # Resolution belongs to this crawler/job.  Reading the process-wide
         # preference here made queued Hanime1 jobs ignore the value captured
@@ -409,10 +444,7 @@ class SiteHanime1(SiteSupJav):
         selected = _select_source(sources, self._resolution_pref)
         if not selected:
             raise Exception('此 Hanime1 影片目前沒有可用的 MP4 下載來源')
-        title = _extract_title(soup)
-        if not title:
-            raise Exception('Hanime1 影片標題解析失敗（版面可能已改版）')
-        self._targetName = title
+        self._targetName = title or f'Hanime1-{video_id}'
         self._imageUrl = _extract_image(soup)
         self._direct_url = selected['url']
         self._direct_referer = self._url
