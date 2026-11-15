@@ -271,13 +271,17 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
 
 # ── Global speed limiter (token bucket) ──────────────────────────
 class _SpeedLimiter:
-    """Thread-safe token-bucket rate limiter shared across all downloads."""
+    """One shared byte budget with wakeable rate changes and stop checks."""
 
-    def __init__(self):
+    STOP_POLL_SECONDS = 0.05
+
+    def __init__(self, *, clock=None):
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+        self._clock = clock or time.monotonic
         self._limit_bps = 0  # 0 = unlimited
         self._tokens = 0.0
-        self._last = time.time()
+        self._last = self._clock()
 
     @property
     def limit_bps(self) -> int:
@@ -286,29 +290,46 @@ class _SpeedLimiter:
             return self._limit_bps
 
     def set_limit(self, mbps: float) -> None:
-        with self._lock:
-            self._limit_bps = int(mbps * 1024 * 1024) if mbps > 0 else 0
-            self._tokens = float(self._limit_bps)
-            self._last = time.time()
+        limit = int(mbps * 1024 * 1024) if mbps > 0 else 0
+        with self._condition:
+            previous = self._limit_bps
+            self._refill_locked()
+            self._limit_bps = limit
+            # Settings saves must not grant every download another full burst.
+            self._tokens = (
+                float(limit) if previous <= 0 else min(self._tokens, limit))
+            self._condition.notify_all()
 
-    def acquire(self, nbytes: int) -> None:
-        with self._lock:
-            limit = self._limit_bps
-        if limit <= 0:
-            return
-        while nbytes > 0:
-            with self._lock:
-                now = time.time()
-                self._tokens += (now - self._last) * self._limit_bps
-                self._last = now
-                if self._tokens > self._limit_bps:
-                    self._tokens = float(self._limit_bps)
+    def _refill_locked(self):
+        now = self._clock()
+        elapsed = max(0.0, now - self._last)
+        self._tokens = min(
+            float(self._limit_bps), self._tokens + elapsed * self._limit_bps)
+        self._last = now
+
+    def acquire(self, nbytes: int, cancel_check=None) -> bool:
+        """Return False on cancellation, True when bytes may be written.
+
+        Existing one-argument callers may ignore the result. The optional check
+        must be nonblocking and must not call back into this limiter. Rate
+        changes notify all waiters; cancellation is polled every 50 ms while
+        throttled, excluding scheduler delays. Consumed budget is not refunded.
+        """
+        with self._condition:
+            while True:
+                if cancel_check is not None and cancel_check():
+                    return False
+                if self._limit_bps <= 0 or nbytes <= 0:
+                    return True
+                self._refill_locked()
                 take = min(nbytes, int(self._tokens))
                 if take > 0:
                     self._tokens -= take
                     nbytes -= take
-            if nbytes > 0:
-                time.sleep(0.05)
+                if nbytes <= 0:
+                    return True
+                delay = max(0.001, (1 - self._tokens) / self._limit_bps)
+                self._condition.wait(min(self.STOP_POLL_SECONDS, delay))
 
 speed_limiter = _SpeedLimiter()
 
@@ -999,7 +1020,10 @@ class M3U8Crawler:
             content_ts = self._transform_segment(content_ts)
             if not _is_valid_ts_segment(content_ts):
                 return False
-            speed_limiter.acquire(len(content_ts))
+            if (speed_limiter.acquire(
+                    len(content_ts), cancel_check=lambda: self._cancel_job) is False
+                    or self._cancel_job or getattr(self, '_storage_error', None)):
+                return False
             # Publish only fully written segments. A disk error must not
             # leave a truncated .ts looking resumable on the next run.
             part = saveName + '.part'
