@@ -19,6 +19,17 @@ Cache bounds describe serialized metadata, not total Python process memory. Cach
 
 Existing limitations remain: public sources only, series-update dates rather than per-episode premieres, MPEG-TS HLS rather than fMP4/DASH, placeholder encrypted thumbnails, and Japanese-focused ASR. No login/paywall/challenge bypass or private-player protocol is added.
 
+2026-11-15 compatibility update: Huangguo's public HTML now intentionally leaves
+`videoSrc` empty. The site's own public `services/playback.js` and
+`services/http.js` document a normal anonymous JSON playback request. UAV now
+uses that ordinary endpoint when needed, verifies the returned series/episode
+identity and GET HLS source, and keeps source URLs/headers only in job memory.
+It does not import browser credentials, execute player scripts, implement the
+encrypted edge transport, follow API redirects, or bypass authentication.
+Three live public samples resolved and parsed MPEG-TS HLS manifests; this is
+metadata/manifest evidence, not a completed-video download or universal access
+guarantee. No HGhub implementation was used for this fix.
+
 ## License decision
 
 HGhub's pinned [LICENSE](https://github.com/Minireel/HGhub/blob/ee12e496cee4dd92912842a2a238e9861ac82d5c/LICENSE) is **PolyForm Noncommercial 1.0.0**. It restricts permitted use and distribution to its terms; it is not interchangeable with MIT or Apache-2.0. HGhub's README describes earlier MIT versions, but this review does not rely on an unverified historical license.

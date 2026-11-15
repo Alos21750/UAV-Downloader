@@ -201,6 +201,7 @@ from uav_downloader.sites.base import (
     fetch_with_mirrors,
 )
 from uav_downloader.core import config
+from uav_downloader.apps.downloads import classify_download_problem
 from uav_downloader.i18n.locales import T, set_lang, get_lang, ui_font, LANGUAGES
 from uav_downloader.apps.watch_categories import (
     SITES,
@@ -1338,6 +1339,14 @@ class SmallToolWorker:
         scan_blocked = False
         scan_failed = False
         scan_had_success = False
+        legacy_sources_by_site = {name: set() for name in site_runtime}
+        with self._seen_lock:
+            for url, entry in self._seen.items():
+                if (isinstance(entry, dict) and entry.get('skipped') is True
+                        and not entry.get('reason')):
+                    pending = legacy_sources_by_site.get(site_from_url(url))
+                    if pending is not None:
+                        pending.add(url)
 
         for target in _targets_for_scan(targets, version_preference):
             if self._stop.is_set():
@@ -1375,6 +1384,10 @@ class SmallToolWorker:
             reached_baseline = False
             consecutive_skips = 0
             listing_fingerprints = set()
+            # A successful first page must not hide legacy false-skips on
+            # later pages. Only the affected site needs this recovery scan;
+            # normal all-seen stopping resumes once its candidates are found.
+            legacy_source_urls = legacy_sources_by_site[site_name]
 
             pages = count(1) if max_pages is None else range(1, max_pages + 1)
             for page in pages:
@@ -1431,6 +1444,7 @@ class SmallToolWorker:
                     vurl = v.get('url', '')
                     if not vurl:
                         continue
+                    legacy_source_urls.discard(vurl)
                     with self._seen_lock:
                         seen_entry = self._seen.get(vurl)
                     if isinstance(seen_entry, dict):
@@ -1446,6 +1460,13 @@ class SmallToolWorker:
                             seen_entry.get('reason') == 'duplicate-version' and
                             (version_preference == 'all' or
                              version_preference in known_versions))
+                        # Older versions persisted all source-resolution
+                        # failures as skipped without a reason. Reconsider
+                        # only those legacy entries, preserving real history
+                        # and explicit date/version exclusions on disk.
+                        reconsider_source_failure = (
+                            seen_entry.get('skipped') is True
+                            and not seen_entry.get('reason'))
                         reconsider_older_baseline = False
                         if seen_entry.get('reason') == 'before-baseline':
                             release_date = seen_entry.get('release_date')
@@ -1459,7 +1480,8 @@ class SmallToolWorker:
                                 except (TypeError, ValueError):
                                     reconsider_older_baseline = True
                         if not (reconsider_preferred or
-                                reconsider_older_baseline):
+                                reconsider_older_baseline or
+                                reconsider_source_failure):
                             continue
                     elif seen_entry:
                         continue
@@ -1576,7 +1598,8 @@ class SmallToolWorker:
                 self._set_scan_state(
                     site_name, cat_name, page, len(all_new_videos))
 
-                if not first_run and page_all_seen and not reached_baseline:
+                if (not first_run and page_all_seen and not reached_baseline
+                        and not legacy_source_urls):
                     self._log('  All seen on this page — stopping.')
                     break
 
@@ -1626,6 +1649,7 @@ class SmallToolWorker:
         self._log(f'Found {len(all_new_videos)} new video(s). Downloading...')
         download_blocked = False
         download_incomplete = False
+        source_failed = False
         subtitle_incomplete = False
         for v in all_new_videos:
             if self._stop.is_set():
@@ -1664,6 +1688,8 @@ class SmallToolWorker:
                 download_blocked = True
             elif result == 'download_incomplete':
                 download_incomplete = True
+            elif result == 'source_failed':
+                source_failed = True
             elif result == 'subtitle_failed':
                 subtitle_incomplete = True
 
@@ -1674,6 +1700,11 @@ class SmallToolWorker:
             self._log(
                 '[WARN] Download incomplete — saved segments will resume on '
                 'the next check.')
+            return False
+        if source_failed:
+            self._log(
+                '[WARN] Source resolution failed — not marked as downloaded; '
+                'will retry on the next check.')
             return False
         if subtitle_incomplete:
             self._log(f'[WARN] {T("subtitle_retry_pending")}')
@@ -1703,13 +1734,23 @@ class SmallToolWorker:
                     site_obj is not None
                     and hasattr(site_obj, 'add_source_video_metadata')):
                 site_obj.add_source_video_metadata(video)
-            if not site_obj or not site_obj.is_url_vaildate():
+            if site_obj is None:
+                self._log('  [SOURCE-ERR] unsupported URL; not marked as downloaded')
+                return 'source_failed'
+            if not site_obj.is_url_vaildate():
                 err = getattr(site_obj, '_last_error', None)
-                if isinstance(err, MirrorsBlockedError):
+                if isinstance(err, (MirrorsBlockedError, StorageWriteError)):
                     raise err
-                self._log(f'  [SKIP] invalid URL: {vurl}')
-                self._mark_seen(vurl, title, skipped=True, video=video)
-                return
+                # Do not echo exception text: network libraries can include
+                # signed media URLs, proxy credentials, or response bodies.
+                code = classify_download_problem(err).code
+                detail = {
+                    'network': 'network/proxy connection failed',
+                    'blocked': 'site blocked the request',
+                    'video_missing': 'page or source was not found',
+                }.get(code, 'no supported public media source or page format changed')
+                self._log(f'  [SOURCE-ERR] {detail}; will retry on the next check')
+                return 'source_failed'
 
             # Wire up progress callback for the progress bar
             def _on_progress(done, total, speed):

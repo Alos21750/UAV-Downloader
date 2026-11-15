@@ -109,6 +109,59 @@ def test_huangguo_watcher_keeps_numbered_episodes_and_destination(huangguo_scan,
     assert all(dest == cfg['site_settings']['Huangguo']['output_folder'] for _video, dest in downloaded)
 
 
+@pytest.mark.parametrize('entry,expected', [
+    ({'skipped': True}, 2),
+    ({'skipped': False}, 0),
+    ({'skipped': True, 'reason': 'before-baseline', 'release_date': '2025-01-01'}, 0),
+    ({'skipped': True, 'reason': 'explicit-exclusion'}, 0),
+])
+def test_legacy_invalid_url_skips_are_retried_without_erasing_history(
+        huangguo_scan, monkeypatch, entry, expected):
+    worker, cfg, browser, _logs, downloaded = huangguo_scan
+    episodes = _episodes('2026-10-10')
+    worker._seen = {item['url']: dict(entry) for item in episodes}
+    original = dict(worker._seen)
+    monkeypatch.setattr(browser, 'fetch_page', lambda url, **kw: [] if url.rstrip('/').endswith('/2') else episodes)
+    worker._scan_and_download(cfg)
+    assert len(downloaded) == expected
+    assert worker._seen == original
+
+
+def test_source_failure_does_not_complete_first_scan(huangguo_scan, monkeypatch):
+    worker, cfg, browser, _logs, _downloaded = huangguo_scan
+    monkeypatch.setattr(browser, 'fetch_page', lambda url, **kw: [] if url.rstrip('/').endswith('/2') else _episodes('2026-10-10'))
+    worker._download_one = lambda *_args: 'source_failed'
+    assert worker._scan_and_download(cfg) is False
+    assert cfg['first_run_done'] is False
+
+
+@pytest.mark.parametrize('legacy_site', ['Huangguo', 'MissAV', None])
+def test_daily_scan_reaches_legacy_failure_after_successful_page(
+        huangguo_scan, monkeypatch, legacy_site):
+    worker, cfg, browser, _logs, downloaded = huangguo_scan
+    cfg['first_run_done'] = True
+    episodes = _episodes('2026-10-10')
+    worker._seen = {episodes[0]['url']: {'skipped': False}}
+    if legacy_site == 'Huangguo':
+        worker._seen[episodes[1]['url']] = {'skipped': True}
+    elif legacy_site == 'MissAV':
+        worker._seen['https://missav.ws/test-001'] = {'skipped': True}
+    fetched = []
+
+    def fetch(url, **_kwargs):
+        fetched.append(url)
+        if url.rstrip('/').endswith('/3'):
+            return []
+        if url.rstrip('/').endswith('/2'):
+            return episodes[1:]
+        return episodes[:1]
+
+    monkeypatch.setattr(browser, 'fetch_page', fetch)
+    worker._scan_and_download(cfg)
+    assert len(downloaded) == int(legacy_site == 'Huangguo')
+    assert len(fetched) == (3 if legacy_site == 'Huangguo' else 1)
+
+
 @pytest.mark.parametrize('date,expected', [('2026-09-30', 0), ('2026-10-01', 2), ('', 0)])
 def test_huangguo_watcher_baseline_and_unknown_date_are_conservative(
         huangguo_scan, monkeypatch, date, expected):

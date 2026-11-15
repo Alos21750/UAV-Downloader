@@ -38,6 +38,13 @@
 
 ## Three workflows, one download core
 
+### v3.5.1: Huangguo playback and Watcher fixes
+
+- Supports Huangguo's new anonymous playback lookup: playback URLs are no longer embedded in HTML. Uses the normal public endpoint without importing login credentials or bypassing access restrictions.
+- Watcher no longer labels source-resolution failures as `invalid URL` or permanently skips them. Failed scans remain incomplete; legacy false-skip entries are reconsidered without deleting successful downloads or date/version exclusions.
+- Independently reviewed PR #66 recovers missing Hanime1 titles from the matching download page, without discarding an existing playable source when optional title lookup fails.
+- Keeps the current desktop interface; no Qt/Tauri migration. [Maintenance review](docs/maintenance/2026-11-15-issue-audit.md).
+
 ### v3.5.0: responsiveness and reliability
 
 - Bounded, short-lived in-memory Huangguo episode metadata caching and concurrent request sharing; update markers invalidate entries. Playback URLs and authentication headers are never cached.

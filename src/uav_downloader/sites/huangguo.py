@@ -1,7 +1,8 @@
 """Public Huangguo short-drama metadata and ordinary HLS support.
 
-Only the public page payload is interpreted, as JSON. No private API, account,
-challenge solving, player-code evaluation, or dedicated face-swap discovery.
+Public page JSON and the ordinary anonymous playback metadata endpoint only.
+No account, challenge solving, player-code evaluation, private encrypted API,
+or dedicated face-swap discovery.
 Signed playback URLs/headers stay in the job, never in persisted browser items.
 """
 
@@ -372,6 +373,79 @@ def _initial_data(soup, url):
         raise ValueError('Huangguo public episode metadata is invalid') from None
 
 
+def _playback_data(url):
+    """Resolve a fresh anonymous source; never follow API redirects or cache it.
+
+    The site's public services/playback.js now requests this endpoint because
+    the server-rendered videoSrc is intentionally empty. No credentials or
+    encrypted edge protocol are imported from a browser session.
+    """
+    parts = _video_parts(url)
+    if not parts:
+        raise ValueError('Unsupported Huangguo episode URL')
+    series_id, episode = parts
+    if (len(series_id) > 19 or int(series_id) > 9223372036854775807
+            or episode > 2147483647):
+        raise ValueError('Huangguo episode identity is out of range')
+    endpoint = f'{HUANGGUO_ROOT}/api/videos/{series_id}/episodes/{episode}/playback'
+    session = _session('playback')
+    session.cookies.clear()
+    response = None
+    try:
+        with _operation(deadline=time.monotonic() + 25):
+            _verify_public_destination(endpoint)
+            _check_control()
+            remaining = _local.control['deadline'] - time.monotonic()
+            response = session.post(
+                endpoint, json={}, timeout=max(0.01, min(15, remaining)),
+                stream=True, allow_redirects=False,
+                headers={'User-Agent': config.headers['User-Agent'],
+                         'Referer': url, 'Origin': HUANGGUO_ROOT},
+                **_proxy_kwargs())
+            _check_control()
+            if 'challenge' in str(response.headers.get('cf-mitigated', '')).lower():
+                raise MirrorsBlockedError('Huangguo requires manual public-site verification')
+            status = response.status_code
+            if status in (401, 403):
+                raise RuntimeError('Huangguo anonymous playback access was refused')
+            if status in (408, 425, 429, 500, 502, 503, 504):
+                raise HuangguoTransientError(status, _retry_after(response.headers.get('Retry-After')))
+            if status != 200:
+                raise ValueError(f'Huangguo playback metadata unavailable (HTTP {status})')
+            chunks, size = [], 0
+            for chunk in response.iter_content(16384):
+                _check_control()
+                size += len(chunk)
+                if size > 256 * 1024:
+                    raise ValueError('Huangguo playback metadata exceeds size limit')
+                chunks.append(chunk)
+            try:
+                wrapper = json.loads(b''.join(chunks))
+            except (ValueError, UnicodeError):
+                raise ValueError('Huangguo playback metadata is not valid JSON') from None
+            if (not isinstance(wrapper, dict) or
+                    not (wrapper.get('status') == 1 or wrapper.get('code') == 200)):
+                raise ValueError('Huangguo anonymous playback metadata was refused')
+            data = wrapper.get('data')
+            if (not isinstance(data, dict) or str(data.get('id')) != series_id
+                    or str(data.get('ep')) != str(episode)
+                    or data.get('manifest_method') != 'GET'
+                    or not isinstance(data.get('streams'), dict)
+                    or not isinstance(data.get('cdn'), dict)):
+                raise ValueError('Huangguo playback metadata identity or format is invalid')
+            return data
+    except requests.exceptions.SSLError:
+        raise RuntimeError('Huangguo TLS verification failed') from None
+    except (requests.Timeout, requests.ConnectionError):
+        raise HuangguoTransientError() from None
+    except requests.RequestException:
+        raise RuntimeError('Huangguo playback metadata request failed') from None
+    finally:
+        if response is not None:
+            response.close()
+        session.cookies.clear()
+
+
 def _clean(value):
     # One hostile title repeated across 1,000 episodes must not amplify a
     # bounded HTML response into gigabytes of metadata/cache serialization.
@@ -465,12 +539,22 @@ class SiteHuangguo(M3U8Crawler):
         self._cdn = {}
         soup = _page_soup(self._url)
         data = _initial_data(soup, self._url)
+        if data.get('videoApi') or data.get('videoKey') or data.get('videoIv'):
+            raise ValueError('Huangguo private player sources are not supported')
+        if not data.get('videoSrc'):
+            playback = _playback_data(self._url)
+            cdn = playback['cdn']
+            if any(not isinstance(cdn.get(flag, False), bool)
+                   for flag in ('m3u8Enabled', 'otherEnabled')):
+                raise ValueError('Huangguo CDN flags are invalid')
+            data = dict(data, videoSrc=playback['streams'].get('main'),
+                        cdnAuthKey=cdn.get('authKey'), cdnAuthValue=cdn.get('authValue'),
+                        cdnApp=cdn.get('app'), cdnM3u8Enabled=cdn.get('m3u8Enabled', False),
+                        cdnOtherEnabled=cdn.get('otherEnabled', False))
         source = data.get('videoSrc')
         if (not _public_https_url(source) or
                 not urlsplit(source).path.lower().endswith('.m3u8')):
             raise ValueError('Huangguo has no public HTTPS HLS source')
-        if data.get('videoApi') or data.get('videoKey') or data.get('videoIv'):
-            raise ValueError('Huangguo private player sources are not supported')
         title = _clean(data.get('title'))
         if not title:
             raise ValueError('Huangguo episode title is missing')
