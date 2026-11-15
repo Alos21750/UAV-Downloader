@@ -60,9 +60,14 @@ The old Gyan corresponding-source gap is not retroactively solved. The new
 candidate instead uses the independently built FFmpeg and ships its exact
 source/build recipe. This does not change UAV's license or resume relicensing.
 
-**Remaining gate:** actual visible-window inspection was blocked by the computer
-control tool: `Computer Use was not approved to use uav_browser`. A launched
-process/window listing is not a passed GUI check. Master publication, final
-master-ref CI attestations, visible GUI checks, release upload and anonymous
-asset re-download verification are still pending. No issue is closed on the
-basis of this incomplete release gate.
+The initial computer-control permission blockage was resolved after the user
+restarted the desktop app. All seven local visible-window/normal-close cases
+passed: Browser fresh/second/normal, Watcher fresh/second, portable fresh/second.
+First-run language dialogs, retained language, Browser settings and Huangguo
+categories were inspected. All exits were zero; no forced termination, downloads
+or monitoring were used. Isolated profiles seed only a dead-loopback proxy for
+fresh runs, not a language. User preferences and history were untouched.
+
+**Remaining gate:** final master-ref CI attestations, visible checks of the exact
+CI binaries, release upload and anonymous asset re-download verification are
+still pending. No issue is closed on an incomplete release gate.
