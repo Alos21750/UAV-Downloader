@@ -7,7 +7,7 @@ cloudscraper>=1.2.68
 Pillow>=9.2.0
 customtkinter>=5.2.0
 curl_cffi>=0.7.0
-imageio-ffmpeg>=0.5.1
+imageio-ffmpeg==0.6.0
 ctranslate2==4.8.1
 numpy==2.5.1
 PyYAML==6.0.3

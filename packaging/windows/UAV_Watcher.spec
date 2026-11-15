@@ -3,6 +3,9 @@ import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, copy_metadata
+sys.path.insert(0, str(Path(SPECPATH).parent / 'ffmpeg'))
+from bundle import reviewed_bundle, prepare_inputs, finalize_analysis
+ffmpeg_bundle = reviewed_bundle()
 
 datas = []
 binaries = []
@@ -36,6 +39,7 @@ binaries = [
 ]
 datas += copy_metadata('numpy')
 datas += copy_metadata('PyYAML')
+datas += copy_metadata('imageio-ffmpeg')
 
 datas += [
     ('..\\..\\LICENSE', '.'),
@@ -51,6 +55,7 @@ datas += [
 ]
 
 
+datas, binaries = prepare_inputs(datas, binaries, ffmpeg_bundle)
 a = Analysis(
     ['..\\..\\src\\uav_downloader\\entrypoints\\watch.py'],
     pathex=['..\\..\\src'],
@@ -64,6 +69,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+finalize_analysis(a, ffmpeg_bundle)
 pyz = PYZ(a.pure)
 
 # PyInstaller forwards arguments after ``--`` to the spec.  Building the two

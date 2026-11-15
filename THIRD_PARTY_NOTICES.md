@@ -1,5 +1,33 @@
 # Third-party notices
 
+## Bundled Windows FFmpeg (v3.5.1 and later builds)
+
+The Windows release build supplies an independently built FFmpeg 7.1 executable
+under LGPL-2.1-or-later. GPL, nonfree and external auto-detected codec libraries
+are disabled. UAV invokes this separate executable for local container remuxing
+and subtitle audio extraction; UAV's own license is unchanged.
+
+- Official source: <https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz>
+- Source SHA-256: `40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6`
+- Rebuild instructions and maintained build recipe: [`packaging/ffmpeg`](packaging/ffmpeg).
+- Matching complete FFmpeg source, build recipe and provenance are distributed
+  alongside each Windows release as `UAV_FFmpeg_7.1_Corresponding_Source.tar.xz`.
+  Obtain it from the **same release** as the executable at
+  <https://github.com/Alos21750/UAV-Downloader/releases>, and verify it using that
+  release's `UAV_SHA256SUMS.txt`. It is a developer/source artifact, not an
+  additional runtime installation required by users.
+- The executable bundle includes `third_party_licenses/FFmpeg-LGPL-2.1.txt`,
+  `FFmpeg-NOTICE.txt` and `FFmpeg-provenance.json`. FFmpeg remains separately
+  licensed; UAV's terms do not replace its license. See also
+  <https://ffmpeg.org/legal.html>.
+
+The `imageio-ffmpeg` Python wrapper remains BSD-2-Clause licensed and its package
+license metadata is included. Its upstream precompiled FFmpeg payload is
+excluded from these Windows builds and replaced with the checked build above.
+This wrapper license must not be confused with FFmpeg's license. Earlier UAV
+releases used a different Gyan FFmpeg binary; this new source archive is **not**
+presented as the corresponding source for those older binaries.
+
 ## Optional local Japanese speech-recognition pack
 
 The optional `UAV_reazonspeech_asr_v1.zip` archive is a mixed-license,

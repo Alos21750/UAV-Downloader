@@ -26,7 +26,33 @@ permissions:
   attestations: write
 
 jobs:
+  ffmpeg:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross-build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y make gcc-mingw-w64-x86-64-win32 binutils-mingw-w64-x86-64 xz-utils
+      - name: Build FFmpeg and corresponding source
+        run: python3 packaging/ffmpeg/build.py --work-dir "$RUNNER_TEMP/uav-ffmpeg-work" --out-dir "$RUNNER_TEMP/uav-ffmpeg-bundle"
+      - name: Attest FFmpeg build inputs and outputs
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            ${{ runner.temp }}/uav-ffmpeg-bundle/ffmpeg-win-x86_64-v7.1.exe
+            ${{ runner.temp }}/uav-ffmpeg-bundle/UAV_FFmpeg_7.1_Corresponding_Source.tar.xz
+            ${{ runner.temp }}/uav-ffmpeg-bundle/FFmpeg-provenance.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uav-ffmpeg-${{ github.sha }}
+          path: ${{ runner.temp }}/uav-ffmpeg-bundle/*
+          if-no-files-found: error
+          retention-days: 7
+
   build:
+    needs: ffmpeg
     runs-on: windows-latest
     timeout-minutes: 45
 
@@ -39,6 +65,16 @@ jobs:
         with:
           python-version: "3.12.10"
           cache: pip
+
+      - name: Download reviewed FFmpeg payload
+        uses: actions/download-artifact@v4
+        with:
+          name: uav-ffmpeg-${{ github.sha }}
+          path: ${{ runner.temp }}/uav-ffmpeg-bundle
+
+      - name: Select exact FFmpeg bundle
+        shell: pwsh
+        run: '"UAV_FFMPEG_BUNDLE=$env:RUNNER_TEMP\uav-ffmpeg-bundle" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
 
       - name: Install dependencies
         shell: pwsh
@@ -78,6 +114,9 @@ jobs:
           }
           python -c "import struct, PyInstaller; assert PyInstaller.__version__ == '6.13.0'; assert struct.calcsize('P') == 8"
 
+      - name: Validate FFmpeg provenance and media operations
+        run: python packaging/ffmpeg/verify.py --report ffmpeg-verification.json
+
       - name: Run tests
         run: python -m pytest tests/ -q --timeout=20
 
@@ -94,11 +133,13 @@ jobs:
             -Path "dist\UAV_Watcher_portable" `
             -DestinationPath "dist\UAV_Watcher_portable.zip" `
             -CompressionLevel Optimal
+          Copy-Item -LiteralPath "$env:UAV_FFMPEG_BUNDLE\UAV_FFmpeg_7.1_Corresponding_Source.tar.xz" -Destination dist
 
           $assetNames = @(
             "UAV_Browser.exe",
             "UAV_Watcher.exe",
-            "UAV_Watcher_portable.zip"
+            "UAV_Watcher_portable.zip",
+            "UAV_FFmpeg_7.1_Corresponding_Source.tar.xz"
           )
           $checksums = foreach ($name in $assetNames) {
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "dist\$name").Hash
@@ -113,7 +154,7 @@ jobs:
       - name: Verify executable metadata
         shell: pwsh
         run: |
-          $expected = "3.5.0.0"
+          $expected = "3.5.1.0"
           $files = @(
             "dist\UAV_Browser.exe",
             "dist\UAV_Watcher.exe",
@@ -139,6 +180,7 @@ jobs:
             dist/UAV_Browser.exe
             dist/UAV_Watcher.exe
             dist/UAV_Watcher_portable.zip
+            dist/UAV_FFmpeg_7.1_Corresponding_Source.tar.xz
             dist/UAV_SHA256SUMS.txt
 
       - name: Upload Windows executables
@@ -149,6 +191,7 @@ jobs:
             dist/UAV_Browser.exe
             dist/UAV_Watcher.exe
             dist/UAV_Watcher_portable.zip
+            dist/UAV_FFmpeg_7.1_Corresponding_Source.tar.xz
             dist/UAV_SHA256SUMS.txt
           if-no-files-found: error
           compression-level: 0
