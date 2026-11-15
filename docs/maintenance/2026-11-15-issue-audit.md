@@ -5,7 +5,7 @@ license-migration working copy is not part of this branch.
 
 ## Reviewed changes
 
-- **PR #66:** reviewed separately from the Qt migration and merged locally,
+- **PR #66:** reviewed separately from the Qt migration and merged into master,
   preserving the contributor commit. Hanime1 can recover a missing title from
   its matching download page without discarding an already usable media source.
   Independent regression tests also require metadata request failures to
@@ -46,7 +46,8 @@ with exact normalized-text equality.
 
 ## Publication status
 
-No new executable release has been published by this maintenance review.
+[v3.5.1](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.5.1) is
+published, source/tag `aec66c4d3c80dc53ea3e9c1d5fbe0c104328d16e`.
 Candidate `55029f3` on `maintenance/20261115` passed Windows workflow
 [43664630292](https://github.com/Alos21750/UAV-Downloader/actions/runs/43664630292),
 including all 1,267 tests, a source-built LGPL FFmpeg, source/binary mapping,
@@ -68,6 +69,18 @@ categories were inspected. All exits were zero; no forced termination, downloads
 or monitoring were used. Isolated profiles seed only a dead-loopback proxy for
 fresh runs, not a language. User preferences and history were untouched.
 
-**Remaining gate:** final master-ref CI attestations, visible checks of the exact
-CI binaries, release upload and anonymous asset re-download verification are
-still pending. No issue is closed on an incomplete release gate.
+Final master Windows run
+[43670519225](https://github.com/Alos21750/UAV-Downloader/actions/runs/43670519225)
+passed all 1,267 tests and build/media gates. The five exact CI assets and the
+FFmpeg bundle subjects passed attestation checks for the source digest, master
+ref, official workflow and GitHub-hosted runners. Embedded payloads/notices and
+all checksums matched. All seven visible/normal-close cases were repeated on
+the exact CI binaries, with zero exits and no download/monitoring actions.
+
+Those original five assets were published without rebuilding or recompressing,
+then downloaded without authentication: all five byte lengths and SHA-256
+digests matched. Release notes and the PR #66 reply passed exact normalized
+UTF-8 anonymous readback. Docker master run 43670519319 and tag run 43671925932
+passed; anonymous GHCR `latest` and `v3.5.1` inspection confirmed amd64/arm64 and
+the exact release revision. PR #66 is merged and replied; no other issue was
+closed. The open issue/PR decisions above remain in effect.
