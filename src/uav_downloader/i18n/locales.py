@@ -20,7 +20,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '互動式多站下載器',
-        'version_label': 'v3.5.1',
+        'version_label': 'v3.6.0',
         'by_author': '',
         'status_ready': '就緒',
         'site_label': '網站',
@@ -414,7 +414,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': 'Interactive Multi-Site Downloader',
-        'version_label': 'v3.5.1',
+        'version_label': 'v3.6.0',
         'by_author': '',
         'status_ready': 'Ready',
         'site_label': 'Site',
@@ -809,7 +809,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '交互式多站下载器',
-        'version_label': 'v3.5.1',
+        'version_label': 'v3.6.0',
         'by_author': '',
         'status_ready': '就绪',
         'site_label': '网站',
@@ -1203,7 +1203,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '対話型マルチサイトダウンローダー',
-        'version_label': 'v3.5.1',
+        'version_label': 'v3.6.0',
         'by_author': '',
         'status_ready': '準備完了',
         'site_label': 'サイト',
@@ -1784,6 +1784,33 @@ _THAI_CORE = {
 }
 STRINGS['th'] = dict(STRINGS['en'])
 STRINGS['th'].update(_THAI_CORE)
+
+# Watcher-only Huangguo collection option. Keep all five language variants
+# explicit rather than silently falling back to English for a new control.
+for _language, _collection in {
+    'en': (
+        'Huangguo: combine all episodes into one MP4',
+        'Optional; keeps episode cache for retries/new episodes. Takes effect on the next scan. Compatible streams only; no re-encoding.',
+    ),
+    'zh': (
+        '黃果合集：將所有 EP 合成一個 MP4',
+        '選用功能；保留分集快取供重試與補集，下次掃描生效。僅合併相容規格，不重新編碼。',
+    ),
+    'zh-Hans': (
+        '黄果合集：将所有 EP 合成一个 MP4',
+        '可选功能；保留分集缓存用于重试和补集，下次扫描生效。仅合并兼容格式，不重新编码。',
+    ),
+    'ja': (
+        'Huangguo 合集：全エピソードを1つの MP4 に結合',
+        '任意設定。再試行・追加話用のキャッシュを保持し、次のスキャンから適用します。互換性のある形式のみ対応し、再エンコードは行いません。',
+    ),
+    'th': (
+        'Huangguo: รวมทุก EP เป็นไฟล์ MP4 เดียว',
+        'ตัวเลือกเสริม เก็บแคชแต่ละตอนเพื่อทำซ้ำหรือเพิ่มตอนใหม่ มีผลในการสแกนครั้งถัดไป รองรับเฉพาะรูปแบบที่เข้ากันได้ ไม่เข้ารหัสวิดีโอใหม่',
+    ),
+}.items():
+    STRINGS[_language].update(zip(
+        ('st_huangguo_collection', 'st_huangguo_collection_hint'), _collection))
 
 # Source-player preview is deliberately a system-browser tab, not an embedded
 # player or a promise to bypass provider access restrictions.

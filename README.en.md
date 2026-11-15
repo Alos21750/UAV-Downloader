@@ -38,6 +38,14 @@
 
 ## Three workflows, one download core
 
+### v3.6.0: Huangguo collections — all episodes, one MP4
+
+- In **UAV Watcher → Show settings**, enable **Huangguo: combine all episodes into one MP4**. It is off by default; ordinary per-episode downloads stay unchanged. Changes take effect on the next scan and apply only to Huangguo jobs in Watcher.
+- Episodes of the same series are combined in **numeric EP order**, using the episodes actually found in the scan—not a claim that the series has ended. Newly discovered episodes trigger a complete rebuild; the previous collection is replaced atomically only after success.
+- Uses Huangguo's per-site destination and series-update-date filter. Episode caches are retained for interrupted retries and later additions, so allow extra disk space.
+- A missing episode or failed download delays the collection rather than silently skipping a part. Incompatible video/audio formats produce a clear error and keep the cache. Joining uses stream copy, not re-encoding or forced conversion of incompatible inputs.
+- Browser, CLI, and the Web queue continue downloading individual episodes. This feature does not add Chinese speech recognition; combining videos does not itself generate Chinese subtitles.
+
 ### v3.5.1: Huangguo playback and Watcher fixes
 
 - Supports Huangguo's new anonymous playback lookup: playback URLs are no longer embedded in HTML. Uses the normal public endpoint without importing login credentials or bypassing access restrictions.
@@ -98,7 +106,7 @@ Browser now closes safely during startup; background UI updates run on the main 
 If you are unsure, start with **UAV Browser**. Both Windows executables are portable, need no Python installation, and include ffmpeg in the release build.
 
 > [!NOTE]
-> Each release keeps only `UAV_Browser.exe`, `UAV_Watcher.exe`, `UAV_Watcher_portable.zip`, and `UAV_SHA256SUMS.txt`. The app fetches AI components automatically on first use, so users do not need to download or extract model packs. Legacy ALOS and Jable filenames are no longer published.
+> Each release provides `UAV_Browser.exe`, `UAV_Watcher.exe`, `UAV_Watcher_portable.zip`, `UAV_SHA256SUMS.txt`, and the bundled FFmpeg's corresponding source archive, `UAV_FFmpeg_7.1_Corresponding_Source.tar.xz`. **Ordinary users do not need the source archive or a separate FFmpeg installation.** The app fetches AI components automatically on first use, so users do not need to download or extract model packs. Legacy ALOS and Jable filenames are no longer published.
 
 Learn more: [UAV Browser](./docs/uav-browser.md) · [UAV Watcher unattended automation](./docs/uav-watcher.md) · [AI subtitles](./docs/ai-subtitles.md) · [Docker / CLI](./docs/docker-cli.md) · [migrate to UAV](./docs/migration-to-uav.md)
 

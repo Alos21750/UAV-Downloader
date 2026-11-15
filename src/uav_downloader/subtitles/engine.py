@@ -20,6 +20,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -5050,6 +5051,93 @@ def _generation_slot(cancel_check: Optional[CancelCheck]):
     finally:
         if acquired:
             _generation_lock.release()
+
+
+def invalidate_stale_managed_subtitles(
+        video_path: str,
+        cancel_check: Optional[CancelCheck] = None) -> tuple[str, ...]:
+    """Remove unchanged app-owned tracks belonging to a previous media file.
+
+    Collection updates can change the complete timeline even when subtitles
+    are disabled. This cleanup does not prepare a model or require translation
+    settings. Missing/corrupt ownership records and manual edits never authorize
+    deletion. Persist each removal so interrupted cleanup is safe to retry.
+    """
+    video_path = os.path.abspath(video_path)
+    provenance_path = _subtitle_provenance_path(video_path)
+    paths = subtitle_paths(video_path)
+    removed = []
+
+    def read_media_identity():
+        try:
+            return _media_identity(video_path)
+        except SubtitleError as exc:
+            if isinstance(exc.__cause__, OSError):
+                raise StorageWriteError(video_path, exc.__cause__) from exc
+            raise
+
+    with _generation_slot(cancel_check):
+        _check_cancel(cancel_check)
+        manifest = _load_subtitle_provenance(provenance_path)
+        entries = manifest['tracks']
+        if not entries:
+            return ()
+        media_identity = read_media_identity()
+        for language, path in paths.items():
+            _check_cancel(cancel_check)
+            entry = entries.get(language)
+            if (not isinstance(entry, dict)
+                    or entry.get('generator') not in MANAGED_SUBTITLE_GENERATORS
+                    or not _valid_sha256(entry.get('srt_sha256'))
+                    or not _valid_sha256(entry.get('media_identity'))
+                    or entry['media_identity'] == media_identity):
+                continue
+            try:
+                before = os.lstat(path)
+            except FileNotFoundError:
+                # A prior cleanup may have removed this track just before a
+                # failed manifest write. Finish that bookkeeping on retry.
+                entries.pop(language)
+                _save_subtitle_provenance(provenance_path, manifest)
+                continue
+            except OSError as exc:
+                raise StorageWriteError(path, exc) from exc
+            if (not stat.S_ISREG(before.st_mode)
+                    or getattr(before, 'st_file_attributes', 0) & 0x400):
+                continue
+            try:
+                actual_hash = _sha256(path, cancel_check)
+                after = os.lstat(path)
+                identity = lambda info: (
+                    info.st_dev, info.st_ino, info.st_size,
+                    info.st_mtime_ns, info.st_ctime_ns, info.st_mode,
+                    getattr(info, 'st_file_attributes', 0))
+                if identity(before) != identity(after):
+                    # Concurrent edits cannot prove app ownership.
+                    continue
+                if actual_hash.lower() != entry['srt_sha256'].lower():
+                    # Preserve manual edits permanently, matching generation's
+                    # ownership convention even if another track is regenerated.
+                    entries.pop(language)
+                    _save_subtitle_provenance(provenance_path, manifest)
+                    continue
+                _check_cancel(cancel_check)
+                if read_media_identity() != media_identity:
+                    raise SubtitleError('Downloaded video changed during subtitle cleanup')
+                os.remove(path)
+                removed.append(path)
+            except StorageWriteError:
+                raise
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise StorageWriteError(path, exc) from exc
+            # Do not observe cancellation between removal and recording it.
+            # If storage fails, the original on-disk receipt makes retry safe.
+            entries.pop(language)
+            _save_subtitle_provenance(provenance_path, manifest)
+        _check_cancel(cancel_check)
+    return tuple(removed)
 
 
 def generate_subtitles(video_path: str, mode,

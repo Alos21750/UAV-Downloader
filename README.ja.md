@@ -38,6 +38,14 @@
 
 ## 3 つのワークフロー、1 つのダウンロードコア
 
+### v3.6.0：Huangguo 合集 — 全エピソードを1つの MP4 に
+
+- **UAV Watcher → 設定を表示**で「**Huangguo 合集：全エピソードを1つの MP4 に結合**」を有効にします。既定はオフで、従来の個別ダウンロードは変わりません。変更は次のスキャンから、Watcher の Huangguo タスクのみに適用されます。
+- 同じ作品を EP の**数値順**で結合します。対象はスキャンで実際に見つかった話数であり、作品の完結を意味しません。追加話が見つかると合集を再構築し、成功した後にだけ既存ファイルをアトミックに置き換えます。
+- Huangguo のサイト別保存先と作品更新日のフィルターを使用します。再試行と追加話のために各話のキャッシュを保持するので、追加のディスク空き容量が必要です。
+- 欠番やダウンロード失敗を黙って飛ばさず、合集の作成を保留します。映像／音声の形式が非互換の場合はエラーを表示し、キャッシュを保持します。再エンコードせずに結合し、非互換の入力を強制変換しません。
+- Browser、CLI、Web キューは引き続き各話を個別にダウンロードします。この機能は中国語音声認識を追加するものではなく、動画の結合だけで中国語字幕が生成されるわけではありません。
+
 ### v3.5.1：Huangguo の再生 URL 取得と Watcher の修正
 
 - HTML に再生 URL を埋め込まなくなった Huangguo の新しい匿名再生情報取得に対応。通常の公開エンドポイントのみを使い、ログイン情報の取り込みやアクセス制限の回避は行いません。
@@ -95,7 +103,7 @@ Browser 起動中の終了競合を修正し、バックグラウンド UI 更�
 迷った場合は **UAV Browser** から始めてください。どちらの Windows 実行ファイルも Python のインストールは不要で、Release 版には ffmpeg が含まれています。
 
 > [!NOTE]
-> 各 Release に残すのは `UAV_Browser.exe`、`UAV_Watcher.exe`、`UAV_Watcher_portable.zip`、`UAV_SHA256SUMS.txt` だけです。AI コンポーネントは初回の実利用時に App が自動取得するため、モデルパックを別途ダウンロード／展開する必要はありません。旧 ALOS／Jable ファイル名の公開も終了しています。
+> 各 Release には `UAV_Browser.exe`、`UAV_Watcher.exe`、`UAV_Watcher_portable.zip`、`UAV_SHA256SUMS.txt` と、同梱 FFmpeg の対応ソースアーカイブ `UAV_FFmpeg_7.1_Corresponding_Source.tar.xz` が含まれます。**通常の利用ではソースアーカイブの取得や FFmpeg の別途インストールは不要です。** AI コンポーネントは初回の実利用時に App が自動取得するため、モデルパックを別途ダウンロード／展開する必要はありません。旧 ALOS／Jable ファイル名の公開も終了しています。
 
 詳細：[UAV Browser](./docs/uav-browser.md) · [UAV Watcher の無人自動運転](./docs/uav-watcher.md) · [AI 字幕](./docs/ai-subtitles.md) · [Docker / CLI](./docs/docker-cli.md) · [UAV への移行](./docs/migration-to-uav.md)
 

@@ -24,6 +24,7 @@ from itertools import count
 from dataclasses import dataclass
 from datetime import date, datetime, timezone, timedelta
 from typing import Optional
+from pathlib import Path
 
 if __name__ == '__main__':
     # Dispatch frozen multiprocessing children before SSL, crash logging,
@@ -202,6 +203,9 @@ from uav_downloader.sites.base import (
 )
 from uav_downloader.core import config
 from uav_downloader.apps.downloads import classify_download_problem
+from uav_downloader.apps.huangguo_collection import (
+    build_collection, group_collection_rows,
+)
 from uav_downloader.i18n.locales import T, set_lang, get_lang, ui_font, LANGUAGES
 from uav_downloader.apps.watch_categories import (
     SITES,
@@ -595,6 +599,7 @@ def _default_config() -> dict:
         'site_settings': {},
         'version_preference': DEFAULT_VERSION_PREFERENCE,
         'subtitle_mode': 'none',
+        'huangguo_collection': False,
         'scan_schedule': _normalize_scan_schedule(None),
         'first_run_done': False,
         # list of {"site": "JableTV", "id": "category:chinese-subtitle", ...}
@@ -655,6 +660,7 @@ def _normalize_loaded_config(cfg: dict) -> dict:
     cfg['version_preference'] = _normalize_version_pref(cfg)
     cfg['subtitle_mode'] = normalize_subtitle_mode(
         cfg.get('subtitle_mode'))
+    cfg['huangguo_collection'] = cfg.get('huangguo_collection') is True
     cfg['scan_schedule'] = _normalize_scan_schedule(
         cfg.get('scan_schedule'))
     cfg.pop('missav_version_preference', None)
@@ -1305,6 +1311,8 @@ class SmallToolWorker:
         subtitle_mode = normalize_subtitle_mode(cfg.get('subtitle_mode'))
         cfg['subtitle_mode'] = subtitle_mode
         self._subtitle_mode = subtitle_mode
+        collection_mode = cfg.get('huangguo_collection') is True
+        collection_resolution = _normalize_resolution_pref(cfg)
         cfg.pop('missav_version_preference', None)
         targets = cfg.get('selected_targets', [])
         if not targets:
@@ -1404,6 +1412,11 @@ class SmallToolWorker:
                 self._log(f'  Page {page}: {page_url}')
                 try:
                     videos = self._fetch_page_for_site(site_name, page_url)
+                    if site_name == 'Huangguo' and collection_mode:
+                        # Group the full public episode set BEFORE per-episode
+                        # history/date filtering. Old EP1 history is not a
+                        # completed collection and must not suppress conversion.
+                        videos = group_collection_rows(videos)
                 except CancelledError:
                     return False
                 except MirrorsBlockedError:
@@ -1434,6 +1447,8 @@ class SmallToolWorker:
                     video['_target_id'] = target_id
                     video['_category'] = cat_name
                     video['_download_dest'] = site_dest
+                    if video.get('_huangguo_collection'):
+                        video['_collection_resolution'] = collection_resolution
 
                 self._log(f'  Page {page}: {len(videos)} video(s)')
                 page_all_seen = True
@@ -1446,7 +1461,8 @@ class SmallToolWorker:
                         continue
                     legacy_source_urls.discard(vurl)
                     with self._seen_lock:
-                        seen_entry = self._seen.get(vurl)
+                        seen_entry = (None if v.get('_huangguo_collection')
+                                      else self._seen.get(vurl))
                     if isinstance(seen_entry, dict):
                         known_versions = set(video_versions(v))
                         stored_versions = seen_entry.get('versions', [])
@@ -1581,9 +1597,10 @@ class SmallToolWorker:
                             v['_release_date'] = video_dt.date().isoformat()
                             slug = vurl.rstrip('/').split('/')[-1]
                             self._log(f'    [SKIP] {slug} — {rel_text} (before {baseline_str})')
-                            self._mark_seen(
-                                vurl, v.get('title', ''), skipped=True,
-                                reason='before-baseline', video=v)
+                            if not v.get('_huangguo_collection'):
+                                self._mark_seen(
+                                    vurl, v.get('title', ''), skipped=True,
+                                    reason='before-baseline', video=v)
                             consecutive_skips += 1
                             if consecutive_skips >= 10:
                                 self._log('  10 consecutive skips — moving to next category.')
@@ -1599,7 +1616,8 @@ class SmallToolWorker:
                     site_name, cat_name, page, len(all_new_videos))
 
                 if (not first_run and page_all_seen and not reached_baseline
-                        and not legacy_source_urls):
+                        and not legacy_source_urls
+                        and not (site_name == 'Huangguo' and collection_mode)):
                     self._log('  All seen on this page — stopping.')
                     break
 
@@ -1611,13 +1629,30 @@ class SmallToolWorker:
             cfg['first_run_done'] = True
             return True
 
+        # Root URLs are also EP1 identities in ordinary video deduplication.
+        # Collections therefore have a separate cache/receipt lifecycle and
+        # never enter the individual-episode seen/deduplication pipeline.
+        collections = {}
+        individual_videos = []
+        for video in all_new_videos:
+            if not video.get('_huangguo_collection'):
+                individual_videos.append(video)
+                continue
+            series = video['series_id']
+            if series in collections:
+                merged = group_collection_rows(
+                    collections[series]['_collection_episodes'] +
+                    video['_collection_episodes'])[0]
+                collections[series].update(merged)
+            else:
+                collections[series] = dict(video)
         candidate_codes = {
-            code for code in (video_code(video) for video in all_new_videos)
+            code for code in (video_code(video) for video in individual_videos)
             if code
         }
         prior_downloads = self._successful_seen_candidates(candidate_codes)
         kept_candidates, dedupe_decisions = dedupe_video_candidates(
-            prior_downloads + all_new_videos, version_preference)
+            prior_downloads + individual_videos, version_preference)
         for dropped, kept, code in dedupe_decisions:
             dropped_slug = video_code(dropped) or url_slug(dropped.get('url', ''))
             kept_slug = video_code(kept) or url_slug(kept.get('url', ''))
@@ -1634,7 +1669,7 @@ class SmallToolWorker:
         all_new_videos = [
             video for video in kept_candidates
             if not video.get('_already_seen')
-        ]
+        ] + list(collections.values())
 
         if not all_new_videos:
             self._log('No new videos remain after cross-site deduplication.')
@@ -1651,6 +1686,7 @@ class SmallToolWorker:
         download_incomplete = False
         source_failed = False
         subtitle_incomplete = False
+        collection_incomplete = False
         for v in all_new_videos:
             if self._stop.is_set():
                 return False
@@ -1670,7 +1706,7 @@ class SmallToolWorker:
                 except Exception as exc:
                     self._log(
                         f'  [WARN] could not refresh output folder: {exc}')
-            if version_preference == 'all':
+            if version_preference == 'all' and not v.get('_huangguo_collection'):
                 # Code-only filenames otherwise collide across versions of
                 # the same release. Keep the selected site's base directory.
                 variant = '+'.join(sorted(video_versions(v)))
@@ -1682,7 +1718,9 @@ class SmallToolWorker:
                 return False
             result = self._download_one(
                 v, download_dest)
-            if result == 'storage_failed':
+            if self._stop.is_set():
+                return False
+            if result in ('storage_failed', 'cancelled'):
                 return False
             elif result == 'blocked':
                 download_blocked = True
@@ -1692,6 +1730,12 @@ class SmallToolWorker:
                 source_failed = True
             elif result == 'subtitle_failed':
                 subtitle_incomplete = True
+            elif result == 'collection_failed':
+                collection_incomplete = True
+
+        if collection_incomplete:
+            self._log('[COLLECTION] Incomplete — previous collection and completed episode cache preserved; will retry.')
+            return False
 
         if download_blocked:
             self._log('[WARN] Download blocked — will retry before marking first run done.')
@@ -1716,6 +1760,10 @@ class SmallToolWorker:
         return True
 
     def _download_one(self, video: dict, dest: str, subtitle_mode: Optional[str] = None):
+        if self._stop.is_set():
+            return 'cancelled'
+        if video.get('_huangguo_collection'):
+            return self._download_huangguo_collection(video, dest, subtitle_mode)
         vurl = video['url']
         title = video.get('title', '') or vurl.rstrip('/').split('/')[-1]
         site = video.get('_site', '?')
@@ -1727,7 +1775,14 @@ class SmallToolWorker:
 
         site_obj = None
         try:
-            site_obj = M3U8Sites.CreateSite(vurl, dest)
+            site_kwargs = {}
+            if video.get('_collection_part'):
+                # Freeze quality for this series even if the user changes
+                # the global preference while a later EP is being fetched.
+                site_kwargs['resolution'] = video['_collection_resolution']
+            site_obj = M3U8Sites.CreateSite(vurl, dest, **site_kwargs)
+            if self._stop.is_set():
+                return 'cancelled'
             source_subtitle_evidence = (
                 trusted_chinese_subtitle_evidence(video))
             if (
@@ -1861,6 +1916,9 @@ class SmallToolWorker:
                     self._log(f'  [SUBTITLE-ERR] {T("subtitle_failed", error=str(exc))}')
                     return 'subtitle_failed'
             self._log(f'  [OK] {title}')
+            if video.get('_collection_part'):
+                video['_downloaded_path'] = site_obj._get_video_savename()
+                return 'episode_ready'
             self._mark_seen(vurl, title, video=video)
         except StorageWriteError as exc:
             self._halt_for_storage_error(exc)
@@ -1884,6 +1942,108 @@ class SmallToolWorker:
             with self._active_site_lock:
                 if self._active_site is site_obj:
                     self._active_site = None
+            with self._progress_lock:
+                self._progress = None
+
+    def _download_huangguo_collection(self, video, dest, subtitle_mode=None):
+        """One series transaction; individual histories remain untouched."""
+        from uav_downloader.sites.base import locate_ffmpeg
+        from uav_downloader.core.media_concat import MediaConcatError
+        title = video.get('title') or f'HG{video["series_id"]}'
+        self._log(f'[COLLECTION] {title} — refreshing currently public episodes')
+        resolution = video.get('_collection_resolution', 'highest')
+        failure = [None]
+        completion = ['ok']
+
+        def finalize(output):
+            # Kept inside the series lock: a second Watcher must not replace
+            # the MP4 while this one reads its audio or publishes subtitles.
+            from uav_downloader.subtitles.engine import (
+                SubtitleCancelled, invalidate_stale_managed_subtitles,
+            )
+            try:
+                invalidate_stale_managed_subtitles(
+                    str(output), cancel_check=self._stop.is_set)
+                mode = normalize_subtitle_mode(
+                    self._subtitle_mode if subtitle_mode is None else subtitle_mode)
+                if mode == 'none':
+                    return
+                self._set_status('st_subtitling', ACCENT)
+                with self._progress_lock:
+                    self._progress = (0, -1, -1, f'{title} · subtitles')
+                result = generate_subtitles(
+                    str(output), mode, cancel_check=self._stop.is_set)
+                if (not result.files and not result.no_speech
+                        and not result.satisfied_by_source):
+                    completion[0] = 'subtitle_failed'
+            except StorageWriteError:
+                raise
+            except (CancelledError, SubtitleCancelled):
+                completion[0] = 'cancelled'
+            except Exception as exc:
+                if self._stop.is_set():
+                    completion[0] = 'cancelled'
+                else:
+                    self._log(f'[COLLECTION SUBTITLE] {translation_failure_message(exc)}')
+                    completion[0] = 'subtitle_failed'
+
+        def download_episode(episode, attempt_dir):
+            if self._stop.is_set():
+                raise CancelledError()
+            part = dict(episode, _site='Huangguo', _collection_part=True,
+                        _collection_resolution=resolution)
+            result = self._download_one(part, str(attempt_dir), subtitle_mode='none')
+            failure[0] = result
+            if self._stop.is_set():
+                raise CancelledError()
+            if result != 'episode_ready' or not part.get('_downloaded_path'):
+                raise ValueError('Episode download incomplete; collection is pending')
+            failure[0] = None
+            with self._progress_lock:
+                self._progress = (0, -1, -1, f'{title} · collection')
+            return Path(part['_downloaded_path'])
+
+        try:
+            # A unique numeric revision bypasses the short metadata TTL without
+            # clearing another Browser/Watcher consumer's cache globally.
+            episodes = SITES['Huangguo']['browser'].fetch_episodes(
+                video['url'], cancel_check=self._stop.is_set,
+                revision=str(time.time_ns()))
+            refreshed = group_collection_rows(episodes)
+            if (len(refreshed) != 1 or
+                    refreshed[0]['series_id'] != video['series_id']):
+                raise ValueError('Episode membership does not match the requested series')
+            # Do not replace a longer collection after a transiently shortened
+            # listing. New complete membership may add EPs but not lose them.
+            expected = {ep['url'] for ep in video['_collection_episodes']}
+            if not expected.issubset({ep['url'] for ep in episodes}):
+                raise ValueError('Episode list became incomplete; retry on the next scan')
+            with self._progress_lock:
+                self._progress = (0, -1, -1, f'{title} · collection')
+            output = build_collection(
+                episodes, dest, resolution=resolution,
+                download_episode=download_episode, ffmpeg=locate_ffmpeg(),
+                cancel_check=self._stop.is_set, log=self._log, on_ready=finalize)
+            if self._stop.is_set():
+                return 'cancelled'
+            if completion[0] != 'ok':
+                return completion[0]
+            self._log(f'[COLLECTION OK] {len(episodes)} EP → {output}')
+            return 'ok'
+        except StorageWriteError as exc:
+            self._halt_for_storage_error(exc)
+            return 'storage_failed'
+        except CancelledError:
+            return ('storage_failed' if failure[0] == 'storage_failed'
+                    else 'cancelled')
+        except (ValueError, MediaConcatError) as exc:
+            self._log(f'[COLLECTION] {exc}')
+            return 'collection_failed'
+        except Exception:
+            # Network exceptions may contain signed media URLs; don't echo.
+            self._log('[COLLECTION] Could not resolve or combine all public episodes; will retry.')
+            return 'collection_failed'
+        finally:
             with self._progress_lock:
                 self._progress = None
 
@@ -2159,6 +2319,7 @@ class SmallToolApp(ctk.CTk):
                 'version_preference', DEFAULT_VERSION_PREFERENCE),
             'subtitle_mode': normalize_subtitle_mode(
                 self._cfg.get('subtitle_mode')),
+            'huangguo_collection': self._cfg.get('huangguo_collection') is True,
             'recognition_quality': config.get_recognition_quality(),
             'max_workers_per_video': self._commit_workers_preference(),
             'running': self._worker.is_running(),
@@ -2181,6 +2342,9 @@ class SmallToolApp(ctk.CTk):
         self._cfg['resolution'] = snapshot['resolution']
         self._cfg['version_preference'] = snapshot['version_preference']
         self._cfg['subtitle_mode'] = snapshot['subtitle_mode']
+        self._cfg['huangguo_collection'] = snapshot.get('huangguo_collection') is True
+        if hasattr(self, '_huangguo_collection_var'):
+            self._huangguo_collection_var.set(self._cfg['huangguo_collection'])
         from uav_downloader.sites.base import set_resolution_pref
         set_resolution_pref(snapshot['resolution'])
         self._folder_var.set(snapshot['folder'])
@@ -2660,6 +2824,20 @@ class SmallToolApp(ctk.CTk):
         self._site_settings_summary_lbl.pack(
             side='left', padx=(10, 0), fill='x', expand=True)
         self._refresh_site_settings_summary()
+
+        self._huangguo_collection_var = tk.BooleanVar(
+            value=self._cfg.get('huangguo_collection') is True)
+        ctk.CTkCheckBox(
+            date_group, text=T('st_huangguo_collection'),
+            variable=self._huangguo_collection_var,
+            command=self._on_huangguo_collection_change,
+            font=(font_family, 10), text_color=TEXT_PRI,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER).pack(
+                anchor='w', pady=(12, 0))
+        ctk.CTkLabel(
+            date_group, text=T('st_huangguo_collection_hint'),
+            text_color=TEXT_DIM, font=(font_family, 9),
+            wraplength=440, justify='left').pack(anchor='w', pady=(3, 0))
 
         res_group = ctk.CTkFrame(options, fg_color='transparent')
         res_group.pack(fill='x', pady=(12, 0))
@@ -4138,6 +4316,12 @@ class SmallToolApp(ctk.CTk):
         self._cfg['subtitle_mode'] = self._subtitle_pref_from_label(val)
         update_config({'subtitle_mode': self._cfg['subtitle_mode']})
 
+    def _on_huangguo_collection_change(self):
+        enabled = self._huangguo_collection_var.get() is True
+        self._cfg['huangguo_collection'] = enabled
+        self._cfg['first_run_done'] = False
+        update_config({'huangguo_collection': enabled, 'first_run_done': False})
+
     def _on_recognition_quality_change(self, val):
         quality = config.set_recognition_quality(
             self._recognition_quality_from_label(val))
@@ -4440,6 +4624,7 @@ class SmallToolApp(ctk.CTk):
                     'version_preference', DEFAULT_VERSION_PREFERENCE),
                 'subtitle_mode': normalize_subtitle_mode(
                     self._cfg.get('subtitle_mode')),
+                'huangguo_collection': self._cfg.get('huangguo_collection') is True,
                 'scan_schedule': _normalize_scan_schedule(
                     self._cfg.get('scan_schedule')),
                 'site_settings': _normalize_site_settings(

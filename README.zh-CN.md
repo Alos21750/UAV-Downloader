@@ -38,6 +38,14 @@
 
 ## 三种工作模式，一个下载核心
 
+### v3.6.0 黄果合集：所有 EP，一个 MP4
+
+- 在 **UAV Watcher → 显示设置** 中勾选“**黄果合集：将所有 EP 合成一个 MP4**”。默认关闭，原有逐集下载不变；更改在下次扫描时生效，仅适用于 Watcher 的黄果任务。
+- 同一作品按 EP **数字顺序**合并，以本次扫描实际找到的集数为准，不代表作品已完结。发现新增集数时重建完整合集，成功后才原子替换旧合集，避免半成品覆盖可播放文件。
+- 沿用黄果的每站文件夹与作品更新日期筛选；分集缓存保留用于中断重试和后续补集，因此需要额外磁盘空间。
+- 缺集或任一集下载失败时推迟生成合集，不会默默跳过；视频／音频格式不兼容时明确报错并保留缓存。合并不重新编码，也不强行转换不兼容的输入。
+- Browser、CLI、Web 队列仍为分集下载；合集功能本身不增加中文语音识别，合并视频不等于自动生成中文字幕。
+
 ### v3.5.1 黄果取址与 Watcher 修复
 
 - 兼容黄果新版匿名播放取址流程：网站已不再直接把播放地址放在 HTML 中。仅使用正常公开接口，不导入登录凭证、不绕过访问限制。
@@ -95,7 +103,7 @@
 如果不确定，请先使用 **UAV Browser**。两个 Windows 可执行文件均无需安装 Python，Release 版本已经包含 ffmpeg。
 
 > [!NOTE]
-> 每个 Release 只保留 `UAV_Browser.exe`、`UAV_Watcher.exe`、`UAV_Watcher_portable.zip` 和 `UAV_SHA256SUMS.txt`。AI 组件会由程序在第一次实际使用时自动获取，无需另外下载或解压模型包；旧版 ALOS／Jable 文件名也已停止发布。
+> 每个 Release 提供 `UAV_Browser.exe`、`UAV_Watcher.exe`、`UAV_Watcher_portable.zip`、`UAV_SHA256SUMS.txt`，以及内置 FFmpeg 的对应源代码包 `UAV_FFmpeg_7.1_Corresponding_Source.tar.xz`。**普通用户无需下载源代码包，也无需另外安装 FFmpeg。** AI 组件会由程序在第一次实际使用时自动获取，无需另外下载或解压模型包；旧版 ALOS／Jable 文件名也已停止发布。
 
 深入了解：[UAV Browser](./docs/uav-browser.md) · [UAV Watcher 无人值守流程](./docs/uav-watcher.md) · [AI 字幕](./docs/ai-subtitles.md) · [Docker / CLI](./docs/docker-cli.md) · [升级至 UAV](./docs/migration-to-uav.md)
 
