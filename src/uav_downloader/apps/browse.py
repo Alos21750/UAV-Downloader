@@ -15,6 +15,7 @@ import threading
 import queue
 import concurrent.futures
 import uuid
+import inspect
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from typing import Optional
@@ -306,6 +307,8 @@ class DownloadManager:
         self._subtitle_pending: list[_DownloadTask] = []
         self._subtitle_active: dict[str, _DownloadTask] = {}
         self._items: dict[str, DownloadItem] = {}
+        self._worker_threads = set()
+        self._shutdown = False
         # Active tasks requested for restart stay registered until their old
         # worker reaches _complete_download().  Only then is the replacement
         # inserted at the front of the queue, preventing two workers from
@@ -477,6 +480,8 @@ class DownloadManager:
     def enqueue(self, url: str, dest: str, not_before: float | None = None):
         start_task = None
         with self._lock:
+            if self._shutdown:
+                return False
             if self._url_inflight_locked(url):
                 return False
             item = self._items.get(url)
@@ -619,6 +624,8 @@ class DownloadManager:
         if not os.path.isfile(abs_path):
             return False
         with self._lock:
+            if self._shutdown:
+                return False
             if self._url_inflight_locked(abs_path):
                 return False
             item = self._items.get(abs_path)
@@ -791,6 +798,8 @@ class DownloadManager:
     def _try_next(self):
         task = None
         with self._lock:
+            if self._shutdown:
+                return
             candidates = len(self._pending)
             while (candidates > 0 and self._pending and
                    len(self._active) < self._max_concurrent):
@@ -817,11 +826,14 @@ class DownloadManager:
             self._start_download_thread(task)
 
     def _schedule_transient_retry(self, task: _DownloadTask, error: str) -> bool:
+        wait = getattr(task.job, 'wait_stopped', None)
+        if callable(wait):
+            wait()
         problem = classify_download_problem(error, '未完成')
         with self._lock:
             item = self._items.get(task.url)
             retry_limit = max(0, int(self._auto_retry_count_getter()))
-            if (not problem.retryable or item is None or
+            if (self._shutdown or not problem.retryable or item is None or
                     self._active.get(task.url) is not task or
                     task.retry_count >= retry_limit or
                     self._context_cancelled_locked(task)):
@@ -847,6 +859,9 @@ class DownloadManager:
         return True
 
     def _queue_subtitle(self, task: _DownloadTask, mode: str) -> bool:
+        wait = getattr(task.job, 'wait_stopped', None)
+        if callable(wait):
+            wait()
         with self._lock:
             if (self._active.get(task.url) is not task or
                     self._context_cancelled_locked(task)):
@@ -864,6 +879,8 @@ class DownloadManager:
     def _try_next_subtitle(self):
         task = None
         with self._lock:
+            if self._shutdown:
+                return
             if self._subtitle_active:
                 return
             while self._subtitle_pending:
@@ -877,8 +894,7 @@ class DownloadManager:
                 task = candidate
                 break
         if task is not None:
-            threading.Thread(
-                target=self._run_subtitle, args=(task,), daemon=True).start()
+            self._start_worker(self._run_subtitle, task)
 
     def _run_subtitle(self, task: _DownloadTask):
         job = task.job
@@ -947,8 +963,41 @@ class DownloadManager:
                 error=warning if warning else None)
 
     def _start_download_thread(self, task: _DownloadTask):
-        threading.Thread(
-            target=self._run_download, args=(task,), daemon=True).start()
+        self._start_worker(self._run_download, task)
+
+    def _start_worker(self, target, task):
+        thread = threading.Thread(target=target, args=(task,), daemon=True)
+        with self._lock:
+            if self._shutdown:
+                if self._active.get(task.url) is task:
+                    self._active.pop(task.url)
+                if self._subtitle_active.get(task.url) is task:
+                    self._subtitle_active.pop(task.url)
+                return
+            self._worker_threads = {t for t in self._worker_threads if t.is_alive()}
+            self._worker_threads.add(thread)
+            try:
+                thread.start()
+            except BaseException:
+                self._worker_threads.discard(thread)
+                raise
+
+    def wait_stopped(self, timeout=None):
+        deadline = None if timeout is None else time.monotonic() + max(0, timeout)
+        while True:
+            with self._lock:
+                threads = tuple(self._worker_threads)
+            if not threads:
+                return True
+            for thread in threads:
+                if thread is threading.current_thread():
+                    return False
+                remaining = None if deadline is None else max(0, deadline - time.monotonic())
+                thread.join(remaining)
+                if thread.is_alive():
+                    return False
+            with self._lock:
+                self._worker_threads.difference_update(threads)
 
     def _url_inflight_locked(self, url: str) -> bool:
         return (
@@ -988,6 +1037,9 @@ class DownloadManager:
     def _complete_download(self, task: _DownloadTask, state: str,
                            progress: int = -1, error=None):
         task.monitor_stop.set()
+        wait = getattr(task.job, 'wait_stopped', None)
+        if callable(wait):
+            wait()
         with self._lock:
             restart = self._restart_pending.get(task.url)
             cleanup_done = (
@@ -1057,17 +1109,15 @@ class DownloadManager:
             if not job or not hasattr(job, 'cancel_download'):
                 continue
             try:
-                job.cancel_download(cleanup=cleanup)
+                inspect.signature(job.cancel_download).bind(cleanup=cleanup)
             except TypeError:
                 try:
                     job.cancel_download()
                 except Exception:
                     pass
-            except Exception:
-                pass
-            if cleanup and hasattr(job, 'cleanup_temp'):
+            else:
                 try:
-                    job.cleanup_temp()
+                    job.cancel_download(cleanup=cleanup)
                 except Exception:
                     pass
 
@@ -5756,6 +5806,8 @@ class ModernApp(ctk.CTk):
         if not getattr(self, '_startup_complete', True):
             self._close_requested = True
             return
+        if getattr(self, '_close_future', None) is not None:
+            return
         if self._dl_drain_id:
             try:
                 self.after_cancel(self._dl_drain_id)
@@ -5766,19 +5818,41 @@ class ModernApp(ctk.CTk):
             self._thumb_executor.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
-        try:
-            with self._dlmgr._lock:
-                for item in self._dlmgr._items.values():
-                    if item.state in (
-                            '準備中', '下載中', '等待中', '等待重試',
-                            '已排程', '字幕準備中', '字幕辨識中',
-                            '字幕翻譯中'):
-                        item.state = '未完成'
-                        item.speed = ''
+        future = self._close_future = concurrent.futures.Future()
+        with self._dlmgr._lock:
+            self._dlmgr._shutdown = True
+            shutdown_urls = {
+                task.url for task in (
+                    list(self._dlmgr._active.values()) + self._dlmgr._pending +
+                    list(self._dlmgr._subtitle_active.values()) + self._dlmgr._subtitle_pending)}
+        def close_work():
+            try:
+                self._dlmgr.cancel_all(cleanup=False)
+                self._dlmgr.wait_stopped()
+                with self._dlmgr._lock:
+                    for url in shutdown_urls:
+                        item = self._dlmgr._items.get(url)
+                        if item is not None and item.state in (
+                                ACTIVE_STATES | QUEUED_STATES | {'已取消', '已暫停', ''}):
+                            item.state = '未完成'
+                            item.speed = ''
                 self._dlmgr.save_csv(CSV_PATH)
-        except Exception:
-            pass
-        self._dlmgr.cancel_all(cleanup=False)
+            except Exception as exc:
+                future.set_exception(exc)
+            else:
+                future.set_result(True)
+        threading.Thread(target=close_work, name='uav-close', daemon=True).start()
+        ModernApp._poll_close(self, future)
+
+    def _poll_close(self, future):
+        if not future.done():
+            self.after(50, lambda: ModernApp._poll_close(self, future))
+            return
+        if future.exception() is not None:
+            self._close_future = None
+            # Keep the window/data available and let another close retry saving.
+            messagebox.showerror(PRODUCT_NAME, T('queue_close_save_failed'))
+            return
         self.destroy()
 
 

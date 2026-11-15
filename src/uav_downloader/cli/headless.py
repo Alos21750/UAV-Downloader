@@ -31,6 +31,7 @@ except Exception:
 from uav_downloader import sites as M3U8Sites
 from uav_downloader.core import config
 from uav_downloader.core.storage import StorageWriteError
+from uav_downloader.core.transfer_lifetime import cancel_and_wait
 from uav_downloader.sites import base as M3U8Crawler
 
 
@@ -141,6 +142,7 @@ def main(argv=None):
           f"每片執行緒: {worker_label} | 共 {len(urls)} 個網址", flush=True)
     ok = fail = 0
     for url in urls:
+        site = None
         print(f"\n========== {url} ==========", flush=True)
         try:
             site = M3U8Sites.CreateSite(
@@ -155,6 +157,9 @@ def main(argv=None):
                 fail += 1
                 continue
             print(f"[完成] {url}", flush=True); ok += 1
+        except KeyboardInterrupt:
+            cancel_and_wait(site)
+            return 130
         except StorageWriteError as exc:
             print(f'[Storage error] {url}: {exc}', flush=True)
             fail += 1

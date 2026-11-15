@@ -450,6 +450,7 @@ class SiteSupJav(M3U8Crawler):
         # the target filename).
         return bool(self._m3u8url or getattr(self, '_direct_url', None))
 
+    @owned_transfer
     def start_download(self):
         sources = getattr(self, '_hls_sources', None) or (
             [('HLS', self._m3u8url, getattr(self, '_extra_headers', {}))] if self._m3u8url else [])
@@ -468,7 +469,7 @@ class SiteSupJav(M3U8Crawler):
                 if index + 1 >= len(sources) and not getattr(self, '_direct_url', None):
                     raise
                 print(f'\n[SupJav] {name} failed; trying the next playback source.', flush=True)
-                self.cleanup_temp()
+                self._cleanup_temp_now()
         if getattr(self, '_direct_url', None):
             return self._download_direct()
         if last_error:
@@ -483,11 +484,11 @@ class SiteSupJav(M3U8Crawler):
         except Exception:
             pass
 
+    @owned_transfer
     def _download_direct(self):
         self._progress_unit = 'bytes'
         if self._cancel_job:
             return False
-        self._cancel_job = False
         self._create_dest_folder()
         if self.is_target_video_exist():
             print("檔案已存在!!", flush=True)

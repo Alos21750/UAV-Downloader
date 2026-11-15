@@ -2048,14 +2048,16 @@ class SmallToolWorker:
                 self._progress = None
 
     def _cleanup_temp(self, site_obj):
-        """Remove temp folder with partial segment clips if final video doesn't exist."""
+        """Ask the crawler to clean its cache after its admitted I/O retires."""
         try:
             if site_obj.is_target_video_exist():
                 return  # Video completed, nothing to clean
-            temp = getattr(site_obj, '_temp_folder', None)
-            if temp and os.path.isdir(temp):
-                shutil.rmtree(temp, ignore_errors=True)
-                self._log(f'  [CLEANUP] removed partial clips')
+            cleanup = getattr(site_obj, 'cleanup_temp', None)
+            if callable(cleanup):
+                cleanup()
+                wait = getattr(site_obj, 'wait_stopped', None)
+                if callable(wait):
+                    wait()
         except Exception:
             pass
 
@@ -4598,6 +4600,9 @@ class SmallToolApp(ctk.CTk):
             pass
 
     def _on_close(self):
+        if getattr(self, '_close_polling', False):
+            return
+        self._close_polling = True
         self._is_closing = True
         self._build_gen += 1
         self._cancel_category_work()
@@ -4641,7 +4646,12 @@ class SmallToolApp(ctk.CTk):
             update_config(patch, remove=('missav_version_preference',))
         except Exception:
             pass
-        self._worker.wait_until_stopped(timeout=1.5)
+        self._poll_worker_close()
+
+    def _poll_worker_close(self):
+        if not self._worker.wait_until_stopped(timeout=0):
+            self.after(50, self._poll_worker_close)
+            return
         try:
             self.destroy()
         except tk.TclError:

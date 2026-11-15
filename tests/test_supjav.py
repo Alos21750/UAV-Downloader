@@ -475,7 +475,7 @@ def test_new_hls_sources_fallback_without_streamtape(monkeypatch):
         return True
 
     monkeypatch.setattr(M3U8Crawler, 'start_download', download)
-    crawler.cleanup_temp = lambda: cleaned.append(True)
+    crawler._cleanup_temp_now = lambda: cleaned.append(True)
     assert crawler.start_download() is True
     assert len(attempts) == 2
     assert attempts[1][1] == {'Referer': 'https://vas.example/e/video'}
@@ -531,7 +531,7 @@ def test_cancelled_hls_does_not_try_another_provider(monkeypatch):
     attempts = []
     monkeypatch.setattr(M3U8Crawler, 'start_download', lambda self: attempts.append(True) or False)
     assert crawler.start_download() is False
-    assert attempts == [True]
+    assert attempts == []  # An already cancelled owner must not admit a source.
 
 
 def test_supjav_luc_encrypted_segment_decrypts_before_ts_transform(monkeypatch, tmp_path):
