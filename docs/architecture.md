@@ -14,6 +14,9 @@ src/uav_downloader/
   sites/         shared crawler contract and per-site implementations
   subtitles/     recognition, translation, LLM, settings, and provenance
   ui/            shared theme and settings components
+  web/           authenticated NAS web queue UI and HTTP API
+packaging/ffmpeg/
+  LGPL FFmpeg build, bundle, and provenance verification scripts
 packaging/windows/
   PyInstaller specifications and Windows version resources
 scripts/
@@ -63,4 +66,4 @@ intentionally and reported to the user instead of silently disappearing.
 
 Windows release bytes are produced by pinned CI and then verified as the same
 bytes through artifact download, release upload, checksums, and attestations.
-Canonical v3 assets and legacy aliases are both generated from that one build.
+Releases publish only the canonical UAV assets alongside `UAV_FFmpeg_7.1_Corresponding_Source.tar.xz` and `UAV_SHA256SUMS.txt`.

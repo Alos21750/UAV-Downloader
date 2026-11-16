@@ -95,7 +95,7 @@ and responsibility.
 
 The immutable model packs were built from pinned inputs, gated by exact size
 and SHA-256 values, and attested in the fixed v3.1.0 component release. They are
-not duplicated in every application release. Current releases contain only the
-three Windows application forms plus `UAV_SHA256SUMS.txt`; each is covered by a
+not duplicated in every application release. Current releases contain the three Windows application forms,
+`UAV_FFmpeg_7.1_Corresponding_Source.tar.xz`, and `UAV_SHA256SUMS.txt`; each is covered by a
 GitHub artifact attestation. License details are recorded in
 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).

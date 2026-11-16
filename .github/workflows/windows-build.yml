@@ -13,6 +13,7 @@ on:
       - "README.en.md"
       - "README.zh-CN.md"
       - "README.ja.md"
+      - "README.th.md"
       - "WINDOWS_SECURITY.md"
       - "third_party_licenses/**"
       - "scripts/**"

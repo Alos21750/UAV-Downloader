@@ -69,14 +69,19 @@ def _strip_fake_header(data):
     from the first valid MPEG-TS sync (0x47 on a 188-byte stride). Plain TS is returned unchanged."""
     if data[:1] == b'\x47':
         return data
-    limit = min(len(data) - 188 * 4 - 1, 8000)
+    if len(data) < 188:
+        return b''
+    limit = min(len(data) - 188, 8000)
     i = 0
     while 0 <= i <= limit:
         j = data.find(b'\x47', i)
         if j < 0 or j > limit:
             break
-        if all(data[j + 188 * n] == 0x47 for n in range(5)):
-            return data[j:]
+        rem = len(data) - j
+        packets = min(5, rem // 188)
+        if packets >= 5 or (packets >= 1 and rem % 188 == 0):
+            if all(data[j + 188 * n] == 0x47 for n in range(packets)):
+                return data[j:]
         i = j + 1
     return b''
 
@@ -489,6 +494,8 @@ class SiteSupJav(M3U8Crawler):
             return False
         self._cancel_job = False
         self._create_dest_folder()
+        if getattr(self, '_imageUrl', None):
+            self.download_image()
         if self.is_target_video_exist():
             print("檔案已存在!!", flush=True)
             return True
@@ -802,7 +809,7 @@ class SupJavBrowser:
                 for n, u in cls.CATEGORIES]
 
     @classmethod
-    def fetch_page(cls, url):
+    def fetch_page(cls, url, *, cancel_check=None):
         def _is_empty_search(soup):
             # An actual empty search is not the same as an empty response,
             # gateway error, consent page, or a changed listing template.

@@ -252,8 +252,8 @@ from uav_downloader.ui.theme import (
     ACCENT, ACCENT_HOVER, ACCENT_DIM, SUCCESS, WARNING, ERROR_C, ERROR_DIM,
     BG_DARK, BG_CARD, BG_CARD_HOVER, BG_INPUT, BG_HEADER, BG_SECTION,
     BG_BADGE, TEXT_PRI, TEXT_SEC, TEXT_DIM, BORDER, BORDER_HOVER,
-    BORDER_CARD, WHITE, CARD_RADIUS, CONTROL_RADIUS, color_for_mode,
-    category_columns_for_width,
+    BORDER_CARD, WHITE, CARD_RADIUS, CONTROL_RADIUS, apply_theme_mode,
+    color_for_mode, category_columns_for_width,
 )
 from uav_downloader.core import paths as product_paths
 from uav_downloader.core.storage import StorageWriteError
@@ -1821,12 +1821,12 @@ class SmallToolWorker:
             if ok is False and not getattr(site_obj, '_cancel_job', False):
                 self._log('  [ERR] download failed')
                 self._cleanup_temp(site_obj)
-                return
+                return 'download_incomplete'
 
             if getattr(site_obj, '_cancel_job', False):
                 self._log('  [CANCELLED]')
                 self._cleanup_temp(site_obj)
-                return
+                return 'cancelled'
             subtitle_mode = normalize_subtitle_mode(
                 self._subtitle_mode if subtitle_mode is None else subtitle_mode)
             if subtitle_mode != 'none':
@@ -1911,11 +1911,13 @@ class SmallToolWorker:
                             'subtitle_ready', count=len(subtitle_result.files)))
                 except SubtitleCancelled:
                     self._log(f'  [CANCELLED] {T("subtitle_cancelled")}')
-                    return
+                    return 'cancelled'
                 except StorageWriteError:
                     raise
                 except Exception as exc:
-                    self._log(f'  [SUBTITLE-ERR] {T("subtitle_failed", error=str(exc))}')
+                    self._log(
+                        f'  [SUBTITLE-ERR] '
+                        f'{T("subtitle_failed", error=translation_failure_message(exc))}')
                     return 'subtitle_failed'
             self._log(f'  [OK] {title}')
             if video.get('_collection_part'):
@@ -1940,6 +1942,7 @@ class SmallToolWorker:
             self._log(f'  [ERR] {e}')
             if site_obj:
                 self._cleanup_temp(site_obj)
+            return 'download_incomplete'
         finally:
             with self._active_site_lock:
                 if self._active_site is site_obj:
@@ -2557,6 +2560,13 @@ class SmallToolApp(ctk.CTk):
     def _theme_glyph(self):
         return {'system': '◐', 'light': '☀', 'dark': '☾'}.get(self._theme_mode, '◐')
 
+    def _theme_label(self):
+        return {
+            'system': '◐ System Theme',
+            'light': '☀ Light Theme',
+            'dark': '☾ Dark Theme',
+        }.get(self._theme_mode, '◐ System Theme')
+
     def _cycle_theme(self):
         modes = ('system', 'light', 'dark')
         try:
@@ -2564,9 +2574,9 @@ class SmallToolApp(ctk.CTk):
         except ValueError:
             index = 0
         self._theme_mode = modes[(index + 1) % len(modes)]
-        ctk.set_appearance_mode(self._theme_mode)
+        apply_theme_mode(self, self._theme_mode)
         config.set_theme(self._theme_mode)
-        self._theme_btn.configure(text=self._theme_glyph())
+        self._theme_btn.configure(text=self._theme_label())
 
     def _on_root_resize(self, event):
         if event.widget is not self or self._is_closing:
@@ -2647,11 +2657,11 @@ class SmallToolApp(ctk.CTk):
             font=('Consolas', 10, 'bold')).pack(padx=10, pady=4)
 
         self._theme_btn = ctk.CTkButton(
-            right_info, text=self._theme_glyph(), width=36, height=36,
+            right_info, text=self._theme_label(), width=136, height=36,
             corner_radius=CONTROL_RADIUS, fg_color=BG_CARD,
             border_width=1, border_color=BORDER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
-            font=(font_family, 14), command=self._cycle_theme)
+            font=(font_family, 11), command=self._cycle_theme)
         self._theme_btn.pack(side='right', padx=(8, 0), pady=18)
 
         self._lang_var = ctk.StringVar(
@@ -3820,16 +3830,21 @@ class SmallToolApp(ctk.CTk):
             return
 
     def _open_calendar(self, date_var=None, owner=None):
-        existing = getattr(self, '_calendar_popup', None)
-        try:
-            if existing is not None and existing.winfo_exists():
-                existing.focus_force()
-                return
-        except tk.TclError:
-            pass
-
         today = datetime.now().astimezone().date()
         target_var = date_var or self._date_var
+        existing = getattr(self, '_calendar_popup', None)
+        existing_var = getattr(self, '_calendar_target_var', None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                if existing_var is target_var:
+                    existing.focus_force()
+                    return
+                existing.destroy()
+        except tk.TclError:
+            pass
+        self._calendar_popup = None
+        self._calendar_target_var = None
+
         popup_owner = owner or self
         try:
             selected = datetime.strptime(
@@ -3839,6 +3854,7 @@ class SmallToolApp(ctk.CTk):
 
         popup = ctk.CTkToplevel(self)
         self._calendar_popup = popup
+        self._calendar_target_var = target_var
         popup.title(T('st_calendar_title'))
         popup.geometry('364x448')
         popup.resizable(False, False)

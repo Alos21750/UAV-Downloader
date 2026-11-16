@@ -478,6 +478,29 @@ def clear_translation_api_key(provider: object = None) -> TranslationSettings:
     settings = get_translation_settings(selected)
     if selected == LOCAL:
         return settings
+    if selected == OPENAI_COMPATIBLE and (
+            not settings.base_url.strip() or not settings.model.strip()):
+        with _LOCK:
+            with _interprocess_settings_lock():
+                raw = _read_raw()
+                profiles = _sanitized_profiles(raw.get("profiles"))
+                profile = (
+                    dict(profiles.get(selected))
+                    if isinstance(profiles.get(selected), dict)
+                    else {}
+                )
+                profile.pop("api_key_protected", None)
+                if profile:
+                    profiles[selected] = profile
+                else:
+                    profiles.pop(selected, None)
+                _write_raw({
+                    "schema": _SCHEMA,
+                    "selected_provider": normalize_provider(
+                        raw.get("selected_provider")),
+                    "profiles": profiles,
+                })
+        return get_translation_settings(selected)
     return save_translation_profile(
         selected,
         base_url=settings.base_url,

@@ -369,6 +369,8 @@ def video_code(video: dict) -> str:
         code = canonical_code(slug)
         if code:
             return code
+        if site == 'MissAV' and re.fullmatch(r'[a-z]{2,10}\d{2,6}', slug, re.I):
+            return slug.casefold()
 
     code = canonical_code(video.get('title', ''))
     if code:

@@ -700,8 +700,8 @@ class M3U8Crawler:
             self.get_url_infos()
             self.add_source_video_metadata({'url': self._url})
             if self.is_url_vaildate():
+                self._targetName = _sanitize_filename(self._targetName or '')
                 if self._targetName:
-                    self._targetName = _sanitize_filename(self._targetName)
                     if self._filename_template == config.DEFAULT_FILENAME_TEMPLATE:
                         self._targetName = _apply_filename_mode(
                             self._targetName, self._filename_mode)
@@ -709,14 +709,14 @@ class M3U8Crawler:
                         self._targetName = _apply_filename_template(
                             self._targetName, self._dirName, self._url,
                             self._filename_template)
-                    if len(self._dirName) > 80:
-                        self._dirName = self._dirName[:80]
-                        self._temp_folder = os.path.join(self._dest_folder, self._dirName)
-                    if not self._targetName.strip():
-                        self._targetName = (_sanitize_filename(self._dirName)
-                                            or 'video')
-                    self._targetName = _truncate_target_name(
-                        self._targetName, self._dest_folder, self._dirName)
+                if len(self._dirName) > 80:
+                    self._dirName = self._dirName[:80]
+                    self._temp_folder = os.path.join(self._dest_folder, self._dirName)
+                if not self._targetName.strip():
+                    self._targetName = (_sanitize_filename(self._dirName)
+                                        or 'video')
+                self._targetName = _truncate_target_name(
+                    self._targetName, self._dest_folder, self._dirName)
                 if not self.silence:
                     if self._targetName: print("檔案名稱: " + self._targetName, flush=True)
                     if self._dest_folder: print("儲存位置: " + self._dest_folder, flush=True)
@@ -1127,6 +1127,8 @@ class M3U8Crawler:
                     self._progress_callback(done, self._job_total, speed)
             return True
         except StorageWriteError as exc:
+            if self._cancel_job:
+                return False
             self._storage_error = exc
             raise
         except Exception:
@@ -1164,7 +1166,11 @@ class M3U8Crawler:
             tasks = list(self._pending_set)
             with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
                 self._t2_executor = executor
-                list(executor.map(self._scrape, tasks, timeout=None))
+                try:
+                    list(executor.map(self._scrape, tasks, timeout=None))
+                except concurrent.futures.CancelledError:
+                    if not self._cancel_job:
+                        raise
             self._t2_executor = None
             still_pending = len(self._pending_set)
             if still_pending == 0:

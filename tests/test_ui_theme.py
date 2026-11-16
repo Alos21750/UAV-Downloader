@@ -157,6 +157,7 @@ def test_windows_distribution_is_hardened_and_verifiable():
         '"README.en.md"',
         '"README.zh-CN.md"',
         '"README.ja.md"',
+        '"README.th.md"',
         '"THIRD_PARTY_NOTICES.md"',
         '"WINDOWS_SECURITY.md"',
     ):
@@ -170,8 +171,9 @@ def test_all_readme_languages_are_complete_and_cross_linked():
         'zh-Hans': root / 'README.zh-CN.md',
         'en': root / 'README.en.md',
         'ja': root / 'README.ja.md',
+        'th': root / 'README.th.md',
     }
-    language_labels = ('繁體中文', '简体中文', 'English', '日本語')
+    language_labels = ('繁體中文', '简体中文', 'English', '日本語', 'ไทย')
 
     for language, path in readmes.items():
         assert path.is_file(), language
@@ -190,6 +192,7 @@ def test_all_readme_languages_are_complete_and_cross_linked():
     assert '重新排队' in readmes['zh-Hans'].read_text(encoding='utf-8')
     assert 'requeue' in readmes['en'].read_text(encoding='utf-8').lower()
     assert '再キュー' in readmes['ja'].read_text(encoding='utf-8')
+    assert 'จัดคิวใหม่' in readmes['th'].read_text(encoding='utf-8')
 
 
 def test_windows_security_guidance_does_not_ask_for_defender_bypass():

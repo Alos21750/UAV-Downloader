@@ -66,12 +66,15 @@ def check_latest(timeout=10):
         with _session() as s:
             response = None
             for api_url in API_CANDIDATES:
-                candidate = s.get(
-                    api_url,
-                    headers=headers,
-                    timeout=timeout,
-                    **config.proxy_request_kwargs(),
-                )
+                try:
+                    candidate = s.get(
+                        api_url,
+                        headers=headers,
+                        timeout=timeout,
+                        **config.proxy_request_kwargs(),
+                    )
+                except Exception:
+                    continue
                 if candidate.status_code == 200:
                     response = candidate
                     break
@@ -149,6 +152,10 @@ def download_asset(url, dest_path, progress_cb=None, timeout=60):
                             progress_cb(downloaded, total)
                         except Exception:
                             pass
+
+            if total > 0 and downloaded != total:
+                _remove_quiet(part_path)
+                return False
 
         if os.path.getsize(part_path) <= 3_000_000:
             _remove_quiet(part_path)

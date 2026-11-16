@@ -64,7 +64,7 @@ from uav_downloader.ui.theme import (
     BG_DARK, BG_CARD, BG_CARD_HOVER, BG_INPUT, BG_HEADER, BG_SECTION,
     BG_SIDEBAR, BG_BADGE, TEXT_PRI, TEXT_SEC, TEXT_DIM, TEXT_LINK,
     BORDER, BORDER_HOVER, BORDER_CARD, WHITE, CARD_RADIUS, CONTROL_RADIUS,
-    browse_columns_for_width,
+    apply_theme_mode, browse_columns_for_width,
 )
 from uav_downloader.metadata import APP_DISPLAY_NAMES, PRODUCT_NAME, VERSION
 from uav_downloader.apps.downloads import (
@@ -521,6 +521,7 @@ class DownloadManager:
             item = self._items.get(url)
             if item is None:
                 return False
+            self._restart_pending.pop(url, None)
             pending = [task for task in self._pending if task.url == url]
             if pending:
                 self._pending = [
@@ -551,7 +552,8 @@ class DownloadManager:
                 subtitle.cancelled.set()
                 contexts.append(subtitle)
             if not contexts:
-                if item.state in {'已下載', '未偵測到日語語音'}:
+                if (item.state in DONE_STATES or item.state in FAILED_STATES or
+                        item.state == '已取消'):
                     return False
                 self._set_state(url, '已暫停', error='')
                 return True
@@ -1004,6 +1006,7 @@ class DownloadManager:
             restart_requested = (
                 restart is not None
                 and restart[0] is task
+                and not task.pause_requested
                 and task.epoch == self._cancel_epoch
                 and task.url in self._items)
             context_cancelled = self._context_cancelled_locked(task)
@@ -1299,7 +1302,8 @@ class DownloadManager:
                         break
                     url = row.get('網址', '')
                     if url:
-                        state = row.get('狀態', '')
+                        raw_state = row.get('狀態', '')
+                        state = raw_state
                         if state in (
                                 '下載中', '準備中', '等待中',
                                 '等待重試', '已排程', '字幕準備中',
@@ -1321,6 +1325,7 @@ class DownloadManager:
                             job_id=row.get('工作 ID', ''),
                             site=row.get('網站', ''),
                             created_at=_number('建立時間'))
+                        item.not_before = max(0.0, _number('排程時間'))
                         progress = (row.get('進度', '') or '').rstrip('%')
                         try:
                             item.progress = int(float(progress))
@@ -1330,8 +1335,10 @@ class DownloadManager:
                         item.error = row.get('錯誤', '') or ''
                         item.error_code = (
                             row.get('錯誤代碼', '') or
-                            classify_download_problem(
-                                item.error, item.state).code)
+                            (classify_download_problem(
+                                item.error, item.state).code
+                             if (item.error or raw_state in FAILED_STATES)
+                             else ''))
                         try:
                             item.retry_count = max(
                                 0, int(row.get('重試次數', 0) or 0))
@@ -1504,6 +1511,7 @@ class ModernApp(ctk.CTk):
         self._lang_code_by_name = {name: code for code, name in LANGUAGES}
         self._lang_name_by_code = {code: name for code, name in LANGUAGES}
         self._theme_mode = config.get_theme()
+        ctk.AppearanceModeTracker.update_loop_interval = 2000
         ctk.set_appearance_mode(self._theme_mode)
         ctk.set_default_color_theme('blue')
 
@@ -1561,7 +1569,8 @@ class ModernApp(ctk.CTk):
         self._dl_footer_lbl = None
         self._dl_drain_id = None
         self._dl_gen = 0
-        self._thumb_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        self._status_from_dl = False
+        self._thumb_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
         self._speed_mbps = config.get_speed_limit_mbps()
         self._download_autosave_ticks = 0
         self._last_download_save_sig = None
@@ -1968,6 +1977,13 @@ class ModernApp(ctk.CTk):
     def _theme_glyph(self):
         return {'system': '◐', 'light': '☀', 'dark': '☾'}.get(self._theme_mode, '◐')
 
+    def _theme_label(self):
+        return {
+            'system': '◐ System Theme',
+            'light': '☀ Light Theme',
+            'dark': '☾ Dark Theme',
+        }.get(self._theme_mode, '◐ System Theme')
+
     def _cycle_theme(self):
         modes = ('system', 'light', 'dark')
         try:
@@ -1975,9 +1991,9 @@ class ModernApp(ctk.CTk):
         except ValueError:
             idx = 0
         self._theme_mode = modes[(idx + 1) % len(modes)]
-        ctk.set_appearance_mode(self._theme_mode)
+        apply_theme_mode(self, self._theme_mode)
         config.set_theme(self._theme_mode)
-        self._theme_btn.configure(text=self._theme_glyph())
+        self._theme_btn.configure(text=self._theme_label())
 
     def _on_root_resize(self, event):
         if event.widget is not self or self._is_closing:
@@ -2017,19 +2033,32 @@ class ModernApp(ctk.CTk):
     def _select_tab(self, key):
         if key not in getattr(self, '_tab_frames', {}):
             return
-        for f in self._tab_frames.values():
-            f.pack_forget()
-        self._tab_frames[key].pack(fill='both', expand=True)
+        new_idx = self._tab_keys.index(key)
+        target_frame = self._tab_frames[key]
+        if new_idx == self._active_tab_idx and target_frame.winfo_manager():
+            for k, w in self._tab_buttons.items():
+                active = (k == key)
+                try:
+                    w['lbl'].configure(text_color=(TEXT_PRI if active else TEXT_SEC))
+                    w['underline'].configure(fg_color=(ACCENT if active else 'transparent'))
+                except tk.TclError:
+                    pass
+            return
+        for k, f in self._tab_frames.items():
+            if k != key and f.winfo_manager():
+                f.pack_forget()
+        if not target_frame.winfo_manager():
+            target_frame.pack(fill='both', expand=True)
         for k, w in self._tab_buttons.items():
             active = (k == key)
             try:
-                w['lbl'].configure(
-                    text_color=(TEXT_PRI if active else TEXT_SEC),
-                    font=(ui_font(), 13, 'bold') if active else (ui_font(), 13))
+                w['lbl'].configure(text_color=(TEXT_PRI if active else TEXT_SEC))
                 w['underline'].configure(fg_color=(ACCENT if active else 'transparent'))
             except tk.TclError:
                 pass
-        self._active_tab_idx = self._tab_keys.index(key)
+        self._active_tab_idx = new_idx
+        if key == 'download' and getattr(self, '_startup_complete', False):
+            self._refresh_downloads(schedule=False)
 
     def _speed_values(self):
         return [T('unlimited'), '1 MB/s', '2 MB/s', '5 MB/s',
@@ -2276,10 +2305,10 @@ class ModernApp(ctk.CTk):
             pass
         self._update_badge.bind('<Button-1>', self._show_update_settings)
         self._theme_btn = ctk.CTkButton(
-            right_info, text=self._theme_glyph(), width=36, height=36,
+            right_info, text=self._theme_label(), width=136, height=36,
             corner_radius=CONTROL_RADIUS, fg_color=BG_CARD, border_width=1,
             border_color=BORDER, hover_color=BG_CARD_HOVER,
-            text_color=TEXT_SEC, font=(ui_font(), 14),
+            text_color=TEXT_SEC, font=(ui_font(), 11),
             command=self._cycle_theme)
         self._theme_btn.pack(side='right', padx=(8, 0), pady=14)
         self._lang_var = ctk.StringVar(value=self._lang_name_by_code.get(get_lang(), 'English'))
@@ -2315,7 +2344,7 @@ class ModernApp(ctk.CTk):
             underline = ctk.CTkFrame(holder, height=3, fg_color='transparent', corner_radius=2)
             underline.pack(side='bottom', fill='x', padx=4, pady=(0, 0))
             lbl = ctk.CTkLabel(holder, text=tab_labels[key],
-                               font=(ui_font(), 13), text_color=TEXT_SEC, cursor='hand2')
+                               font=(ui_font(), 13, 'bold'), text_color=TEXT_SEC, cursor='hand2')
             lbl.pack(side='top', fill='both', expand=True, padx=14)
             lbl.bind('<Button-1>', lambda e, k=key: self._select_tab(k))
             self._tab_buttons[key] = {'lbl': lbl, 'underline': underline}
@@ -3474,10 +3503,117 @@ class ModernApp(ctk.CTk):
             return '中字', '#0E7490'
         return None
 
+    def _build_video_card(self, row_frame, v: dict, title_wrap: int,
+                          gen: int, build_gen: int):
+        url = v.get('url', '')
+        title = v.get('title', '')
+        dur = v.get('duration', '')
+        thumb_url = v.get('thumbnail', '')
+        is_sel = url in self._selected_urls
+
+        card = ctk.CTkFrame(row_frame, fg_color=ACCENT_DIM if is_sel else BG_CARD,
+                            corner_radius=CARD_RADIUS,
+                            border_width=2 if is_sel else 1,
+                            border_color=ACCENT if is_sel else BORDER_CARD)
+        card.pack(side='left', padx=7, pady=7, fill='x', expand=True)
+
+        # Thumbnail placeholder (16:9)
+        thumb_holder = ctk.CTkFrame(card, fg_color=BG_SIDEBAR,
+                                     height=_THUMB_SIZE[1], corner_radius=6)
+        thumb_holder.pack(fill='x', padx=10, pady=(10, 0))
+        thumb_holder.pack_propagate(False)
+        thumb_lbl = ctk.CTkLabel(thumb_holder, text=T('loading_browse'),
+                                  text_color=TEXT_DIM,
+                                  fg_color='transparent',
+                                  font=(ui_font(), 11))
+        thumb_lbl.pack(expand=True)
+
+        # Duration badge
+        if dur:
+            dur_lbl = ctk.CTkLabel(thumb_holder, text=f' {dur} ',
+                                    text_color='#FFFFFF',
+                                    fg_color='#000000',
+                                    corner_radius=4,
+                                    font=('Consolas', 9, 'bold'))
+            dur_lbl.place(relx=1.0, rely=1.0, anchor='se', x=-6, y=-6)
+
+        # Title
+        title_text = title[:72] + '...' if len(title) > 72 else title
+        title_row = ctk.CTkFrame(card, fg_color='transparent')
+        title_row.pack(fill='x', padx=12, pady=(10, 5))
+        version_badge = self._video_version_badge(url, title)
+        wrap = title_wrap - 44 if version_badge else title_wrap
+        if version_badge:
+            badge_text, badge_color = version_badge
+            ctk.CTkLabel(title_row, text=badge_text,
+                         text_color='#FFFFFF', fg_color=badge_color,
+                         corner_radius=4, width=34, height=18,
+                         font=(ui_font(), 11, 'bold')).pack(
+                side='left', padx=(0, 6), anchor='n')
+        ctk.CTkLabel(title_row, text=title_text, text_color=TEXT_PRI,
+                     font=(ui_font(), 11),
+                     wraplength=wrap, justify='left').pack(
+            side='left', fill='x', expand=True, anchor='w')
+
+        # Bottom row
+        bottom = ctk.CTkFrame(card, fg_color='transparent')
+        bottom.pack(fill='x', padx=12, pady=(0, 12))
+
+        sel_text = ('✓ ' + T('selected')) if is_sel else T('select')
+        sel_btn = ctk.CTkButton(
+            bottom, text=sel_text, width=76, height=30,
+            corner_radius=CONTROL_RADIUS,
+            fg_color=ACCENT if is_sel else 'transparent',
+            border_width=0 if is_sel else 1,
+            border_color=BORDER_HOVER,
+            hover_color=ACCENT_HOVER if is_sel else BG_CARD_HOVER,
+            text_color=('#FFFFFF', '#FFFFFF') if is_sel else TEXT_PRI,
+            font=(ui_font(), 11, 'bold'),
+            command=lambda u=url: self._toggle_select(u)
+        )
+        sel_btn.pack(side='right')
+
+        ctk.CTkButton(
+            bottom, text=T('preview_browser'), width=112, height=30,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+            font=(ui_font(), 12),
+            command=lambda u=url: self._preview_video(u),
+        ).pack(side='right', padx=(0, 6))
+
+        self._card_widgets[url] = {'card': card, 'sel_btn': sel_btn}
+
+        # Clickable card
+        def _bind_click(widget, video_url=url):
+            widget.bind('<Button-1>', lambda e, u=video_url: self._toggle_select(u))
+            widget.configure(cursor='hand2')
+        _bind_click(card)
+        _bind_click(thumb_holder)
+        _bind_click(thumb_lbl)
+
+        # Thumbnail load (synchronous when cached, async otherwise)
+        if thumb_url:
+            cached = _thumb_cache.get(thumb_url)
+            if cached is not None:
+                ctk_img = ctk.CTkImage(light_image=cached, dark_image=cached,
+                                       size=cached.size)
+                thumb_lbl.configure(image=ctk_img, text='')
+                thumb_lbl._ctk_img_ref = ctk_img
+            else:
+                self._load_thumb_async(
+                    thumb_url, thumb_lbl, gen, build_gen, self._site_key)
+        else:
+            thumb_lbl.configure(text=T('no_thumbnail'))
+
     def _refresh_grid(self):
         try:
             for w in self._grid_scroll.winfo_children():
                 w.destroy()
+            try:
+                self._grid_scroll._parent_canvas.yview_moveto(0.0)
+            except Exception:
+                pass
         except (AttributeError, tk.TclError):
             return
         self._card_widgets = {}
@@ -3504,105 +3640,27 @@ class ModernApp(ctk.CTk):
         estimated_card_width = max(
             240, int((max(logical_width, 980) - 240) / columns) - 24)
         title_wrap = max(180, min(330, estimated_card_width - 34))
-        row_frame = None
-        for i, v in enumerate(self._videos):
-            if i % columns == 0:
-                row_frame = ctk.CTkFrame(self._grid_scroll, fg_color='transparent')
-                row_frame.pack(fill='x', padx=14, pady=7)
+        batch_size = columns * 2
 
-            url = v.get('url', '')
-            title = v.get('title', '')
-            dur = v.get('duration', '')
-            thumb_url = v.get('thumbnail', '')
-            is_sel = url in self._selected_urls
+        def _render_batch(start: int):
+            if (self._is_closing or gen != self._grid_gen or
+                    build_gen != self._build_gen):
+                return
+            end = min(start + batch_size, len(self._videos))
+            row_frame = None
+            for idx in range(start, end):
+                if idx % columns == 0 or row_frame is None:
+                    row_frame = ctk.CTkFrame(self._grid_scroll, fg_color='transparent')
+                    row_frame.pack(fill='x', padx=14, pady=7)
+                self._build_video_card(
+                    row_frame, self._videos[idx], title_wrap, gen, build_gen)
+            if end < len(self._videos):
+                try:
+                    self.after(8, lambda idx=end: _render_batch(idx))
+                except tk.TclError:
+                    pass
 
-            card = ctk.CTkFrame(row_frame, fg_color=ACCENT_DIM if is_sel else BG_CARD,
-                                corner_radius=CARD_RADIUS,
-                                border_width=2 if is_sel else 1,
-                                border_color=ACCENT if is_sel else BORDER_CARD)
-            card.pack(side='left', padx=7, pady=7, fill='x', expand=True)
-
-            # Thumbnail placeholder (16:9)
-            thumb_holder = ctk.CTkFrame(card, fg_color=BG_SIDEBAR,
-                                         height=_THUMB_SIZE[1], corner_radius=6)
-            thumb_holder.pack(fill='x', padx=10, pady=(10, 0))
-            thumb_holder.pack_propagate(False)
-            thumb_lbl = ctk.CTkLabel(thumb_holder, text=T('loading_browse'),
-                                      text_color=TEXT_DIM,
-                                      fg_color='transparent',
-                                      font=(ui_font(), 11))
-            thumb_lbl.pack(expand=True)
-
-            # Duration badge
-            if dur:
-                dur_lbl = ctk.CTkLabel(thumb_holder, text=f' {dur} ',
-                                        text_color='#FFFFFF',
-                                        fg_color='#000000',
-                                        corner_radius=4,
-                                        font=('Consolas', 9, 'bold'))
-                dur_lbl.place(relx=1.0, rely=1.0, anchor='se', x=-6, y=-6)
-
-            # Title
-            title_text = title[:72] + '...' if len(title) > 72 else title
-            title_row = ctk.CTkFrame(card, fg_color='transparent')
-            title_row.pack(fill='x', padx=12, pady=(10, 5))
-            version_badge = self._video_version_badge(url, title)
-            wrap = title_wrap - 44 if version_badge else title_wrap
-            if version_badge:
-                badge_text, badge_color = version_badge
-                ctk.CTkLabel(title_row, text=badge_text,
-                             text_color='#FFFFFF', fg_color=badge_color,
-                             corner_radius=4, width=34, height=18,
-                             font=(ui_font(), 11, 'bold')).pack(
-                    side='left', padx=(0, 6), anchor='n')
-            ctk.CTkLabel(title_row, text=title_text, text_color=TEXT_PRI,
-                         font=(ui_font(), 11),
-                         wraplength=wrap, justify='left').pack(
-                side='left', fill='x', expand=True, anchor='w')
-
-            # Bottom row
-            bottom = ctk.CTkFrame(card, fg_color='transparent')
-            bottom.pack(fill='x', padx=12, pady=(0, 12))
-
-            sel_text = ('✓ ' + T('selected')) if is_sel else T('select')
-            sel_btn = ctk.CTkButton(
-                bottom, text=sel_text, width=76, height=30,
-                corner_radius=CONTROL_RADIUS,
-                fg_color=ACCENT if is_sel else 'transparent',
-                border_width=0 if is_sel else 1,
-                border_color=BORDER_HOVER,
-                hover_color=ACCENT_HOVER if is_sel else BG_CARD_HOVER,
-                text_color=('#FFFFFF', '#FFFFFF') if is_sel else TEXT_PRI,
-                font=(ui_font(), 12, 'bold') if is_sel else (ui_font(), 10),
-                command=lambda u=url: self._toggle_select(u)
-            )
-            sel_btn.pack(side='right')
-
-            ctk.CTkButton(
-                bottom, text=T('preview_browser'), width=112, height=30,
-                corner_radius=CONTROL_RADIUS, fg_color='transparent',
-                border_width=1, border_color=BORDER_HOVER,
-                hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-                font=(ui_font(), 12),
-                command=lambda u=url: self._preview_video(u),
-            ).pack(side='right', padx=(0, 6))
-
-            self._card_widgets[url] = {'card': card, 'sel_btn': sel_btn}
-
-            # Clickable card
-            def _bind_click(widget, video_url=url):
-                widget.bind('<Button-1>', lambda e, u=video_url: self._toggle_select(u))
-                widget.configure(cursor='hand2')
-            _bind_click(card)
-            _bind_click(thumb_holder)
-            _bind_click(thumb_lbl)
-
-            # Background thumbnail load
-            if thumb_url:
-                self._load_thumb_async(
-                    thumb_url, thumb_lbl, gen, build_gen, self._site_key)
-            else:
-                thumb_lbl.configure(text=T('no_thumbnail'))
+        _render_batch(0)
 
     def _load_thumb_async(self, thumb_url: str, label: ctk.CTkLabel,
                           gen: int, build_gen: int, site_key: str = ''):
@@ -3690,8 +3748,7 @@ class ModernApp(ctk.CTk):
                     fg_color=ACCENT if is_sel else 'transparent',
                     border_width=0 if is_sel else 1,
                     hover_color=ACCENT_HOVER if is_sel else BG_CARD_HOVER,
-                    text_color=WHITE if is_sel else TEXT_PRI,
-                    font=(ui_font(), 12, 'bold') if is_sel else (ui_font(), 10))
+                    text_color=WHITE if is_sel else TEXT_PRI)
             except Exception:
                 pass
         self._update_selection_count()
@@ -3719,8 +3776,7 @@ class ModernApp(ctk.CTk):
                 fg_color=ACCENT if is_sel else 'transparent',
                 border_width=0 if is_sel else 1,
                 hover_color=ACCENT_HOVER if is_sel else BG_CARD_HOVER,
-                text_color=WHITE if is_sel else TEXT_PRI,
-                font=(ui_font(), 12, 'bold') if is_sel else (ui_font(), 10))
+                text_color=WHITE if is_sel else TEXT_PRI)
         except Exception:
             pass
 
@@ -4226,6 +4282,7 @@ class ModernApp(ctk.CTk):
         popup.geometry(f'+{x}+{y}')
 
     def _on_site_change(self, val):
+        old_site = self._site_key
         self._site_key = val
         self._reset_hanime_filter_state()
         self._sync_hanime_filter_button_visibility()
@@ -4234,7 +4291,8 @@ class ModernApp(ctk.CTk):
         self._selected_videos.clear()
         self._selected_source_subtitle_evidence.clear()
         self._update_selection_count()
-        self._rebuild_sidebar()
+        if 'JableTV' in (old_site, val) or not self._sidebar.winfo_children():
+            self._rebuild_sidebar()
         self._load_categories()
 
     def _on_cat_change(self, val):
@@ -4259,6 +4317,31 @@ class ModernApp(ctk.CTk):
     def _on_search(self):
         q = self._search_var.get().strip()
         if not q:
+            if self._site_key == 'Hanime1':
+                self._hanime_filter_state['query'] = ''
+                self._apply_hanime_filter_state()
+                return
+            cats = getattr(self, '_categories', ()) or ()
+            cat_var = getattr(self, '_cat_var', None)
+            cat_name = cat_var.get() if cat_var is not None else ''
+            chosen = next((c for c in cats if c['name'] == cat_name), None)
+            if chosen is None and cats:
+                chosen = cats[0]
+                if cat_var is not None:
+                    cat_var.set(chosen['name'])
+            if chosen is None:
+                return
+            self._current_base_url = chosen['url']
+            self._page = 1
+            self._last_loaded_page = 1
+            self._has_next = True
+            self._browse_blocked = False
+            self._browse_empty_message = ''
+            self._selected_urls.clear()
+            self._selected_videos.clear()
+            self._selected_source_subtitle_evidence.clear()
+            self._update_selection_count()
+            self._load_page()
             return
         from urllib.parse import quote
         if self._site_key == 'JableTV':
@@ -5316,46 +5399,51 @@ class ModernApp(ctk.CTk):
             return
         try:
             all_items = self._dlmgr.get_items()
-            items = self._filtered_download_items(all_items)
-            visible = _visible_window(items, MAX_VISIBLE_ROWS)
-            visible_set = {i.url for i in visible}
+            update_rows = (
+                not schedule
+                or getattr(self, '_active_tab_idx', 0) == 1
+                or not self._dl_rows
+            )
+            if update_rows:
+                items = self._filtered_download_items(all_items)
+                visible = _visible_window(items, MAX_VISIBLE_ROWS)
+                visible_set = {i.url for i in visible}
 
-            # Remove rows outside the bounded visible window.
-            for url in list(self._dl_rows.keys()):
-                if url not in visible_set:
-                    widgets = self._dl_rows.pop(url)
-                    try:
-                        widgets['row'].destroy()
-                    except Exception:
-                        pass
+                # Remove rows outside the bounded visible window.
+                for url in list(self._dl_rows.keys()):
+                    if url not in visible_set:
+                        widgets = self._dl_rows.pop(url)
+                        try:
+                            widgets['row'].destroy()
+                        except Exception:
+                            pass
 
-            # Toggle empty placeholder
-            if not items:
-                empty_text = (T('queue_filter_empty') if all_items else
-                              T('dl_list_empty') + '\n\n' + T('queue_start_hint'))
-                if self._dl_empty_lbl is None:
-                    self._dl_empty_lbl = ctk.CTkLabel(
-                        self._dl_scroll,
-                        text=empty_text, wraplength=600,
-                        text_color=TEXT_DIM,
-                        font=(ui_font(), 13))
-                    self._dl_empty_lbl.pack(pady=56)
-                elif self._dl_empty_lbl.cget('text') != empty_text:
-                    self._dl_empty_lbl.configure(text=empty_text)
-            else:
-                if self._dl_empty_lbl is not None:
-                    try:
-                        self._dl_empty_lbl.destroy()
-                    except Exception:
-                        pass
-                    self._dl_empty_lbl = None
+                # Toggle empty placeholder
+                if not items:
+                    empty_text = (T('queue_filter_empty') if all_items else
+                                  T('dl_list_empty') + '\n\n' + T('queue_start_hint'))
+                    if self._dl_empty_lbl is None:
+                        self._dl_empty_lbl = ctk.CTkLabel(
+                            self._dl_scroll,
+                            text=empty_text, wraplength=600,
+                            text_color=TEXT_DIM,
+                            font=(ui_font(), 13))
+                        self._dl_empty_lbl.pack(pady=56)
+                    elif self._dl_empty_lbl.cget('text') != empty_text:
+                        self._dl_empty_lbl.configure(text=empty_text)
+                    self._sync_dl_footer(0)
+                else:
+                    if self._dl_empty_lbl is not None:
+                        try:
+                            self._dl_empty_lbl.destroy()
+                        except Exception:
+                            pass
+                        self._dl_empty_lbl = None
 
-                more_to_build = self._build_visible_rows(visible)
-                self._sync_dl_footer(len(items) - len(visible))
-                if more_to_build:
-                    self._arm_dl_drain()
-            if not items:
-                self._sync_dl_footer(0)
+                    more_to_build = self._build_visible_rows(visible)
+                    self._sync_dl_footer(len(items) - len(visible))
+                    if more_to_build:
+                        self._arm_dl_drain()
 
             # Update status bar
             a = self._dlmgr.active_count
@@ -5376,9 +5464,16 @@ class ModernApp(ctk.CTk):
                 if i.state in {'已下載', '未偵測到日語語音'})
             if done:
                 parts.append(f'{state_label("已下載")} {done}')
-            status_text = '  |  '.join(parts) if parts else T('status_ready')
-            if self._status_lbl.cget('text') != status_text:
-                self._status_lbl.configure(text=status_text)
+            if parts:
+                status_text = '  |  '.join(parts)
+                self._status_from_dl = True
+                if self._status_lbl.cget('text') != status_text:
+                    self._status_lbl.configure(text=status_text)
+            elif getattr(self, '_status_from_dl', False) or getattr(self, '_active_tab_idx', 0) == 1:
+                self._status_from_dl = False
+                ready_text = T('status_ready')
+                if self._status_lbl.cget('text') != ready_text:
+                    self._status_lbl.configure(text=ready_text)
             self._autosave_downloads(all_items)
             busy = bool(a or p or subtitle_active or subtitle_pending)
             if busy:
@@ -5774,8 +5869,8 @@ class ModernApp(ctk.CTk):
                 for item in self._dlmgr._items.values():
                     if item.state in (
                             '準備中', '下載中', '等待中', '等待重試',
-                            '已排程', '字幕準備中', '字幕辨識中',
-                            '字幕翻譯中'):
+                            '已排程', '字幕準備中', '字幕模型準備中',
+                            '字幕辨識中', '字幕翻譯中'):
                         item.state = '未完成'
                         item.speed = ''
                 self._dlmgr.save_csv(CSV_PATH)

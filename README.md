@@ -1,5 +1,5 @@
 <p align="center">
-  <strong>繁體中文</strong> · <a href="./README.zh-CN.md">简体中文</a> · <a href="./README.en.md">English</a> · <a href="./README.ja.md">日本語</a> · <a href="./MANUAL.th.md">คู่มือภาษาไทย</a>
+  <strong>繁體中文</strong> · <a href="./README.zh-CN.md">简体中文</a> · <a href="./README.en.md">English</a> · <a href="./README.ja.md">日本語</a> · <a href="./README.th.md">ไทย</a>
 </p>
 
 <h1 align="center">UAV Downloader</h1>
@@ -86,7 +86,7 @@
 
 ### v3.3.0 新功能
 
-- 泰文介面與[泰文手冊](MANUAL.th.md)，並強化持久化佇列：匯入／匯出、篩選、暫停／恢復、排程與有限次重試。
+- 泰文介面與[泰文手冊](README.th.md)，並強化持久化佇列：匯入／匯出、篩選、暫停／恢復、排程與有限次重試。
 - [選用 Docker Web UI](docs/docker-cli.md#nas-web-queue-opt-in)：具驗證的持久化網址佇列、進度、取消／重試與磁碟錯誤停止保護；CLI 仍是預設。
 - 卡片「預覽 ↗」可在系統瀏覽器開啟來源完整播放器，不會下載；程式內嵌播放仍為開放提案。
 - 補強檔名模板、MissAV 版本識別、網址／路徑驗證、CSV 匯出及磁碟診斷；完整結果掃描不再默默停在 50 頁。
@@ -119,7 +119,7 @@
 
 1. 下載 [UAV_Browser.exe](https://github.com/Alos21750/UAV-Downloader/releases/latest/download/UAV_Browser.exe) 或 [UAV_Watcher.exe](https://github.com/Alos21750/UAV-Downloader/releases/latest/download/UAV_Watcher.exe)。
 2. 把檔案放在可寫入的資料夾，直接雙擊執行。
-3. 首次開啟選擇語言；之後可隨時切換繁體中文、简体中文、English、日本語與明／暗主題。
+3. 首次開啟選擇語言；之後可隨時切換繁體中文、简体中文、English、日本語、ไทย與明／暗主題。
 
 影片進度到 100% 後的合併／MP4 重新封裝，以及字幕辨識的 WAV／ASR 大型暫存，會使用影片儲存資料夾所在磁碟，不再占用 Windows 系統 `%TEMP%`（通常是 C 槽）。
 

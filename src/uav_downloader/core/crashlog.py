@@ -25,6 +25,7 @@ from datetime import datetime
 from uav_downloader.metadata import PRODUCT_NAME, VERSION
 
 _fault_file = None   # kept open for the process lifetime so faulthandler can write on crash
+_base_dir_cache = {}
 
 
 def _disarm_faulthandler():
@@ -48,10 +49,17 @@ atexit.register(_disarm_faulthandler)
 
 
 def _base_dir():
-    if getattr(sys, "frozen", False):
+    frozen = bool(getattr(sys, "frozen", False))
+    cache_key = (frozen, getattr(sys, "executable", ""))
+    cached = _base_dir_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    if frozen:
         base = os.path.dirname(sys.executable)
     else:
-        base = os.path.dirname(os.path.abspath(__file__))
+        base = os.path.abspath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")
+        )
     try:
         probe = os.path.join(base, ".w_test_%d" % os.getpid())
         with open(probe, "w") as f:
@@ -59,6 +67,7 @@ def _base_dir():
         os.remove(probe)
     except Exception:
         base = os.path.expanduser("~")
+    _base_dir_cache[cache_key] = base
     return base
 
 

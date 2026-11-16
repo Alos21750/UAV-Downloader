@@ -2,6 +2,9 @@
 # coding: utf-8
 """Shared visual system for the UAV Browser and UAV Watcher desktop apps."""
 
+import tkinter as tk
+import customtkinter as ctk
+
 
 # A restrained graphite / warm-paper palette with one vermilion brand accent.
 # CustomTkinter resolves every (light, dark) tuple automatically.
@@ -59,3 +62,29 @@ def browse_columns_for_width(width):
 def category_columns_for_width(width):
     """UAV Watcher category density without clipping localized labels."""
     return 3 if int(width or 0) >= 1120 else 2
+
+
+def _sync_widget_tree_bg(widget):
+    try:
+        children = widget.winfo_children()
+    except tk.TclError:
+        return
+    for child in children:
+        if hasattr(child, '_bg_color') and hasattr(child, '_apply_appearance_mode'):
+            try:
+                bg = child._apply_appearance_mode(child._bg_color)
+                if bg and bg != 'transparent':
+                    tk.Frame.configure(child, bg=bg)
+            except tk.TclError:
+                pass
+        _sync_widget_tree_bg(child)
+
+
+def apply_theme_mode(root_widget, mode: str):
+    """Apply appearance mode and resync underlying Tk frame backgrounds."""
+    ctk.AppearanceModeTracker.update_loop_interval = 2000
+    ctk.set_appearance_mode(mode)
+    if str(mode).lower() == 'system':
+        ctk.AppearanceModeTracker.init_appearance_mode()
+    if root_widget is not None:
+        _sync_widget_tree_bg(root_widget)

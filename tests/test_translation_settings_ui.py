@@ -12,7 +12,7 @@ from uav_downloader.subtitles.settings import (
 )
 
 
-@pytest.mark.parametrize("language", ("zh", "en", "zh-Hans", "ja"))
+@pytest.mark.parametrize("language", ("zh", "en", "zh-Hans", "ja", "th"))
 def test_every_provider_has_a_localized_label(language):
     locales.set_lang(language)
     labels = {

@@ -132,7 +132,7 @@ def test_select_results_reports_partial_network_failure(monkeypatch):
 
 
 def test_thai_manual_does_not_claim_unimplemented_thai_output():
-    manual = (Path(__file__).parents[1] / 'MANUAL.th.md').read_text(encoding='utf-8')
+    manual = (Path(__file__).parents[1] / 'README.th.md').read_text(encoding='utf-8')
     assert 'สั่งให้แปลตรงออกมาเป็นภาษาไทยได้ทันที' not in manual
     assert 'ความปลอดภัย 100%' not in manual
 

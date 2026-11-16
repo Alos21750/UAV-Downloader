@@ -165,7 +165,7 @@ class JableTVList(SiteUrlList_M3U8):
             return divlist
 
         except Exception:
-            return divlist
+            return divlist if hasattr(self, 'links') else None
 
     def getSortTypeList(self):
         ll = list(JableTVList._sortby_dict)
@@ -308,7 +308,7 @@ class JableTVBrowser:
         return f'{cls._url_root}/tags/{slug}/'
 
     @classmethod
-    def fetch_categories(cls):
+    def fetch_categories(cls, lang=''):
         """Return homepage sections + dynamic categories from /categories/."""
         cats = [{'name': site_i18n.loc(site_i18n.CATEGORY_I18N, url, name),
                  'url': url, 'count': 0, 'section': True}
@@ -342,11 +342,13 @@ class JableTVBrowser:
         return cats
 
     @classmethod
-    def fetch_page(cls, url):
+    def fetch_page(cls, url, *, cancel_check=None):
         def _validate(resp):
+            if getattr(resp, 'status_code', 0) != 200:
+                return False
             s = BeautifulSoup(resp.content, 'html.parser')
             dl = s.find('div', id=lambda x: x and x.startswith('list_videos'))
-            return bool(dl and dl.select('div.video-img-box'))
+            return bool((dl and dl.select('div.video-img-box')) or s.select_one('section.content-box, div#site-content, header#site-header'))
         scr = cls._get_scraper()
         _apply_jable_lang(scr)
         resp, host, reason = fetch_with_mirrors(scr, url, 'jable', _validate)

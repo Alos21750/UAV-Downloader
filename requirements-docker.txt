@@ -1,5 +1,5 @@
 # Headless downloader deps only (no Pillow / customtkinter / tkinter — the container
-# runs docker_cli.py, not the GUI). ffmpeg comes from the base image via apt.
+# runs uav_downloader.cli.headless or uav_downloader.web, not the GUI). ffmpeg comes from the base image via apt.
 requests>=2.28.0
 PySocks>=1.7.1
 beautifulsoup4>=4.11.0

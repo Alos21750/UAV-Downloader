@@ -150,6 +150,7 @@ def filter_items(items, filter_name: str):
 
 def classify_download_problem(error: object, state: str = '') -> DownloadProblem:
     value = str(error or '').lower()
+    value_no_url = re.sub(r'https?://\S+', ' ', value)
     if state == '網址錯誤' or 'unsupported' in value or '不支援' in value:
         return DownloadProblem('unsupported_url', False)
     if ('no space' in value or 'disk full' in value or
@@ -161,15 +162,17 @@ def classify_download_problem(error: object, state: str = '') -> DownloadProblem
     if ('ffmpeg' in value and ('not found' in value or 'missing' in value)):
         return DownloadProblem('ffmpeg_missing', False)
     if (state == '封鎖/解析失敗' or 'cloudflare' in value or
-            'blocked' in value or '429' in value or '403' in value):
+            'blocked' in value or
+            bool(re.search(r'\b(?:403|429)\b', value_no_url))):
         return DownloadProblem('blocked', True)
     if ('timeout' in value or 'timed out' in value or
             'connection' in value or 'reset by peer' in value or
             'temporarily unavailable' in value):
         return DownloadProblem('network', True)
-    if ('not found' in value or '404' in value or 'removed' in value):
+    if ('not found' in value or 'removed' in value or
+            bool(re.search(r'\b404\b', value_no_url))):
         return DownloadProblem('video_missing', False)
-    if state in FAILED_STATES or value:
+    if state in FAILED_STATES or (value and state not in DONE_STATES):
         return DownloadProblem('parse_or_unknown', True)
     return DownloadProblem('', False)
 
