@@ -675,3 +675,26 @@ def test_smalltool_selected_count_reflects_target_vars_only():
 
     assert captured['text'].startswith('1 ')
     assert captured['text_color'] is ui_theme.ACCENT
+
+
+def test_cycle_theme_updates_button_label_and_persists_mode(monkeypatch):
+    for cls in (gui_modern.ModernApp, jable_smalltool.SmallToolApp):
+        app = cls.__new__(cls)
+        app._theme_mode = 'system'
+        applied, saved, labels = [], [], []
+        app._theme_btn = types.SimpleNamespace(
+            configure=lambda **kwargs: labels.append(kwargs.get('text')))
+        module = gui_modern if cls is gui_modern.ModernApp else jable_smalltool
+        monkeypatch.setattr(
+            module, 'apply_theme_mode',
+            lambda _root, mode: applied.append(mode))
+        monkeypatch.setattr(
+            module.config, 'set_theme', lambda mode: saved.append(mode))
+
+        app._cycle_theme()
+        app._cycle_theme()
+        app._cycle_theme()
+
+        assert applied == ['light', 'dark', 'system']
+        assert saved == ['light', 'dark', 'system']
+        assert labels == ['☀ Light Theme', '☾ Dark Theme', '◐ System Theme']

@@ -600,3 +600,38 @@ def test_asr_signature_identifies_reazonspeech_runtime_and_batch_policy():
     assert automatic != balanced
     assert automatic == subtitles._asr_signature(
         subtitles.recognition_profile('auto'))
+
+
+def test_reazonspeech_allows_single_empty_window_without_fallback(
+        monkeypatch, tmp_path):
+    wav = tmp_path / 'audio.wav'
+    _write_pcm16_wav(wav, 14.0)
+    whisper = tmp_path / 'whisper-cli.exe'
+    vad = tmp_path / 'whisper-vad-speech-segments.exe'
+    whisper.write_bytes(b'exe')
+    vad.write_bytes(b'vad')
+    monkeypatch.setattr(
+        subtitles, '_run_external_vad',
+        lambda *_args, **_kwargs: [
+            subtitles.SpeechIsland(0.1, 1.5),
+            subtitles.SpeechIsland(10.0, 12.0),
+        ])
+    monkeypatch.setattr(
+        subtitles, '_verify_reazonspeech_install',
+        lambda root, **_kwargs: root)
+    monkeypatch.setattr(
+        subtitles, '_run_reazonspeech_cli_batch',
+        lambda *_args, **_kwargs: [
+            _reazon_payload(text=''),
+            _reazon_payload(),
+        ])
+    monkeypatch.setattr(
+        subtitles, '_prepare_whisper_fallback_model',
+        lambda *_args: pytest.fail('single empty window must not trigger Whisper fallback'))
+
+    result = subtitles._run_reazonspeech(
+        str(whisper), str(tmp_path / 'pack'), 'vad.bin', str(wav),
+        str(tmp_path / 'out'), str(tmp_path / 'log'), None)
+
+    assert result == str(tmp_path / 'out.srt')
+    assert (tmp_path / 'out.srt').is_file()

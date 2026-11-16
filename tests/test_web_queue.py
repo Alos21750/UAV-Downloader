@@ -358,3 +358,8 @@ def test_entrypoint_binds_before_starting_downloads(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         entry.main()
     assert len(created) == 1 and created[0]._thread is None
+
+
+def test_validate_job_accepts_www_missav_urls():
+    job = validate_job({'url': 'https://www.missav.ai/en/sone-543'})
+    assert job['url'] == 'https://www.missav.ai/en/sone-543'

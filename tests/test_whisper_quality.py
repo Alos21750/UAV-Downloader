@@ -834,3 +834,15 @@ def test_user_edit_after_generation_is_never_overwritten(
     assert result.files == (str(japanese),)
     assert result.generated == ()
     assert japanese.read_text(encoding='utf-8') == _valid_srt('人工修正後')
+
+
+def test_cli_payload_skips_trailing_boundary_quantization_segment():
+    cues = subtitles._parse_whisper_cli_payload(
+        _cli_payload(
+            _cli_segment(100, 1900, '一回目'),
+            _cli_segment(2000, 2200, '端数'),
+        ),
+        subtitles.SpeechIsland(10.0, 12.0),
+        2.0,
+    )
+    assert cues == [subtitles.RecognizedSegment(10.1, 11.9, '一回目')]

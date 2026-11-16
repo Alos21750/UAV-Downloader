@@ -235,3 +235,58 @@ def test_transient_failure_uses_bounded_backoff(monkeypatch):
     assert item.next_retry_at == 1002
     assert manager.pending_count == 1
     assert manager.active_count == 0
+
+
+def test_problem_classification_ignores_url_digits_and_done_warnings():
+    url_parse_err = classify_download_problem(
+        '頁面解析失敗: https://missav.ai/sone-404', '未完成')
+    assert (url_parse_err.code, url_parse_err.retryable) == (
+        'parse_or_unknown', True)
+
+    url_timeout = classify_download_problem(
+        'connection timed out on https://jable.tv/videos/ipzz-403/', '未完成')
+    assert (url_timeout.code, url_timeout.retryable) == ('network', True)
+
+    done_warning = classify_download_problem('Subtitle failed: api timeout', '已下載')
+    assert done_warning.code == ''
+
+
+def test_pause_ignores_terminal_failed_items_and_cancels_pending_restart(monkeypatch):
+    manager = DownloadManager(max_concurrent=1)
+    failed = manager.add_item('https://example.test/failed', state='未完成', dest='download')
+    failed.error = 'connection reset'
+    assert manager.pause(failed.url) is False
+    assert failed.state == '未完成'
+    assert failed.error == 'connection reset'
+
+    active_url = 'https://example.test/active'
+    active_item = manager.add_item(active_url, state='下載中', dest='download')
+    task = _DownloadTask(active_url, 'download', manager._cancel_epoch)
+    task.job = SimpleNamespace(cancel_download=lambda cleanup=True: None)
+    with manager._lock:
+        manager._active[active_url] = task
+    monkeypatch.setattr(manager, '_start_download_thread', lambda _task: None)
+    assert manager.restart(active_url, 'download') is True
+    assert manager.pause(active_url) is True
+    manager._complete_download(task, '已取消')
+    assert active_item.state == '已暫停'
+    assert manager.pending_count == 0
+
+
+def test_empty_search_reloads_category_instead_of_noop():
+    loaded = []
+    app = SimpleNamespace(
+        _site_key='MissAV',
+        _search_var=SimpleNamespace(get=lambda: '   '),
+        _cat_var=SimpleNamespace(get=lambda: 'Latest'),
+        _categories=[{'name': 'Latest', 'url': 'https://missav.ai/dm298/today-hot'}],
+        _selected_urls={'x'},
+        _selected_videos={'x': {}},
+        _selected_source_subtitle_evidence={'x': ('a',)},
+        _update_selection_count=lambda: None,
+        _load_page=lambda: loaded.append(app._current_base_url),
+    )
+    browse.ModernApp._on_search(app)
+    assert loaded == ['https://missav.ai/dm298/today-hot']
+    assert app._page == 1
+    assert app._selected_urls == set()

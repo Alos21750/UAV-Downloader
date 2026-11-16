@@ -108,3 +108,47 @@ def test_download_asset_rejects_http_error(monkeypatch, tmp_path):
     _patch_session(monkeypatch, _FakeResp(status=404, chunks=[b'']))
     dest = str(tmp_path / 'out.exe')
     assert updater.download_asset('http://x/app.exe', dest) is False
+
+
+def test_download_asset_rejects_truncated_content_length(monkeypatch, tmp_path):
+    _patch_session(
+        monkeypatch,
+        _FakeResp(
+            chunks=[b'MZ' + b'\x00' * 3_000_010],
+            headers={'content-length': '5000000'},
+        ),
+    )
+    dest = str(tmp_path / 'out.exe')
+    assert updater.download_asset('http://x/app.exe', dest) is False
+    assert not (tmp_path / 'out.exe').exists()
+
+
+def test_check_latest_falls_back_after_candidate_error(monkeypatch):
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {
+                'tag_name': 'v3.7.1',
+                'html_url': 'https://example.invalid/releases/v3.7.1',
+                'body': 'notes',
+                'assets': [],
+            }
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, **_kwargs):
+            if url == updater.API_CANDIDATES[0]:
+                raise ConnectionError('primary failed')
+            return _Response()
+
+    monkeypatch.setattr(updater, 'API_CANDIDATES', ('https://bad.invalid/latest', 'https://good.invalid/latest'))
+    monkeypatch.setattr(updater, '_session', lambda: _Session())
+    info = updater.check_latest()
+    assert info is not None
+    assert info['version'] == '3.7.1'

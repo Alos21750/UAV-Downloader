@@ -58,3 +58,35 @@ def test_unrecognized_site_is_not_saved_as_seen(worker, monkeypatch, tmp_path):
         str(tmp_path)) == 'source_failed'
     assert instance._seen == {}
     assert any('unsupported URL' in line for line in logs)
+
+
+def test_failed_and_cancelled_downloads_return_explicit_status_not_none(
+        worker, monkeypatch, tmp_path):
+    instance, _logs = worker
+    instance._cleanup_temp = lambda _site: None
+
+    false_job = SimpleNamespace(
+        _cancel_job=False, is_url_vaildate=lambda: True,
+        start_download=lambda: False)
+    monkeypatch.setattr(watch.M3U8Sites, 'CreateSite', lambda *_args: false_job)
+    assert instance._download_one(
+        {'url': 'https://missav.ws/test-001', 'title': 'TEST-001'},
+        str(tmp_path)) == 'download_incomplete'
+
+    cancel_job = SimpleNamespace(
+        _cancel_job=True, is_url_vaildate=lambda: True,
+        start_download=lambda: False)
+    monkeypatch.setattr(watch.M3U8Sites, 'CreateSite', lambda *_args: cancel_job)
+    assert instance._download_one(
+        {'url': 'https://missav.ws/test-002', 'title': 'TEST-002'},
+        str(tmp_path)) == 'cancelled'
+
+    def boom():
+        raise RuntimeError('merge failed')
+
+    err_job = SimpleNamespace(
+        _cancel_job=False, is_url_vaildate=lambda: True, start_download=boom)
+    monkeypatch.setattr(watch.M3U8Sites, 'CreateSite', lambda *_args: err_job)
+    assert instance._download_one(
+        {'url': 'https://missav.ws/test-003', 'title': 'TEST-003'},
+        str(tmp_path)) == 'download_incomplete'

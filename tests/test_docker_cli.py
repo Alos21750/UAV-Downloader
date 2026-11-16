@@ -83,3 +83,13 @@ def test_headless_false_download_result_is_failure(monkeypatch, tmp_path):
     assert docker_cli.main([
         '--output', str(tmp_path), 'https://jable.tv/videos/example/',
     ]) == 1
+
+
+def test_gather_urls_strips_utf8_bom_in_urls_file(monkeypatch, tmp_path):
+    urls_file = tmp_path / 'urls.txt'
+    urls_file.write_bytes(
+        '\ufeff# comment line\nhttps://jable.tv/videos/bom-test/\n'.encode('utf-8'))
+    monkeypatch.setenv('URLS_FILE', str(urls_file))
+    monkeypatch.delenv('URLS', raising=False)
+    monkeypatch.delenv('URL', raising=False)
+    assert docker_cli.gather_urls() == ['https://jable.tv/videos/bom-test/']

@@ -315,3 +315,23 @@ def test_switching_back_to_local_preserves_optional_profile(
         settings.OPENAI_COMPATIBLE)
     assert profile.base_url == "https://example.test/v1"
     assert profile.model == "custom-model"
+
+
+def test_clear_api_key_works_on_blank_compatible_profile(
+        isolated_settings, monkeypatch):
+    monkeypatch.setattr(settings, "_protect_secret", lambda value: f"dpapi:{value}")
+    settings.save_translation_profile(
+        settings.OPENAI_COMPATIBLE,
+        base_url="https://example.test/v1",
+        model="custom-model",
+        api_key="secret-token",
+    )
+    raw = json.loads(isolated_settings.read_text(encoding="utf-8"))
+    raw["profiles"][settings.OPENAI_COMPATIBLE]["base_url"] = ""
+    raw["profiles"][settings.OPENAI_COMPATIBLE]["model"] = ""
+    isolated_settings.write_text(json.dumps(raw), encoding="utf-8")
+
+    cleared = settings.clear_translation_api_key(settings.OPENAI_COMPATIBLE)
+
+    assert cleared.api_key == ""
+    assert cleared.api_key_source == "none"

@@ -149,6 +149,8 @@ def filter_items(items, filter_name: str):
 
 
 def classify_download_problem(error: object, state: str = '') -> DownloadProblem:
+    if state in DONE_STATES:
+        return DownloadProblem('', False)
     value = str(error or '').lower()
     value_no_url = re.sub(r'https?://\S+', ' ', value)
     if state == '網址錯誤' or 'unsupported' in value or '不支援' in value:
