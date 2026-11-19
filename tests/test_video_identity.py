@@ -380,3 +380,8 @@ def test_legacy_uncensored_value_is_normalized():
         'chinese-subtitle', 'uncensored', 'standard',
         'english-subtitle', 'reducing-mosaic',
     }
+
+
+def test_video_code_supports_compact_missav_codes():
+    assert video_code({'_site': 'MissAV', 'url': 'https://missav.ai/en/mdhg0020'}) == 'mdhg0020'
+    assert video_code({'_site': 'MissAV', 'url': 'https://missav.ai/dm13/en/mcy0244'}) == 'mcy0244'

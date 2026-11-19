@@ -36,9 +36,9 @@ overrides work the same way as for other sites.
    any site its own date, destination, or both. Sites without an override keep
    following the shared values. Existing configurations behave exactly as
    before.
-3. Set quality, filename format, worker limit, version preference, subtitle
+3. Set quality, filename format, worker limit, shared download speed cap (MB/s), version preference, subtitle
    mode, and optional proxy. Filename format can keep the full title or only
-   the text before its first whitespace.
+   the text before its first whitespace. Enter `0` for unlimited bandwidth or `0.01–10000` MB/s; the cap applies across all active media downloads in that Watcher process.
 4. Search or browse each site tab and select targets. Whole groups can be
    selected together.
 5. Choose an interval from 1–168 hours, or one daily time in the computer's
@@ -74,16 +74,16 @@ monitoring immediately. The affected video stays pending and validated chunks
 are preserved. Check available space and device health, then explicitly start
 monitoring again; storage failures do not enter the scheduled network-retry loop.
 
-## 黃果合集：所有 EP 合成一個 MP4（v3.6.0）
+## Huangguo collections: combine all episodes into one MP4 (v3.6.0)
 
-在 **UAV Watcher → 顯示設定** 勾選「**黃果合集：將所有 EP 合成一個 MP4**」。預設關閉，開關變更從**下次掃描**生效；僅影響 Watcher 的黃果任務，其他網站及 Browser／CLI／Web 的分集下載不變。
+In **UAV Watcher → Show settings**, enable **Huangguo: combine all episodes into one MP4**. It is off by default, and changes take effect on the **next scan**; this applies only to Watcher's Huangguo jobs, while other sites and Browser/CLI/Web per-episode downloads remain unchanged.
 
-- 沿用黃果的**每站資料夾與基準日期**。日期仍是站方標示的作品更新日期，不是每集首播日。每部作品按 EP **數字順序**合併為一個 MP4，範圍是當次實際可取得的公開 EP 1…N，**不代表作品已完結**。
-- 任一集缺號、取得失敗或下載未完成時，不會悄悄跳過並生成不完整合集。已驗證的分集會保留在輸出資料夾下的 **`.uav-huangguo` 快取**，供下次重試或新增集數時重用，因此需預留額外磁碟空間。
-- 新增 EP 時會利用快取重建完整合集，驗證成功後才安全替換舊合集。如果網站暫時回傳較少集數，會保留舊合集，不以縮短版本覆蓋；未由此任務建立或已被修改的同名檔案也不會直接覆寫。
-- 只支援規格相容的 **H.264／HEVC 視訊及選用 AAC 音訊**，以 **stream copy** 合併，不重新編碼。編碼設定、解析度、時間基準或音訊配置不相容時會明確報錯並保留快取，不強行拼接。
+- Uses Huangguo's **per-site folder and baseline date** (the site's series update date, not each episode's premiere date). Each series is combined in **numeric EP order** into one MP4 covering the publicly accessible episodes actually found (`EP 1…N`), which **does not imply the series has ended**.
+- If any episode is missing, fails to resolve, or fails to download, the collection build is deferred rather than silently skipping a part. Validated episode caches are retained under `.uav-huangguo` inside the output directory for retries and future episodes, so allow extra disk space.
+- When new episodes are found, the complete collection is rebuilt from cache and replaces the prior collection atomically only after verification succeeds. If the site temporarily returns fewer episodes, the existing collection is preserved rather than overwritten by a shorter file; files with the same name not created by this task or modified externally are not blindly overwritten.
+- Supports compatible **H.264/HEVC video and optional AAC audio** joined via **stream copy** without re-encoding. Incompatible codecs, resolutions, time bases, or audio configurations report a clear error and retain the cache without forcing a broken merge.
 
-合集功能不新增中文語音辨識；將影片合成一個 MP4 不等於自動生成中文字幕。
+This feature does not add Chinese speech recognition; combining episodes into one MP4 does not automatically generate Chinese subtitles.
 
 ## Deduplication and state
 

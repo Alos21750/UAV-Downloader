@@ -491,7 +491,7 @@ class Hanime1Browser:
         _browser_local.scraper = None
 
     @classmethod
-    def fetch_categories(cls):
+    def fetch_categories(cls, lang=''):
         return [{
             'name': site_i18n.loc(site_i18n.CATEGORY_I18N, url, name),
             'url': url,
@@ -566,7 +566,7 @@ class Hanime1Browser:
         )
 
     @classmethod
-    def fetch_page(cls, url):
+    def fetch_page(cls, url, *, cancel_check=None):
         if not cls._listing_url_allowed(url):
             return []
         for attempt in range(2):

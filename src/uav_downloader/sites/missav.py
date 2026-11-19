@@ -24,13 +24,13 @@ def _unpack_js_eval(script_text):
     if not match:
         return None
     packed, a, c, keys_str = match.group(1), int(match.group(2)), int(match.group(3)), match.group(4).split('|')
-    # Guard against malformed packer params: base<=1 makes to_base loop forever;
+    digits = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    # Guard against malformed packer params: base<=1 or >62 makes to_base fail/loop;
     # an absurd `c` would allocate an unbounded lookup dict. Bail on either.
-    if a <= 1 or c < 0 or c > 200000:
+    if a <= 1 or a > len(digits) or c < 0 or c > 200000:
         return None
 
     def to_base(n, base):
-        digits = '0123456789abcdefghijklmnopqrstuvwxyz'
         if n == 0: return '0'
         s = ''
         while n:
@@ -249,12 +249,14 @@ class MissAVBrowser:
         return cats
 
     @classmethod
-    def fetch_page(cls, url):
+    def fetch_page(cls, url, *, cancel_check=None):
         def _validate(resp):
             if getattr(resp, 'status_code', 0) != 200:
                 return False
             s = BeautifulSoup(resp.content, 'html.parser')
-            return bool(s.select('div.thumbnail') or s.select('div.group, article.video-item, div[class*="grid"] > div'))
+            if s.select('div.thumbnail') or s.select('div.group, article.video-item, div[class*="grid"] > div'):
+                return True
+            return bool('/search/' in str(getattr(resp, 'url', url)) and s.select_one('nav, header, footer'))
         resp, host, reason = fetch_with_mirrors(cls._get_scraper(), url, 'missav', _validate)
         if reason != 'ok':
             if reason == 'blocked':

@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="./README.md">繁體中文</a> · <a href="./README.zh-CN.md">简体中文</a> · <a href="./README.en.md">English</a> · <strong>日本語</strong>
+  <a href="./README.md">繁體中文</a> · <a href="./README.zh-CN.md">简体中文</a> · <a href="./README.en.md">English</a> · <strong>日本語</strong> · <a href="./README.th.md">ไทย</a>
 </p>
 
 <h1 align="center">UAV Downloader</h1>
@@ -86,7 +86,7 @@
 
 ### v3.3.0 の新機能
 
-- タイ語 UI と[タイ語マニュアル](MANUAL.th.md)。永続キューのインポート／エクスポート、絞り込み、一時停止／再開、予約、回数制限付き再試行を追加。
+- タイ語 UI と[タイ語マニュアル](README.th.md)。永続キューのインポート／エクスポート、絞り込み、一時停止／再開、予約、回数制限付き再試行を追加。
 - [任意の Docker Web UI](docs/docker-cli.md#nas-web-queue-opt-in)：認証付き永続 URL キュー、進捗、キャンセル／再試行、ストレージ障害時の停止。既定は引き続き CLI です。
 - カードの「プレビュー ↗」で既定ブラウザーの配信元プレーヤーを開きます。ダウンロードは開始しません。アプリ内埋め込み再生は未実装です。
 - ファイル名テンプレート、MissAV バージョン識別、URL／パス検証、CSV 出力、ストレージ診断を強化。全件走査の 50 ページ上限を撤廃。
@@ -119,7 +119,7 @@ Browser 起動中の終了競合を修正し、バックグラウンド UI 更�
 
 1. [UAV_Browser.exe](https://github.com/Alos21750/UAV-Downloader/releases/latest/download/UAV_Browser.exe) または [UAV_Watcher.exe](https://github.com/Alos21750/UAV-Downloader/releases/latest/download/UAV_Watcher.exe) をダウンロードします。
 2. 書き込み可能なフォルダーへ置き、ダブルクリックして実行します。
-3. 初回起動時に言語を選択します。以後は日本語、English、繁體中文、简体中文、およびライト／ダークテーマをいつでも切り替えられます。
+3. 初回起動時に言語を選択します。以後は日本語、English、繁體中文、简体中文、ไทย、およびライト／ダークテーマをいつでも切り替えられます。
 
 進捗 100% 後のフルサイズ結合／MP4 再多重化ワークスペースと、字幕認識用の大きな WAV／ASR 一時ファイルは、Windows の `%TEMP%`（通常 C:）ではなく、選択した動画保存先と同じドライブを使用します。
 

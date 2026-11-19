@@ -490,3 +490,24 @@ def test_download_row_action_exposes_requeue_only_for_active_video_states():
     assert _download_row_action(_item('queued', '等待中')) == 'pause'
     assert _download_row_action(_item('paused', '已暫停')) == 'resume'
     assert _download_row_action(_item('done', '已下載')) == ''
+
+
+def test_load_csv_restores_not_before_and_skips_error_code_on_clean_active_rows(tmp_path):
+    path = tmp_path / 'download_queue.csv'
+    mgr = DownloadManager()
+    item = mgr.add_item(
+        'https://jable.tv/videos/scheduled-001/',
+        name='Scheduled Example',
+        state='等待中',
+        dest=r'C:\Videos',
+        not_before=1767225600.0,
+    )
+    assert item.not_before == 1767225600.0
+    mgr.save_csv(str(path))
+
+    loaded = DownloadManager()
+    loaded.load_csv(str(path))
+    restored = loaded.get_items()[0]
+    assert restored.not_before == 1767225600.0
+    assert restored.error == ''
+    assert restored.error_code == ''

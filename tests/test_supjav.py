@@ -773,3 +773,24 @@ def test_create_m3u8_raises_on_zero_segments(monkeypatch):
 
     with pytest.raises(Exception):
         DummyCrawler()._create_m3u8()
+
+
+def test_strip_fake_header_handles_short_tail_segments():
+    tail = (b'\x47' + b'\xaa' * 187) * 2
+    wrapped = b'\x89PNG\r\n\x1a\n' + b'\x00' * 16 + tail
+    assert supjav_mod._strip_fake_header(wrapped) == tail
+
+
+def test_direct_download_downloads_thumbnail_when_present(monkeypatch, tmp_path):
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._cancel_job = False
+    crawler._dest_folder = str(tmp_path)
+    crawler._targetName = 'with_thumb'
+    crawler._imageUrl = 'https://example.test/thumb.jpg'
+    crawler._direct_url = 'https://example.test/video.mp4'
+    (tmp_path / 'with_thumb.mp4').write_bytes(b'existing')
+    thumb_calls = []
+    crawler.download_image = lambda: thumb_calls.append(crawler._imageUrl)
+
+    assert crawler._download_direct() is True
+    assert thumb_calls == ['https://example.test/thumb.jpg']

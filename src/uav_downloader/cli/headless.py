@@ -78,7 +78,7 @@ def gather_urls(cli_urls=None, download_dir=None):
     destination = download_dir or os.environ.get('DOWNLOAD_DIR') or os.path.abspath('download')
     path = os.environ.get('URLS_FILE', os.path.join(destination, 'urls.txt'))
     if os.path.isfile(path):
-        with open(path, encoding='utf-8') as fh:
+        with open(path, encoding='utf-8-sig') as fh:
             urls += [ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith('#')]
     seen, out = set(), []
     for u in urls:

@@ -9,6 +9,7 @@
 - `UAV_Browser.exe`
 - `UAV_Watcher.exe`
 - `UAV_Watcher_portable.zip`：不使用 one-file 臨時自解壓流程的 UAV Watcher 備用版本
+- `UAV_FFmpeg_7.1_Corresponding_Source.tar.xz`：隨附 FFmpeg 的對應原始碼封存（一般使用者不需下載）
 - `UAV_SHA256SUMS.txt`
 
 AI 元件不會在每個版本重複發布。App 會在第一次實際使用對應功能時，自動從固定且已驗證的 v3.1.0 元件版本取得；正常使用者不必手動下載或解壓模型包。Release 也不再附帶 ALOS／Jable 舊檔名別名。
@@ -82,6 +83,7 @@ Download only from this project's [GitHub Releases](https://github.com/Alos21750
 - `UAV_Browser.exe`
 - `UAV_Watcher.exe`
 - `UAV_Watcher_portable.zip`, an onedir fallback without one-file temporary extraction
+- `UAV_FFmpeg_7.1_Corresponding_Source.tar.xz`, the bundled FFmpeg's corresponding source archive (ordinary users do not need it)
 - `UAV_SHA256SUMS.txt`
 
 AI components are not duplicated in each release. The app automatically fetches them from the fixed, verified v3.1.0 component release when the corresponding feature is first used; normal users do not manually download or extract a model pack. Legacy ALOS and Jable filename aliases are no longer included.

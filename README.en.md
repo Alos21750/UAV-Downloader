@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="./README.md">繁體中文</a> · <a href="./README.zh-CN.md">简体中文</a> · <strong>English</strong> · <a href="./README.ja.md">日本語</a> · <a href="./MANUAL.th.md">คู่มือภาษาไทย</a>
+  <a href="./README.md">繁體中文</a> · <a href="./README.zh-CN.md">简体中文</a> · <strong>English</strong> · <a href="./README.ja.md">日本語</a> · <a href="./README.th.md">ไทย</a>
 </p>
 
 <h1 align="center">UAV Downloader</h1>
@@ -86,7 +86,7 @@
 
 ### New in v3.3.0
 
-- Thai interface and [Thai manual](MANUAL.th.md), plus richer persistent queue controls: import/export, filters, pause/resume, scheduling and bounded retries.
+- Thai interface and [Thai manual](README.th.md), plus richer persistent queue controls: import/export, filters, pause/resume, scheduling and bounded retries.
 - [Optional Docker Web UI](docs/docker-cli.md#nas-web-queue-opt-in): authenticated persistent URL queue, progress, cancel/retry and storage-error halt; CLI remains the default.
 - **Preview ↗** beside Select opens the source's full player in your system browser without downloading. Embedded playback remains an open proposal.
 - Hardened filename templates, MissAV variant identity, URL/path validation, CSV export and storage diagnostics. Full-result scans no longer silently stop at 50 pages.
@@ -122,7 +122,7 @@ Learn more: [UAV Browser](./docs/uav-browser.md) · [UAV Watcher unattended auto
 
 1. Download [UAV_Browser.exe](https://github.com/Alos21750/UAV-Downloader/releases/latest/download/UAV_Browser.exe) or [UAV_Watcher.exe](https://github.com/Alos21750/UAV-Downloader/releases/latest/download/UAV_Watcher.exe).
 2. Put the file in a writable folder and double-click it.
-3. Pick a language on first launch. You can later switch among English, 繁體中文, 简体中文, 日本語, plus light and dark themes.
+3. Pick a language on first launch. You can later switch among English, 繁體中文, 简体中文, 日本語, and ไทย, plus light and dark themes.
 
 The full-size merge/MP4-remux workspace used after progress reaches 100%, plus large WAV/ASR subtitle scratch files, now stays on the video's selected destination volume instead of Windows `%TEMP%` (normally C:).
 

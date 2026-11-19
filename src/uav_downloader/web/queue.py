@@ -46,8 +46,9 @@ def validate_job(raw):
         host = parsed.hostname or ''
         host_allowed = any(host == h for h in (
             'jable.tv', 'fs1.app', 'jablet.com', 'jablet.tv', 'supjav.com',
-            'missav.ws', 'missav.ai', 'missav.com', 'missav.live',
-            'missav123.com', 'missav888.com', 'missav789.com',
+            'missav.ws', 'www.missav.ws', 'missav.ai', 'www.missav.ai',
+            'missav.com', 'www.missav.com', 'missav.live', 'www.missav.live',
+            'missav123.com', 'www.missav123.com', 'missav888.com', 'missav789.com',
             'hanime1.me', 'www.hanime1.me',
             'huangguoai.com', 'www.huangguoai.com'))
     except (ValueError, TypeError):

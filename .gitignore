@@ -19,7 +19,20 @@ __pycache__/
 uv.lock
 .Jable_smalltool/
 .alos-watch/
-.uav-watcher/
+.uav-*
+**/.uav-*
+tmp/
+downloads/
+state/
+.build-deps/
+ffmpeg-verification.json
+.env
+.env.*
+queue.json
+queue.tmp
+cf_overrides.json
+ui_prefs.json
+download_queue.csv
 
 # local maintenance guide (machine-specific paths — auto-loads locally, don't publish)
 CLAUDE.md

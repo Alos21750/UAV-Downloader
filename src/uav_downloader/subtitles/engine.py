@@ -2144,6 +2144,8 @@ def _parse_whisper_cli_payload(
         cue_text = _normalize_recognized_text(text)
         if not cue_text:
             continue
+        if start_ms >= maximum_ms:
+            continue
         local_start = min(max(start_ms / 1000.0, 0.0), island_duration)
         local_end = min(max(end_ms / 1000.0, 0.0), island_duration)
         absolute_start = min(
@@ -2880,10 +2882,6 @@ def _run_reazonspeech(
                         windows[window_index],
                         window_durations[window_index],
                     )
-                    if not cues:
-                        raise ReazonSpeechStructuralError(
-                            'Speech was detected but ReazonSpeech returned '
-                            'an empty window')
                     if len(recognized) + len(cues) > MAX_WHISPER_CUES:
                         raise ReazonSpeechStructuralError(
                             'ReazonSpeech returned too many segments')

@@ -106,3 +106,38 @@ def test_enrich_missav_title_avoids_duplicate_suffix():
     assert enrich_missav_title('POW-093-UNCENSORED-LEAK Melcy-chan', 'pow-093-uncensored-leak') == 'POW-093-UNCENSORED-LEAK Melcy-chan'
     assert enrich_missav_title('POW-093 梅爾西醬 [無碼流出]', 'pow-093-uncensored-leak') == 'POW-093-UNCENSORED-LEAK 梅爾西醬 [無碼流出]'
 
+
+def test_unpack_supports_base62_tokens():
+    tokens = [f't{i}' for i in range(40)]
+    tokens[38] = 'https://cdn.example/master.m3u8'
+    packed = (
+        "eval(function(p,a,c,k,e,d){return p}"
+        f"('C',62,40,'{'|'.join(tokens)}'.split('|'),0,{{}}))"
+    )
+    assert _unpack_js_eval(packed) == 'https://cdn.example/master.m3u8'
+
+
+def test_empty_search_page_returns_empty_list(monkeypatch):
+    from uav_downloader.core import config
+    from uav_downloader.sites import base
+
+    response = SimpleNamespace(
+        status_code=200,
+        content=b'<html><header>MissAV</header><main>0 results</main></html>',
+        headers={},
+        url='https://missav.ai/en/search/nonexistent',
+    )
+    monkeypatch.setattr(config, 'MIRRORS', {'missav': ['missav.ai', 'backup.invalid']})
+    monkeypatch.setattr(config, 'RATE_LIMIT_WAITS', {})
+    monkeypatch.setattr(config, 'get_cf_override', lambda _host: None)
+    monkeypatch.setattr(config, 'proxy_request_kwargs', lambda: {})
+    monkeypatch.setattr(base, '_active_host', {})
+
+    def get(url, **_kwargs):
+        if 'backup.invalid' in url:
+            raise AssertionError('empty search page should not fail over to backup mirror')
+        return response
+
+    monkeypatch.setattr(MissAVBrowser, '_get_scraper', classmethod(lambda cls: SimpleNamespace(get=get)))
+    assert MissAVBrowser.fetch_page('https://missav.ai/en/search/nonexistent') == []
+
