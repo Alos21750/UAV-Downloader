@@ -9,6 +9,7 @@ import pytest
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Windows desktop geometry')
+@pytest.mark.timeout(75)  # The real UI subprocess below has its own 60-second bound.
 def test_watcher_controls_fit_normal_and_narrow_windows(tmp_path):
     env = dict(os.environ, APPDATA=str(tmp_path), LOCALAPPDATA=str(tmp_path),
                PYTHONPATH=str(Path(__file__).resolve().parents[1] / 'src'))
