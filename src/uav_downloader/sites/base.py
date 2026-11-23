@@ -639,6 +639,7 @@ class M3U8Crawler:
     """A base class for all m3u8 crawl website tools."""
     skip_pattern = False
     segment_worker_cap = None
+    respect_segment_denials = False
     segment_retry_rounds = 6
     segment_retry_base_delay = 1.5
     segment_retry_max_delay = 6.0
@@ -1096,6 +1097,9 @@ class M3U8Crawler:
         reasons = getattr(self, '_round_failures', None)
         if reasons is not None:
             with self._speed_lock:
+                if (self.respect_segment_denials and reason == 'HTTP 403' and
+                        hasattr(self, '_denied_indices')):
+                    self._denied_indices.add(index)
                 count, earliest = reasons.get(reason, (0, index))
                 reasons[reason] = (count + 1, min(earliest, index))
         return False
@@ -1236,17 +1240,20 @@ class M3U8Crawler:
         retry_max_delay = max(retry_base_delay, float(getattr(
             self, '_segment_retry_max_delay',
             getattr(self, 'segment_retry_max_delay', 6.0))))
+        self._denied_indices = set()
         for round_num in range(1, max_rounds + 1):
             if not self._pending_set or self._cancel_job:
                 break
-            tasks = list(self._pending_set)
+            tasks = [t for t in self._pending_set if t[0] not in self._denied_indices]
+            if not tasks:
+                break
             self._round_failures = {}
             with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
                 self._t2_executor = executor
                 list(executor.map(self._scrape, tasks, timeout=None))
             self._t2_executor = None
             still_pending = len(self._pending_set)
-            if still_pending == 0:
+            if still_pending == len(self._denied_indices):
                 break
             if round_num < max_rounds:
                 print(f'\n重試第 {round_num} 次，剩餘 {still_pending} 片段...', flush=True)
@@ -1321,8 +1328,14 @@ class M3U8Crawler:
                 pending = len(self._pending_set)
                 reasons = sorted(getattr(self, '_round_failures', {}).items(),
                                  key=lambda item: (-item[1][0], item[0]))
+                denied = getattr(self, '_denied_indices', ())
+                if denied:
+                    reasons = [('HTTP 403', (len(denied), min(denied)))] + [
+                        pair for pair in reasons if pair[0] != 'HTTP 403']
                 detail = ', '.join(f'{reason} ×{n} (e.g. segment {i + 1})'
                                    for reason, (n, i) in reasons[:6])
+                if denied:
+                    detail += '; access denied; cache retained; retry manually later'
                 raise DownloadIncompleteError(pending, detail=detail)
         else:
             print("檔案已存在!!", flush=True)

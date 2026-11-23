@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import tempfile
@@ -18,6 +20,99 @@ class Prefix:
     target: Path
     total: int
     hashes: tuple
+
+
+def _plain(name):
+    # Only a single local component; reject device names and NTFS streams.
+    return (isinstance(name, str) and 0 < len(name) <= 255 and
+            name not in ('.', '..') and not name.endswith((' ', '.')) and
+            not any(ord(c) < 32 or c in '<>:"/\\|?*' for c in name) and
+            not Path(name).is_reserved())
+
+
+def _linked(path):
+    return path.is_symlink() or (getattr(path, 'is_junction', lambda: False)())
+
+
+def receipt_binding(item):
+    values = [item.job_id, item.url, str(Path(item.dest).absolute()), item.resolution, item.filename_template]
+    return hashlib.sha256(json.dumps(values).encode()).hexdigest()
+
+
+def store_prefix(queue, item, plan):
+    """Store a bounded content-addressed receipt beside the *application queue*.
+
+    The CSV pins the digest. Never discover or adopt receipts from media folders.
+    A crash between receipt and CSV publication leaves the previous pair usable.
+    """
+    dest = Path(item.dest).absolute()
+    if (plan.cache.parent != dest or plan.target.parent != dest or
+            not _plain(plan.cache.name) or not _plain(plan.target.name) or
+            plan.target.suffix.lower() != '.mp4' or not 0 < len(plan.hashes) < plan.total <= 100_000):
+        raise ValueError('Invalid recovery location or count')
+    payload = json.dumps([1, receipt_binding(item), plan.cache.name, plan.target.name, plan.total,
+                          [[n, h.hex()] for n, h in plan.hashes]], separators=(',', ':')).encode()
+    key = hashlib.sha256(payload).hexdigest()
+    folder = Path(str(queue) + '.receipts')
+    if _linked(folder):
+        raise ValueError('Invalid receipt directory')
+    folder.mkdir(exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=folder)
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, folder / key)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    return key
+
+
+def discard_receipt(queue, key):
+    """Forget only a known, byte-identical app receipt, never any cached media."""
+    if not re.fullmatch(r'[0-9a-f]{64}', key):
+        return
+    file = Path(str(queue) + '.receipts') / key
+    try:
+        if not _linked(file.parent) and not _linked(file) and file.is_file():
+            with file.open('rb') as f:
+                if os.fstat(f.fileno()).st_size > 9_000_000 or hashlib.sha256(f.read(9_000_001)).hexdigest() != key:
+                    return
+            file.unlink()
+    except OSError:
+        pass  # Optional metadata cleanup must not invalidate the committed queue.
+
+
+def restore_prefix(queue, item, key, slug):
+    if not slug or not re.fullmatch(r'[0-9a-f]{64}', key or ''):
+        return None
+    dest = Path(item.dest).absolute()
+    source = Path(str(queue) + '.receipts') / key
+    try:
+        if _linked(source.parent) or _linked(source) or not source.is_file():
+            return None
+        with source.open('rb') as f:
+            if os.fstat(f.fileno()).st_size > 9_000_000:
+                return None
+            data = f.read(9_000_001)
+        if hashlib.sha256(data).hexdigest() != key:
+            return None
+        entry = json.loads(data)
+        if (not isinstance(entry, list) or len(entry) != 6 or
+                entry[:2] != [1, receipt_binding(item)]):
+            return None
+        cache, target, total, hashes = entry[2:]
+        if (cache != slug[:80] or not _plain(cache) or not _plain(target) or
+                not target.lower().endswith('.mp4') or type(total) is not int or
+                not isinstance(hashes, list) or not 0 < len(hashes) < total <= 100_000 or
+                any(type(n) is not int or not 0 < n <= 2**32 or
+                    not re.fullmatch(r'[0-9a-f]{64}', h) for n, h in hashes)):
+            return None
+        return Prefix(dest / cache, dest / target, total,
+                      tuple((n, bytes.fromhex(h)) for n, h in hashes))
+    except (ValueError, TypeError, RecursionError, OSError):
+        return None
 
 
 class Receipts:
@@ -52,6 +147,8 @@ def export_prefix(plan, ffmpeg, cancelled=lambda: False):
     check()
     if not ffmpeg:
         raise ValueError('FFmpeg is unavailable')
+    if _linked(plan.cache):
+        raise ValueError('Cached segment directory changed')
     with tempfile.TemporaryDirectory(prefix='.uav-partial-', dir=plan.target.parent) as temp:
         ts = Path(temp, 'prefix.ts')
         mp4 = Path(temp, 'prefix.mp4')

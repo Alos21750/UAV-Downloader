@@ -1855,7 +1855,8 @@ class SmallToolWorker:
             ok = site_obj.start_download()
             if ok is False and not getattr(site_obj, '_cancel_job', False):
                 self._log('  [ERR] download failed')
-                self._cleanup_temp(site_obj)
+                if not getattr(site_obj, 'respect_segment_denials', False):
+                    self._cleanup_temp(site_obj)
                 return
 
             if getattr(site_obj, '_cancel_job', False):
@@ -1968,12 +1969,12 @@ class SmallToolWorker:
             return 'download_incomplete'
         except MirrorsBlockedError as e:
             self._log(f'  [BLOCKED] {e}')
-            if site_obj:
+            if site_obj and not getattr(site_obj, 'respect_segment_denials', False):
                 self._cleanup_temp(site_obj)
             return 'blocked'
         except Exception as e:
             self._log(f'  [ERR] {e}')
-            if site_obj:
+            if site_obj and not getattr(site_obj, 'respect_segment_denials', False):
                 self._cleanup_temp(site_obj)
         finally:
             with self._active_site_lock:

@@ -20,7 +20,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '互動式多站下載器',
-        'version_label': 'v3.8.1',
+        'version_label': 'v3.8.2',
         'by_author': '',
         'status_ready': '就緒',
         'site_label': '網站',
@@ -414,7 +414,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': 'Interactive Multi-Site Downloader',
-        'version_label': 'v3.8.1',
+        'version_label': 'v3.8.2',
         'by_author': '',
         'status_ready': 'Ready',
         'site_label': 'Site',
@@ -809,7 +809,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '交互式多站下载器',
-        'version_label': 'v3.8.1',
+        'version_label': 'v3.8.2',
         'by_author': '',
         'status_ready': '就绪',
         'site_label': '网站',
@@ -1203,7 +1203,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '対話型マルチサイトダウンローダー',
-        'version_label': 'v3.8.1',
+        'version_label': 'v3.8.2',
         'by_author': '',
         'status_ready': '準備完了',
         'site_label': 'サイト',
@@ -1901,6 +1901,15 @@ for _language, _label in {
     'th': 'บทบาท (คำสำคัญในชื่อเรื่อง)',
 }.items():
     STRINGS[_language]['st_missav_title_roles'] = _label
+
+for _language, (_failed, _close) in {
+    'en': ('Could not save the queue and recovery records', 'Close without saving these changes?'),
+    'zh': ('無法儲存佇列及復原紀錄', '仍要關閉並捨棄這次未儲存的變更嗎？'),
+    'zh-Hans': ('无法保存队列和恢复记录', '仍要关闭并放弃未保存的更改吗？'),
+    'ja': ('キューと復元記録を保存できません', '変更を保存せずに終了しますか？'),
+    'th': ('บันทึกคิวและข้อมูลกู้คืนไม่สำเร็จ', 'ปิดโดยไม่บันทึกการเปลี่ยนแปลงหรือไม่?'),
+}.items():
+    STRINGS[_language].update(queue_save_failed=_failed, close_without_save=_close)
 
 STATE_LABELS = {
     '下載中': {'en': 'Downloading', 'th': 'กำลังดาวน์โหลด', 'zh': '下載中', 'zh-Hans': '下载中', 'ja': 'ダウンロード中'},

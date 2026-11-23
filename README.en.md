@@ -46,7 +46,7 @@ Browser moves search to a second row when space is tight. Watcher keeps its cate
 
 ### v3.8.0: missing segments and partial export
 
-For incomplete MissAV jobs, Browser can save a verified contiguous prefix as a separate `*.partial.mp4` without changing the job or its cache. This requires receipts from the current session. Browser and Watcher report final-round segment failure reasons and positions and support AES-128 key changes within a playlist.
+From v3.8.2, Browser saves partial-export receipts with the queue. After a failed retry or restart, export the verified contiguous beginning to a separate `*.partial.mp4`. Unverified legacy caches are not adopted. A MissAV segment returning HTTP 403 is not requested again in the same download attempt; transient failures still retry.
 
 ### v3.7.0: clearer desktop UI and custom bandwidth limits
 

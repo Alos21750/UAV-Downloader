@@ -120,11 +120,17 @@ There is no need to repeat a whole batch to make a report.
 Starting in v3.8.0, eligible incomplete MissAV jobs offer **Export partial** in
 the Browser queue. The dialog shows how many consecutive segments from the
 beginning can be saved. It never skips a gap to join unrelated pieces.
-UAV verifies the bytes against the current session’s records, then remuxes
+UAV verifies the bytes against the saved job's segment hashes, then remuxes
 them to a separate `*.partial.mp4`. Existing files, the retry cache and
-the incomplete job are preserved. After restarting the app, or when the
-first segment cannot be verified, this action is unavailable. Use Retry to
-try for the complete video. If the error mentions storage I/O, check the
+the incomplete job are preserved. From v3.8.2 onward, keep the queue CSV and
+its sibling `.receipts` directory together. An eligible saved job can still
+export after a failed retry or a restart. The action is hidden while a job is
+running. Old caches without receipts cannot be retroactively verified. Files
+that have been removed or altered will fail verification before publication.
+For MissAV, an explicit segment HTTP 403 is respected for that attempt; other
+transient segment failures retain their normal retries. Browser offers manual
+retry later; Watcher may try on the next scheduled scan. This is not a way
+to obtain denied media. If the error mentions storage I/O, check the
 destination before retrying.
 
 Hanime1's Ura Anime and short-anime category pages use a compact card layout.

@@ -32,7 +32,9 @@ from uav_downloader.core import updater
 from uav_downloader.core.ssl import SharedSSLAdapter, get_shared_ssl_context
 from uav_downloader.sites.jabletv import JableTVBrowser
 from uav_downloader.sites.missav import MissAVBrowser, SiteMissAV
-from uav_downloader.core.partial_export import Receipts, export_prefix
+from uav_downloader.core.partial_export import (
+    Receipts, discard_receipt, export_prefix, receipt_binding, restore_prefix, store_prefix,
+)
 from uav_downloader.sites.supjav import SupJavBrowser
 from uav_downloader.sites.huangguo import HuangguoBrowser
 from uav_downloader.sites.hanime1 import (
@@ -178,13 +180,19 @@ def _download_row_action(item):
 
 
 # ── Download Manager ────────────────────────────────────────────────
+def available_prefix(item):
+    if item and item.state in ('未完成', '封鎖/解析失敗', '網址錯誤'):
+        return getattr(item, 'partial_prefix', None)
+    return None
+
+
 class DownloadItem:
     __slots__ = (
         'url', 'name', 'state', 'progress', 'speed', 'error', 'dest',
         'source_subtitle_evidence', 'local', 'auto_requeues',
         'job_id', 'site', 'resolution', 'filename_template', 'thumbnail',
         'eta', 'error_code', 'retry_count', 'next_retry_at',
-        'not_before', 'created_at', 'updated_at', 'partial_prefix',
+        'not_before', 'created_at', 'updated_at', 'partial_prefix', 'saved_prefix',
     )
 
     def __init__(
@@ -197,7 +205,7 @@ class DownloadItem:
         self.name = name or url.rstrip('/').split('/')[-1]
         self.state = state
         self.progress = 0
-        self.partial_prefix = None  # Volatile: never infer ownership from a restored CSV.
+        self.partial_prefix = self.saved_prefix = None
         self.speed = ''
         self.error = ''
         self.dest = dest or ''
@@ -324,6 +332,7 @@ class DownloadManager:
         self._cancel_epoch = 0
         self._schedule_timer = None
         self._schedule_deadline = 0.0
+        self._saved_recovery_keys = {}
 
     @property
     def max_concurrent(self) -> int:
@@ -351,6 +360,7 @@ class DownloadManager:
                     created_at=created_at)
             else:
                 item = self._items[url]
+                before = (item.dest, item.resolution, item.filename_template)
                 # Refresh stale/persisted labels from the card the user just
                 # selected.  Older queue entries often contained only a code,
                 # even though the current MissAV result has a useful title.
@@ -370,6 +380,8 @@ class DownloadManager:
                 if not_before:
                     item.not_before = max(0.0, float(not_before))
                 item.updated_at = time.time()
+                if before != (item.dest, item.resolution, item.filename_template):
+                    item.partial_prefix = item.saved_prefix = None
                 evidence = set(item.source_subtitle_evidence)
                 evidence.update(trusted_chinese_subtitle_evidence({
                     'url': url,
@@ -483,6 +495,8 @@ class DownloadManager:
                 return False
             item = self._items.get(url)
             if item:
+                if dest and item.dest and os.path.abspath(dest) != os.path.abspath(item.dest):
+                    item.partial_prefix = item.saved_prefix = None
                 item.dest = dest or item.dest
             else:
                 self._items[url] = DownloadItem(url, dest=dest)
@@ -783,15 +797,13 @@ class DownloadManager:
                         # no *new* prefix. The previous receipt remains safe:
                         # every byte is verified again at export.
                         old = item.partial_prefix
-                        if plan is not None or (old and (
-                                os.path.abspath(job._get_video_savename()) != str(old.target)
-                                or len(job._tsList) != old.total)):
+                        if plan is not None and not (
+                                old and plan.cache == old.cache and plan.target == old.target
+                                and plan.total == old.total and len(plan.hashes) < len(old.hashes)
+                                and old.hashes[:len(plan.hashes)] == plan.hashes):
                             item.partial_prefix = plan
-            elif not isinstance(exc, DownloadIncompleteError):
-                with self._lock:
-                    item = self._items.get(url)
-                    if item and self._active.get(url) is task:
-                        item.partial_prefix = None
+            # A failed retry does not invalidate earlier verified media. Export
+            # rehashes every segment before FFmpeg ever sees it.
             if isinstance(exc, StorageWriteError):
                 # No automatic queue advance or cleanup writes on a device
                 # that has just failed. The user must explicitly retry.
@@ -1115,7 +1127,7 @@ class DownloadManager:
                     item.speed = ''
                     item.eta = ''
                 if state in DONE_STATES:
-                    item.partial_prefix = None
+                    item.partial_prefix = item.saved_prefix = None
                     item.retry_count = 0
                     item.next_retry_at = 0.0
                 item.updated_at = time.time()
@@ -1293,15 +1305,27 @@ class DownloadManager:
         if folder:
             os.makedirs(folder, exist_ok=True)
         tmp = path + '.tmp'
+        keys = set()
         with open(tmp, 'w', encoding='utf-8', newline='') as f:
             w = csv.writer(f)
             w.writerow([
                 '狀態', '名稱', '進度', '速度', '網址', '目標',
                 '字幕來源證據', '工作 ID', '網站', '解析度',
                 '檔名範本', '縮圖', '錯誤', '錯誤代碼',
-                '重試次數', '排程時間', '建立時間', '更新時間',
+                '重試次數', '排程時間', '建立時間', '更新時間', '部分匯出驗證',
             ])
             for item in items:
+                key = ''
+                plan = item.partial_prefix
+                if plan is not None:
+                    identity = (os.path.abspath(path), receipt_binding(item))
+                    saved = item.saved_prefix
+                    if saved and saved[0] is plan and saved[1] == identity:
+                        key = saved[2]
+                    else:
+                        key = store_prefix(path, item, plan)
+                        item.saved_prefix = (plan, identity, key)
+                    keys.add(key)
                 w.writerow([item.state, item.name, f'{item.progress}%',
                             item.speed, item.url, item.dest,
                             '|'.join(item.source_subtitle_evidence),
@@ -1309,10 +1333,14 @@ class DownloadManager:
                             item.filename_template, item.thumbnail,
                             item.error, item.error_code, item.retry_count,
                             item.not_before, item.created_at,
-                            item.updated_at])
+                            item.updated_at, key])
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
+        queue = os.path.abspath(path)
+        for key in self._saved_recovery_keys.get(queue, set()) - keys:
+            discard_receipt(queue, key)
+        self._saved_recovery_keys[queue] = keys
 
     def load_csv(self, path: str):
         try:
@@ -1364,6 +1392,13 @@ class DownloadManager:
                             item.retry_count = 0
                         item.updated_at = _number(
                             '更新時間', item.created_at)
+                        key = row.get('部分匯出驗證', '')
+                        if key and item.state not in DONE_STATES:
+                            plan = restore_prefix(path, item, key, SiteMissAV.validate_url(url))
+                            if plan is not None:
+                                item.partial_prefix = plan
+                                item.saved_prefix = (plan, (os.path.abspath(path), receipt_binding(item)), key)
+                                self._saved_recovery_keys.setdefault(os.path.abspath(path), set()).add(key)
             # Keep load memory bounded after the safety read limit. Python 3.7+
             # dict insertion order is the recency proxy for terminal items.
             kept = _select_persist(self.get_items(), MAX_PERSIST_ROWS)
@@ -4922,7 +4957,7 @@ class ModernApp(ctk.CTk):
 
     def _export_partial(self, url: str):
         item = next((i for i in self._dlmgr.get_items() if i.url == url), None)
-        plan = item.partial_prefix if item and item.state == '未完成' else None
+        plan = available_prefix(item)
         if not plan:
             return
         if getattr(self, '_partial_stop', None) is not None:
@@ -5489,15 +5524,15 @@ class ModernApp(ctk.CTk):
             i.url, i.name, i.state, i.progress, i.dest,
             i.source_subtitle_evidence, i.resolution,
             i.filename_template, i.error, i.error_code,
-            i.retry_count, i.not_before,
+            i.retry_count, i.not_before, id(i.partial_prefix),
         ) for i in items)
         if sig == self._last_download_save_sig:
             return
         try:
             self._dlmgr.save_csv(CSV_PATH)
             self._last_download_save_sig = sig
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            self._status_lbl.configure(text=f"{T('queue_save_failed')}: {exc}")
 
     def _build_dl_row(self, item: DownloadItem) -> dict:
         """Build one download row once; return widget handles for in-place updates."""
@@ -5678,7 +5713,7 @@ class ModernApp(ctk.CTk):
             w['last_detail'] = detail
 
         retry_action = _download_row_action(item)
-        show_partial = bool(item.state == '未完成' and getattr(item, 'partial_prefix', None))
+        show_partial = bool(available_prefix(item))
         if 'partial_btn' in w and show_partial != w['partial_visible']:
             if show_partial:
                 w['partial_btn'].pack(side='right', padx=(2, 0), before=w['_before_remove'])
@@ -5855,10 +5890,20 @@ class ModernApp(ctk.CTk):
             partial_stop.set()
         from uav_downloader.ui.bandwidth import commit_bandwidth_controls
         commit_bandwidth_controls(self)
-        self._is_closing = True
         if not getattr(self, '_startup_complete', True):
+            self._is_closing = True
             self._close_requested = True
             return
+        try:
+            # load_csv already converts in-flight states to resumable rows.
+            # Never silently close if a recovery receipt or queue cannot be saved.
+            with self._dlmgr._lock:
+                self._dlmgr.save_csv(CSV_PATH)
+        except (OSError, ValueError) as exc:
+            if not messagebox.askyesno(PRODUCT_NAME,
+                    f"{T('queue_save_failed')}: {exc}\n\n{T('close_without_save')}", parent=self):
+                return
+        self._is_closing = True
         if self._dl_drain_id:
             try:
                 self.after_cancel(self._dl_drain_id)
@@ -5867,18 +5912,6 @@ class ModernApp(ctk.CTk):
             self._dl_drain_id = None
         try:
             self._thumb_executor.shutdown(wait=False, cancel_futures=True)
-        except Exception:
-            pass
-        try:
-            with self._dlmgr._lock:
-                for item in self._dlmgr._items.values():
-                    if item.state in (
-                            '準備中', '下載中', '等待中', '等待重試',
-                            '已排程', '字幕準備中', '字幕辨識中',
-                            '字幕翻譯中'):
-                        item.state = '未完成'
-                        item.speed = ''
-                self._dlmgr.save_csv(CSV_PATH)
         except Exception:
             pass
         self._dlmgr.cancel_all(cleanup=False)

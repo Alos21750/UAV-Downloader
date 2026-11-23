@@ -102,6 +102,7 @@ class SiteMissAV(M3U8Crawler):
     # bound all MissAV instances together, and allow a longer resumable tail
     # retry for isolated 429/timeout failures near 100%.
     segment_worker_cap = 4
+    respect_segment_denials = True
     segment_retry_rounds = 10
     segment_retry_base_delay = 1.5
     segment_retry_max_delay = 8.0
