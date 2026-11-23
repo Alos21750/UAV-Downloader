@@ -18,7 +18,7 @@ The current registry exposes grouped targets for all five supported sites:
 | Site | Selectable targets | Examples |
 |---|---:|---|
 | JableTV | 129 | new releases, rankings, categories, tags |
-| MissAV | 102 | feeds, categories, tags, makers |
+| MissAV | 115 | feeds, roles (title keywords), categories, tags, makers |
 | SupJav | 10 | feeds, rankings, primary categories |
 | Hanime1 | 272 | feeds, 9 genres, 6 date ranges, 8 durations, all 240 tags |
 | Huangguo | 2 | AI short dramas, AI animated dramas |
@@ -44,6 +44,8 @@ overrides work the same way as for other sites.
 5. Choose an interval from 1–168 hours, or one daily time in the computer's
    local timezone.
 6. Start monitoring.
+
+**MissAV roles:** In the MissAV tab, choose one or more roles under **Roles (title keywords)**. Search the controls by localized label or common alias. Watcher checks up to ten recent pages per role-only scan, sharing one pass across all selected roles. It matches the displayed titles locally; these are not official provider tags, performer profiles or a complete historical search. A title can match several roles but is queued only once. Per-site dates, folder and normal version preferences still apply. Selecting the full Latest feed supersedes the narrower filters.
 
 Check Now performs one immediate scan without creating a duplicate schedule.
 The activity panel can remain collapsed while idle and opened only when a log

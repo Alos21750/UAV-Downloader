@@ -33,8 +33,8 @@ def test_smalltool_registry_has_complete_grouped_targets():
     assert len(list(iter_targets('JableTV'))) == 129
     assert [len(g['targets']) for g in SITES['JableTV']['groups']] == [
         6, 12, 17, 13, 11, 19, 16, 16, 13, 6]
-    assert len(list(iter_targets('MissAV'))) == 102
-    assert [len(g['targets']) for g in SITES['MissAV']['groups']] == [7, 22, 37, 36]
+    assert len(list(iter_targets('MissAV'))) == 115
+    assert [len(g['targets']) for g in SITES['MissAV']['groups']] == [7, 13, 22, 37, 36]
     assert len(list(iter_targets('SupJav'))) == 10
     assert [len(g['targets']) for g in SITES['SupJav']['groups']] == [4, 6]
     assert len(list(iter_targets('Hanime1'))) == 272

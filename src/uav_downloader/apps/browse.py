@@ -2377,15 +2377,19 @@ class ModernApp(ctk.CTk):
         tab = self._tab_frames['browse']
 
         # ── Two-level workspace toolbar ─────────────────────────────
-        top = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0, height=112)
+        top = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0)
         top.pack(fill='x')
-        top.pack_propagate(False)
 
         filters = ctk.CTkFrame(top, fg_color='transparent')
         filters.pack(fill='x', padx=20, pady=(10, 6))
+        filters.grid_columnconfigure(1, weight=1)
+        facets = ctk.CTkFrame(filters, fg_color='transparent')
+        facets.grid(row=0, column=0, sticky='w')
+        query = ctk.CTkFrame(filters, fg_color='transparent')
+        query.grid(row=0, column=1, sticky='ew', padx=(10, 0))
         self._site_var = ctk.StringVar(value=self._site_key)
         self._site_menu = ctk.CTkSegmentedButton(
-            filters, values=list(SITES.keys()), variable=self._site_var,
+            facets, values=list(SITES.keys()), variable=self._site_var,
             command=self._on_site_change, height=36, corner_radius=CONTROL_RADIUS,
             fg_color=BG_INPUT, selected_color=ACCENT,
             selected_hover_color=ACCENT_HOVER,
@@ -2395,7 +2399,7 @@ class ModernApp(ctk.CTk):
 
         self._cat_var = ctk.StringVar(value=T('loading_browse'))
         self._cat_menu = ctk.CTkOptionMenu(
-            filters, values=[T('loading_browse')], variable=self._cat_var,
+            facets, values=[T('loading_browse')], variable=self._cat_var,
             command=self._on_cat_change, width=190, height=36,
             fg_color=BG_INPUT, button_color=BORDER_HOVER,
             button_hover_color=ACCENT, text_color=TEXT_PRI,
@@ -2405,7 +2409,7 @@ class ModernApp(ctk.CTk):
         self._cat_menu.pack(side='left', padx=(10, 0))
 
         self._hanime_filter_box = ctk.CTkFrame(
-            filters, fg_color='transparent')
+            facets, fg_color='transparent')
         self._hanime_filter_btn = ctk.CTkButton(
             self._hanime_filter_box, text=T('hanime_filter_button'),
             command=self._open_hanime_filters,
@@ -2417,19 +2421,38 @@ class ModernApp(ctk.CTk):
 
         self._search_var = ctk.StringVar()
         self._search_entry = ctk.CTkEntry(
-            filters, textvariable=self._search_var,
-            placeholder_text=T('search_placeholder'), height=36,
+            query, textvariable=self._search_var,
+            placeholder_text=T('search_placeholder'), width=280, height=36,
             fg_color=BG_INPUT, border_color=BORDER, border_width=1,
             corner_radius=CONTROL_RADIUS, text_color=TEXT_PRI,
             font=(ui_font(), 11))
-        self._search_entry.pack(
-            side='left', fill='x', expand=True, padx=(10, 8))
         self._search_entry.bind('<Return>', lambda e: self._on_search())
-        ctk.CTkButton(filters, text=T('search_btn'), command=self._on_search,
+        ctk.CTkButton(query, text=T('search_btn'), command=self._on_search,
                       width=76, height=36, corner_radius=CONTROL_RADIUS,
                       fg_color=ACCENT,
                       hover_color=ACCENT_HOVER,
-                      text_color=WHITE, font=(ui_font(), 11, 'bold')).pack(side='left')
+                      text_color=WHITE, font=(ui_font(), 11, 'bold')).pack(side='right')
+        self._search_entry.pack(side='left', fill='x', expand=True, padx=(0, 8))
+
+        # Use measured control widths so translations, DPI and site-specific
+        # filters participate in the breakpoint without rebuilding any inputs.
+        compact = None
+
+        def reflow_filters(_event):
+            nonlocal compact
+            needed = (facets.winfo_reqwidth() + query.winfo_reqwidth()
+                      + filters._apply_widget_scaling(10))
+            stacked = filters.winfo_width() < needed
+            if stacked == compact:
+                return
+            compact = stacked
+            query.grid(row=int(stacked), column=0 if stacked else 1,
+                       columnspan=2 if stacked else 1, sticky='ew',
+                       padx=0 if stacked else (10, 0), pady=(6, 0) if stacked else 0)
+
+        # CTkFrame.bind targets its drawing canvas, not the geometry container.
+        tk.Misc.bind(filters, '<Configure>', reflow_filters, add='+')
+        tk.Misc.bind(facets, '<Configure>', reflow_filters, add='+')
         self._sync_hanime_filter_button_visibility()
 
         actions = ctk.CTkFrame(top, fg_color='transparent')
@@ -2579,11 +2602,18 @@ class ModernApp(ctk.CTk):
         ctk.CTkLabel(row2, text=T('url_label'), text_color=TEXT_SEC, width=86,
                      font=(ui_font(), 11, 'bold'), anchor='w').pack(side='left')
         self._dl_url_var = ctk.StringVar(value=self._url_input)
-        ctk.CTkEntry(row2, textvariable=self._dl_url_var,
-                     height=38, corner_radius=CONTROL_RADIUS,
-                     fg_color=BG_INPUT, border_color=BORDER, border_width=1,
-                     text_color=TEXT_PRI, font=('Consolas', 10)).pack(side='left', fill='x',
-                                               expand=True, padx=10)
+        url_entry = ctk.CTkEntry(
+            row2, textvariable=self._dl_url_var, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            border_color=BORDER, border_width=1,
+            text_color=TEXT_PRI, font=(ui_font(), 12))
+        ctk.CTkButton(
+            row2, text=T('download_btn'), width=112, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=WHITE, font=(ui_font(), 11, 'bold'),
+            command=self._download_url).pack(side='right')
+        url_entry.pack(side='left', fill='x', expand=True, padx=10)
+        url_entry.bind('<Return>', lambda _event: self._download_url())
 
         # Separator
         ctk.CTkFrame(tab, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
@@ -2596,17 +2626,11 @@ class ModernApp(ctk.CTk):
 
         actions_left = ctk.CTkFrame(bar, fg_color='transparent')
         actions_left.grid(row=0, column=0, padx=(16, 8), pady=10, sticky='w')
-        ctk.CTkButton(actions_left, text=T('download_btn'), width=112, height=38,
-                      corner_radius=CONTROL_RADIUS,
-                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                      text_color=WHITE,
-                      font=(ui_font(), 11, 'bold'),
-                      command=self._download_url).pack(side='left')
         ctk.CTkButton(actions_left, text=T('download_all_btn'), width=126, height=38,
                       corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-                      command=self._download_all).pack(side='left', padx=(8, 0))
+                      command=self._download_all).pack(side='left')
         local_actions = ctk.CTkFrame(bar, fg_color='transparent')
         local_actions.grid(row=1, column=0, columnspan=3,
                            padx=16, pady=(0, 10), sticky='w')
@@ -3927,14 +3951,12 @@ class ModernApp(ctk.CTk):
 
     def _sync_hanime_filter_button_visibility(self):
         box = getattr(self, '_hanime_filter_box', None)
-        search_entry = getattr(self, '_search_entry', None)
-        if box is None or search_entry is None:
+        if box is None:
             return
         try:
             if self._site_key == 'Hanime1':
                 if not box.winfo_manager():
-                    box.pack(
-                        side='left', padx=(10, 0), before=search_entry)
+                    box.pack(side='left', padx=(10, 0))
                 self._refresh_hanime_filter_button()
             else:
                 box.pack_forget()

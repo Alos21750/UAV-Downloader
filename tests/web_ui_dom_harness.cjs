@@ -17,6 +17,7 @@ class Element {
   }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   focus(options) { this.focusOptions=options;document.activeElement=this; }
+  setAttribute(key,value) { this[key]=value; }
 }
 const elements=new Map();
 document={body:new Element('body'), documentElement:{lang:'zh-Hant'},activeElement:null,
@@ -37,7 +38,38 @@ const container=document.getElementById('jobs');
 const cards=()=>container.querySelectorAll('.job');
 const first=cards()[0], second=cards()[1];
 first.querySelector('details').open=true;
+if(input.scenario==='session-races'){
+  (async()=>{
+    const pending=[];
+    context.fetch=()=>new Promise(resolve=>pending.push(resolve));
+    const reply=(i,status,data)=>pending[i]({status,ok:status===200,json:async()=>data});
+    const connect=()=>{elements.get('token').value='fixture';return elements.get('connect').onclick();};
+    let p=connect();reply(0,200,snapshot);await p;
+    const old=context.refresh(), recent=context.refresh();
+    reply(2,200,{jobs:[jobs[1]],halted:false});await recent;
+    reply(1,200,snapshot);await old;
+    assert.deepEqual(cards().map(c=>c.dataset.jobId),['two']);
+    const stale=context.refresh();context.disconnect();
+    p=connect();reply(4,200,snapshot);await p;
+    reply(3,401,{});await stale;
+    assert.equal(elements.get('workspace').hidden,false,'An old session disconnected the new one');
+    const afterLogout=context.refresh();context.disconnect();reply(5,200,snapshot);await afterLogout;
+    assert.equal(cards().length,0,'Old response repopulated after logout');
+    console.log('PASS '+input.scenario);
+  })().catch(err=>{console.error(err);process.exitCode=1;});
+  return;
+}
 switch(input.scenario){
+  case 'unchanged-snapshot':
+    context.render(JSON.parse(JSON.stringify(snapshot)));
+    assert.equal(cards()[0],first,'Identical poll rebuilt the job DOM');
+    break;
+  case 'reset-snapshot':
+    context.disconnect();
+    assert.equal(cards().length,0);
+    context.render(snapshot);
+    assert.equal(cards().length,2,'Reconnecting must redraw an identical queue');
+    break;
   case 'logs':
     context.render(snapshot);
     assert.equal(cards()[0].querySelector('details').open,true,'Expanded event log collapsed on refresh');
@@ -49,7 +81,7 @@ switch(input.scenario){
   case 'button-focus':
     first.querySelector('button').focus();context.render(snapshot);
     assert.equal(document.activeElement,cards()[0].querySelector('button'),'Queue action lost keyboard focus');
-    assert.equal(document.activeElement.focusOptions.preventScroll,true);
+    assert.equal(cards()[0],first,'Unchanged poll must not steal/restore native focus');
     break;
   case 'summary-focus':
     first.querySelector('summary').focus();context.render(snapshot);

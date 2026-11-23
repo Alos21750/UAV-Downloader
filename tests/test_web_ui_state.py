@@ -12,6 +12,7 @@ from uav_downloader.web.ui import JS
 @pytest.mark.skipif(shutil.which('node') is None, reason='Node.js is required for the offline JS DOM harness')
 @pytest.mark.parametrize('scenario', [
     'logs', 'button-focus', 'summary-focus', 'outside-focus', 'reorder', 'changed-action',
+    'unchanged-snapshot', 'reset-snapshot', 'session-races',
 ])
 def test_actual_queue_render_preserves_reader_state_without_mutation(scenario):
     harness = Path(__file__).with_name('web_ui_dom_harness.cjs')

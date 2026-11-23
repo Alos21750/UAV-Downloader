@@ -109,7 +109,12 @@ def drain(app):
 
 def test_category_state_exists_before_any_widgets_and_only_active_site_renders(lazy_app):
     app = lazy_app
-    assert len(app._check_vars) == 545
+    expected = {
+        key for site, data in SITES.items() for group in data['groups']
+        for key in (f"{site}|__group__|{group['id']}",
+                    *(selection_key(site, t['id']) for t in group['targets']))
+    }
+    assert set(app._check_vars) == expected
     assert app._target_widgets == []
     step(app)
     assert 0 < len(app._target_widgets) < 129
@@ -117,6 +122,36 @@ def test_category_state_exists_before_any_widgets_and_only_active_site_renders(l
     assert len(app._target_widgets) == 129
     assert app._category_site_views['JableTV']['complete'] is True
     assert set(app._category_site_views) == {'JableTV'}
+
+
+def test_missav_role_search_uses_same_aliases_before_and_after_lazy_build(
+        lazy_app, monkeypatch):
+    app = lazy_app
+    targets = [
+        {'id': 'role:nurse', 'name': '護士', 'role_slug': 'nurse'},
+        {'id': 'role:flight-attendant', 'name': '空姐', 'role_slug': 'flight-attendant'},
+    ]
+    group = {'id': 'roles', 'name': '角色', 'targets': targets}
+    monkeypatch.setitem(SITES['MissAV'], 'groups', [group])
+    monkeypatch.setattr(watch, 'target_label', lambda target: target['name'])
+    app._check_vars['MissAV|__group__|roles'] = Var()
+    for target in targets:
+        app._check_vars[selection_key('MissAV', target['id'])] = Var(value=True)
+    app._category_filter_var.set('  ＦＬＩＧＨＴ　ＡＴＴＥＮＤＡＮＴ  ')
+    app._category_tabview.set(app._category_tab_names['MissAV'])
+    app._on_category_tab_changed()
+    drain(app)
+    def visible():
+        return [w.kwargs['text'] for w, _ in app._filter_groups[-1]['items'] if w.visible]
+    assert visible() == ['空姐']
+    for query, expected in [
+        ('flight-attendant', ['空姐']), ('护士', ['護士']), ('roles', ['護士', '空姐']),
+        ('角色', ['護士', '空姐']), ('役柄', ['護士', '空姐']), ('absent', []),
+    ]:
+        app._category_filter_var.set(query)
+        app._filter_targets()
+        assert visible() == expected, query
+    assert [t['id'] for t in app._get_selected_targets()] == [t['id'] for t in targets]
 
 
 def test_saved_hidden_selections_and_unbuilt_group_select_all_survive(lazy_app):

@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from uav_downloader.i18n import sites as site_i18n
 from uav_downloader.i18n.locales import T
+from uav_downloader.apps.missav_roles import ROLE_TERMS
 from uav_downloader.sites.jabletv import JableTVBrowser
 from uav_downloader.sites.missav import MissAVBrowser
 from uav_downloader.sites.supjav import SupJavBrowser
@@ -163,8 +164,16 @@ MISSAV_MAKERS = [
     for name, dm_id in _MISSAV_MAKER_ROWS
 ]
 
+# These are local filters of the existing recent feed, not provider genre URLs.
+MISSAV_RECENT_URL = next(t['url'] for t in MISSAV_FEEDS if t['id'] == 'feed:latest')
+MISSAV_ROLES = [
+    _target(f'role:{slug}', site_i18n.TAGS[slug]['zh'], MISSAV_RECENT_URL,
+            tag_slug=slug, role_slug=slug)
+    for slug in ROLE_TERMS
+]
 MISSAV_GROUPS = [
     _group('feeds', 'Feeds', MISSAV_FEEDS),
+    _group('roles', 'Roles (title keywords)', MISSAV_ROLES),
     _group('providers', 'Providers', MISSAV_PROVIDERS),
     _group('genres', 'Genres', MISSAV_GENRES),
     _group('makers', 'Makers', MISSAV_MAKERS),
@@ -261,6 +270,7 @@ SITES = {
 
 
 _GROUP_LABEL_KEYS = {
+    'roles': 'st_missav_title_roles',
     'feeds': 'st_group_feeds',
     'categories': 'st_group_categories',
     'providers': 'st_group_providers',
@@ -289,11 +299,16 @@ def iter_targets(site_name):
 
 
 def find_target(site_name, target_id=None, legacy_name=None):
-    for target in iter_targets(site_name):
-        if target_id and target['id'] == target_id:
-            return target
-        if legacy_name and legacy_name in (target['name'], target_label(target)):
-            return target
+    if target_id:
+        for target in iter_targets(site_name):
+            if target['id'] == target_id:
+                return target
+        if site_name == 'MissAV' and str(target_id).startswith('role:'):
+            return None  # An unknown narrow filter must never become the full feed.
+    if legacy_name:
+        for target in iter_targets(site_name):
+            if legacy_name in (target['name'], target_label(target)):
+                return target
     return None
 
 

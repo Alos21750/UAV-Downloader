@@ -23,22 +23,51 @@ HTML = '''<!doctype html>
 
 CSS = '''*{box-sizing:border-box}body{margin:0;background:#f1f3f5;color:#18222d;font:15px system-ui,-apple-system,sans-serif}main{max-width:1060px;margin:auto;padding:32px 22px}header,.section-head,.row{display:flex;align-items:center;justify-content:space-between;gap:16px}header{margin-bottom:30px;align-items:flex-start}h1{font-size:30px;letter-spacing:-1px;margin:0 0 8px}h2{font-size:19px;margin:0 0 18px}p{line-height:1.6}.eyebrow{color:#226563;font-size:11px;letter-spacing:2px;font-weight:800;margin:0 0 9px}header p{margin-bottom:0;color:#526373}section{background:white;border:1px solid #dce2e8;border-radius:14px;padding:24px;margin-bottom:20px;box-shadow:0 3px 16px #152c4110}input,select,textarea{font:inherit;padding:11px;border:1px solid #c1cbd5;border-radius:7px;background:white;color:inherit;width:100%;margin-top:7px}textarea{resize:vertical;min-height:104px}input:focus,select:focus,textarea:focus{outline:2px solid #27807a;outline-offset:2px}button{font:inherit;font-weight:650;border:1px solid #c1cbd5;border-radius:7px;background:white;color:#253d50;padding:10px 15px;cursor:pointer;white-space:nowrap}button:hover{background:#eff5f5}button:disabled{opacity:.55;cursor:wait}.primary{background:#226563;color:white;border-color:#226563}.primary:hover{background:#174e4b}.row input{margin:0;min-width:0}.settings{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin:18px 0}.hint,footer{font-size:12px;color:#667683}.job{border-top:1px solid #e2e7ec;padding:20px 0 4px}.job:first-child{border:0}.job-url{overflow-wrap:anywhere;font-size:14px;margin:0 0 10px}.job-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.status{font-size:12px;padding:5px 9px;border-radius:5px;background:#edf1f5}.status.completed{background:#e2f3e9;color:#18623d}.status.failed,.status.interrupted{background:#fff0df;color:#815019}progress{width:100%;height:9px;accent-color:#226563;display:block;margin:16px 0 8px}.meta{font-size:12px;color:#667683}.actions{display:flex;gap:8px;flex-wrap:wrap}.actions button{padding:7px 11px;font-size:12px}details{margin:12px 0;color:#667683;font-size:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px system-ui}#halted{background:#fff1df;border-radius:9px;padding:16px;margin-bottom:16px}#notice{color:#a33c25;min-height:24px}footer{text-align:center;margin:28px 0}[hidden]{display:none!important}@media(max-width:600px){main{padding:22px 14px}h1{font-size:25px}header{gap:8px}header button{padding:8px}section{padding:18px}.settings{grid-template-columns:1fr;gap:14px}.section-head{align-items:flex-start}.section-head button{font-size:12px;padding:8px}.row{gap:8px}.job-head{align-items:flex-start;flex-direction:column}}'''
 
+CSS += '''
+body{background:#f2f5f5;line-height:1.45}
+main{max-width:1280px;padding:clamp(16px,3vw,40px)}
+header{align-items:center;border-bottom:1px solid #d2dfdf;padding-bottom:20px}
+h1{font-size:clamp(1.45rem,3vw,2.15rem);line-height:1.12}
+.section-head{align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.section-head h2{margin:0}section{min-width:0}
+#auth{max-width:680px;margin:0 auto 20px}
+#workspace{display:grid;gap:20px;align-items:start}
+#workspace section{margin:0}
+.settings>label{display:flex;flex-direction:column;min-width:0}
+.settings>label>span{flex:1}
+.job-url{min-width:0;margin:0}.status{flex:none}
+.job-head{align-items:baseline}
+.job{padding:16px 0}.job+.job{border-top:1px solid #dce5e5}
+.actions button,summary{min-height:38px}summary{display:list-item;cursor:pointer;padding:9px 0}
+.hint,footer,.meta,details{color:#526571}
+#jobs>.hint:only-child{padding:24px 16px;border:1px dashed #aebfc0;border-radius:9px;background:#f7faf9;text-align:center}
+button:focus-visible,summary:focus-visible{outline:3px solid #247973;outline-offset:3px}
+@media(min-width:960px){#workspace{grid-template-columns:minmax(300px,4fr) minmax(0,6fr)}}
+@media(max-width:600px){header{align-items:flex-start;margin-bottom:18px}.job-head{gap:6px}
+ .section-head button,.actions button,header button,summary{min-height:44px}
+ .settings{gap:12px}.job-url{font-size:15px}button{white-space:normal}input,select,textarea{font-size:16px}}
+'''
+
 JS = r'''"use strict";
 let token = "", timer = null, language = "zh", busy = false;
+let lastView = null, session = 0, readSeq = 0;
 const $ = id => document.getElementById(id);
 const say = (zh,en) => language === "zh" ? zh : en;
 const labels = {pending:["等待中","Pending"],running:["下載中","Running"],cancelling:["正在取消","Cancelling"],completed:["完成","Completed"],failed:["失敗","Failed"],cancelled:["已取消","Cancelled"],interrupted:["中斷，請重試","Interrupted — retry"]};
 function notice(message) { $("notice").textContent = message; }
-function disconnect() { token=""; $("token").value=""; clearTimeout(timer); $("workspace").hidden=true; $("auth").hidden=false; $("jobs").replaceChildren(); }
+function disconnect() { session++; readSeq++; lastView=null; busy=false; token=""; $("token").value=""; clearTimeout(timer); $("connect").disabled=false; $("workspace").hidden=true; $("auth").hidden=false; $("jobs").replaceChildren(); }
 async function api(path, body) {
+  const requestSession=session;
   const response = await fetch(path, {method:body === undefined ? "GET" : "POST", cache:"no-store", credentials:"omit", headers:{"Authorization":"Bearer "+token,"Content-Type":"application/json"}, body:body === undefined ? undefined : JSON.stringify(body)});
-  if (response.status === 401) { disconnect(); throw new Error(say("權杖不正確或已失效","Token is invalid or expired")); }
+  if (response.status === 401) { if(session===requestSession){disconnect();notice(say("權杖不正確或已失效","Token is invalid or expired"));} throw new Error("Unauthorized"); }
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Request failed");
   return data;
 }
 function node(tag, text, className) {const element=document.createElement(tag); if(text !== undefined)element.textContent=text;if(className)element.className=className;return element;}
 function render(data) {
+  const view=language+JSON.stringify(data);
+  if(view===lastView)return;
   $("halted").hidden=!data.halted;
   const container=$("jobs"), fragment=document.createDocumentFragment();
   const openLogs=new Set(), active=document.activeElement;
@@ -53,7 +82,7 @@ function render(data) {
     card.dataset.jobId=job.id;
     const title=node("p",job.url,"job-url"), label=labels[job.status]||[job.status,job.status];
     head.append(title,node("span",label[language==="zh"?0:1],"status "+job.status));card.append(head);
-    const progress=node("progress");progress.max=job.total||1;if(job.total)progress.value=Math.min(job.done,job.total);else if(job.status!=="running")progress.value=job.status==="completed"?1:0;card.append(progress);
+    const progress=node("progress");progress.setAttribute("aria-label",say("下載進度","Download progress"));progress.max=job.total||1;if(job.total)progress.value=Math.min(job.done,job.total);else if(job.status!=="running")progress.value=job.status==="completed"?1:0;card.append(progress);
     const count=job.total ? Math.floor(job.done)+" / "+Math.floor(job.total)+" "+job.unit : say("等待來源或進度","Waiting for source/progress");
     card.append(node("p",count+" · "+(job.speed_bps/1048576).toFixed(2)+" MiB/s · "+job.resolution,"meta"));
     const actions=node("div",undefined,"actions");
@@ -65,6 +94,7 @@ function render(data) {
     details.append(summary,node("pre",job.logs.join("\n")));card.append(details);fragment.append(card);
   }
   container.replaceChildren(fragment);
+  lastView=view;
   if(focusedJob) {
     const card=Array.from(container.querySelectorAll(".job")).find(item=>item.dataset.jobId===focusedJob);
     if(card) {
@@ -73,9 +103,9 @@ function render(data) {
     }
   }
 }
-async function refresh() { clearTimeout(timer);if(!token)return;try{render(await api("/api/queue"));}catch(error){notice(error.message);}finally{if(token)timer=setTimeout(refresh,2000);}}
-async function action(path,body) {if(busy)return;busy=true;try{await api(path,body);notice("");await refresh();}catch(error){notice(error.message);}finally{busy=false;}}
-$("connect").onclick=async()=>{token=$("token").value.trim();$("token").value="";try{const data=await api("/api/queue");$("auth").hidden=true;$("workspace").hidden=false;notice("");render(data);timer=setTimeout(refresh,2000);}catch(error){token="";notice(error.message);}};
+async function refresh() { clearTimeout(timer);if(!token)return;const id=++readSeq;try{const data=await api("/api/queue");if(id===readSeq)render(data);}catch(error){if(id===readSeq)notice(error.message);}finally{if(token&&id===readSeq)timer=setTimeout(refresh,2000);}}
+async function action(path,body) {if(busy)return;const active=session;busy=true;try{await api(path,body);if(active===session){notice("");await refresh();}}catch(error){if(active===session)notice(error.message);}finally{if(active===session)busy=false;}}
+$("connect").onclick=async()=>{if($("connect").disabled)return;const active=++session;$("connect").disabled=true;token=$("token").value.trim();$("token").value="";try{const data=await api("/api/queue");if(active!==session)return;$("auth").hidden=true;$("workspace").hidden=false;notice("");render(data);timer=setTimeout(refresh,2000);}catch(error){if(active===session){disconnect();notice(error.message);}}finally{if(active===session)$("connect").disabled=false;}};
 $("token").onkeydown=event=>{if(event.key==="Enter")$("connect").click();};
 $("disconnect").onclick=disconnect;
 $("add").onclick=async()=>{const urls=$("urls").value.split(/\r?\n/).map(value=>value.trim()).filter(Boolean);if(!urls.length||urls.length>100){notice(say("請輸入 1 至 100 個網址","Enter 1 to 100 URLs"));return;}await action("/api/queue",{jobs:urls.map(url=>({url,resolution:$("resolution").value,max_workers:Number($("workers").value),speed_limit_mib:Number($("limit").value)}))});};

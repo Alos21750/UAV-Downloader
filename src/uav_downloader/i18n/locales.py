@@ -20,7 +20,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '互動式多站下載器',
-        'version_label': 'v3.8.0',
+        'version_label': 'v3.8.1',
         'by_author': '',
         'status_ready': '就緒',
         'site_label': '網站',
@@ -414,7 +414,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': 'Interactive Multi-Site Downloader',
-        'version_label': 'v3.8.0',
+        'version_label': 'v3.8.1',
         'by_author': '',
         'status_ready': 'Ready',
         'site_label': 'Site',
@@ -809,7 +809,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '交互式多站下载器',
-        'version_label': 'v3.8.0',
+        'version_label': 'v3.8.1',
         'by_author': '',
         'status_ready': '就绪',
         'site_label': '网站',
@@ -1203,7 +1203,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '対話型マルチサイトダウンローダー',
-        'version_label': 'v3.8.0',
+        'version_label': 'v3.8.1',
         'by_author': '',
         'status_ready': '準備完了',
         'site_label': 'サイト',
@@ -1894,6 +1894,13 @@ for _language, _partial_labels in {
 }.items():
     STRINGS[_language].update(zip(
         ('partial_export', 'partial_confirm', 'partial_busy', 'partial_error'), _partial_labels))
+
+for _language, _label in {
+    'en': 'Roles (title keywords)', 'zh': '角色（標題關鍵字）',
+    'zh-Hans': '角色（标题关键词）', 'ja': '役柄（タイトルのキーワード）',
+    'th': 'บทบาท (คำสำคัญในชื่อเรื่อง)',
+}.items():
+    STRINGS[_language]['st_missav_title_roles'] = _label
 
 STATE_LABELS = {
     '下載中': {'en': 'Downloading', 'th': 'กำลังดาวน์โหลด', 'zh': '下載中', 'zh-Hans': '下载中', 'ja': 'ダウンロード中'},

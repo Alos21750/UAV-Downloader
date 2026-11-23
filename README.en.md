@@ -38,6 +38,12 @@
 
 ## Three workflows, one download core
 
+### v3.8.1: role tracking and responsive layouts
+
+In Watcher → MissAV → **Roles (title keywords)**, choose any of 13 roles. They share a scan of the first 10 recent-feed pages. Titles without matching words are not included. Selecting the full Latest feed still tracks all its items.
+
+Browser moves search to a second row when space is tight. Watcher keeps its categories and controls accessible in shorter windows. The NAS queue switches between one and two columns and avoids redrawing unchanged jobs.
+
 ### v3.8.0: missing segments and partial export
 
 For incomplete MissAV jobs, Browser can save a verified contiguous prefix as a separate `*.partial.mp4` without changing the job or its cache. This requires receipts from the current session. Browser and Watcher report final-round segment failure reasons and positions and support AES-128 key changes within a playlist.
@@ -166,7 +172,7 @@ SmartScreen reputation warnings and Defender Antivirus quarantine are different 
 | Site | Selectable targets | Groups |
 |---|---:|---|
 | JableTV | 129 | Feeds/rankings, primary categories, and tag groups |
-| MissAV | 102 | Feeds/rankings, categories/tags, and makers |
+| MissAV | 115 | Feeds/rankings, roles (title keywords), categories/tags and makers |
 | SupJav | 10 | Feeds/rankings and primary categories |
 | Hanime1 | 272 | Release/upload/ranking feeds, 9 genres including Ura and short anime, 6 date ranges, 8 durations, and all 240 tags |
 | Huangguo | 2 | AI short dramas and AI cartoons; filter by series update date and expand actual episode links |

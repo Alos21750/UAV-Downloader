@@ -55,7 +55,7 @@ def test_primary_text_contrast_is_accessible_in_both_themes():
 
 
 def test_current_version_and_global_smalltool_copy_are_complete():
-    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '3.8.0'
+    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '3.8.1'
     required = {
         'st_activity', 'st_progress_idle', 'st_footer_short',
         'st_categories_expand', 'st_categories_collapse',
@@ -81,7 +81,7 @@ def test_current_version_and_global_smalltool_copy_are_complete():
         'st_huangguo_collection', 'st_huangguo_collection_hint',
     }
     for language, strings in locales.STRINGS.items():
-        assert strings['version_label'] == 'v3.8.0', language
+        assert strings['version_label'] == 'v3.8.1', language
         assert required <= strings.keys(), language
 
 
@@ -89,15 +89,15 @@ def test_windows_version_resources_match_app_version():
     root = Path(__file__).resolve().parents[1]
     workflow = (root / '.github' / 'workflows' / 'windows-build.yml').read_text(
         encoding='utf-8')
-    assert '$expected = "3.8.0.0"' in workflow
+    assert '$expected = "3.8.1.0"' in workflow
     packaging = root / 'packaging' / 'windows'
     generator = (packaging / 'gen_version.py').read_text(
         encoding='utf-8')
-    assert 'VERSION = (3, 8, 0, 0)' in generator
+    assert 'VERSION = (3, 8, 1, 0)' in generator
     for name in ('UAV_Browser.version', 'UAV_Watcher.version'):
         resource = (packaging / name).read_text(encoding='utf-8')
-        assert 'filevers=(3, 8, 0, 0)' in resource
-        assert "StringStruct('FileVersion', '3.8.0.0')" in resource
+        assert 'filevers=(3, 8, 1, 0)' in resource
+        assert "StringStruct('FileVersion', '3.8.1.0')" in resource
         assert "StringStruct('ProductName', 'UAV Downloader')" in resource
     for name in ('UAV_Browser.spec', 'UAV_Watcher.spec'):
         spec = (packaging / name).read_text(encoding='utf-8')
@@ -256,7 +256,7 @@ def test_smalltool_balances_category_and_activity_regions():
     source = inspect.getsource(jable_smalltool.SmallToolApp._build_ui)
     assert "main.pack(fill='both', expand=True" in source
     assert 'main.grid_columnconfigure(0, weight=1)' in source
-    assert 'main.grid_rowconfigure(1, weight=1)' in source
+    assert 'main.grid_rowconfigure(1, weight=3)' in source
     assert 'cfg_card.grid(row=0' in source
     assert 'selection.grid(row=1' in source
     assert 'ctrl.grid(row=2' in source
@@ -268,7 +268,7 @@ def test_smalltool_balances_category_and_activity_regions():
     collapse_source = inspect.getsource(
         jable_smalltool.SmallToolApp._set_categories_collapsed)
     assert '1, weight=0, minsize=0' in collapse_source
-    assert '1, weight=1, minsize=0' in collapse_source
+    assert '1, weight=3, minsize=0' in collapse_source
 
     start_source = inspect.getsource(
         jable_smalltool.SmallToolApp._start_worker)

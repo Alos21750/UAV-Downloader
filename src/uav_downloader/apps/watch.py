@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import re
+import unicodedata
 from concurrent.futures import CancelledError
 from itertools import count
 from dataclasses import dataclass
@@ -203,6 +204,7 @@ from uav_downloader.sites.base import (
 )
 from uav_downloader.core import config
 from uav_downloader.apps.downloads import classify_download_problem
+from uav_downloader.apps.missav_roles import ROLE_TERMS, matched_role_ids
 from uav_downloader.apps.huangguo_collection import (
     build_collection, group_collection_rows,
 )
@@ -272,7 +274,7 @@ APP_NAME = APP_DISPLAY_NAMES['watch']
 APP_VERSION = VERSION
 DEFAULT_WINDOW_WIDTH = 1180
 DEFAULT_WINDOW_HEIGHT = 780
-MIN_WINDOW_WIDTH = 760
+MIN_WINDOW_WIDTH = 620
 MIN_WINDOW_HEIGHT = 440
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
@@ -552,10 +554,20 @@ def _normalize_version_pref(cfg: dict) -> str:
 
 
 def _targets_for_scan(targets: list[dict], version_preference: str) -> list[dict]:
-    """Add MissAV's category×subtitle view before the normal fallback view."""
+    """Fold role choices into one recent-feed pass; a full feed takes precedence."""
     expanded = []
+    role_ids = {f'role:{slug}': slug for slug in ROLE_TERMS}
+    missav_ids = [t.get('id') for t in targets if t.get('site') == 'MissAV']
+    role_slugs = tuple(dict.fromkeys(role_ids[i] for i in missav_ids
+                                     if isinstance(i, str) and i in role_ids))
+    roles_emitted = False
     for target in targets:
         target_id = str(target.get('id') or '')
+        if target.get('site') == 'MissAV' and target_id in role_ids:
+            if not roles_emitted and 'feed:latest' not in missav_ids:
+                expanded.append({**target, '_role_slugs': role_slugs})
+                roles_emitted = True
+            continue
         if (target.get('site') == 'MissAV' and
                 version_preference == 'chinese-subtitle' and
                 target_id.startswith(('genres:', 'makers:', 'provider:'))):
@@ -1377,6 +1389,11 @@ class SmallToolWorker:
                 continue
             cat_name = target_label(cat)
             cat_url = cat['url']
+            role_slugs = ()
+            if site_name == 'MissAV' and cat.get('role_slug'):
+                role_slugs = target.get('_role_slugs') or (cat['role_slug'],)
+                cat_name = T('st_missav_title_roles') + ': ' + ', '.join(
+                    target_label(find_target('MissAV', f'role:{slug}')) for slug in role_slugs)
 
             self._log(f'── {site_name} / {cat_name} ──')
 
@@ -1391,6 +1408,10 @@ class SmallToolWorker:
                 base_url = f'{base_url}{sep}sort_by=post_date'
 
             max_pages = MAX_SCAN_PAGES if first_run else DAILY_SCAN_PAGES
+            if role_slugs:
+                # A rare role may never match. Do not walk the provider's entire
+                # catalogue or issue a detail request for every unrelated card.
+                max_pages = min(10, max_pages) if max_pages is not None else 10
             reached_baseline = False
             consecutive_skips = 0
             listing_fingerprints = set()
@@ -1443,11 +1464,25 @@ class SmallToolWorker:
                     break
                 listing_fingerprints.add(fingerprint)
 
+                if role_slugs:
+                    matches = []
+                    for row in videos:
+                        hits = matched_role_ids(row.get('title'), role_slugs)
+                        if hits:
+                            matches.append({**row, '_matched_role_slugs': hits})
+                    videos = matches
+
                 target_id = str(cat.get('id') or target.get('id') or '')
                 for video in videos:
                     video['_site'] = site_name
-                    video['_target_id'] = target_id
-                    video['_category'] = cat_name
+                    if role_slugs:
+                        hits = video['_matched_role_slugs']
+                        video['_target_id'] = 'role:' + hits[0]
+                        video['_category'] = ', '.join(
+                            target_label(find_target('MissAV', 'role:' + slug)) for slug in hits)
+                    else:
+                        video['_target_id'] = target_id
+                        video['_category'] = cat_name
                     video['_download_dest'] = site_dest
                     if video.get('_huangguo_collection'):
                         video['_collection_resolution'] = collection_resolution
@@ -1617,7 +1652,7 @@ class SmallToolWorker:
                 self._set_scan_state(
                     site_name, cat_name, page, len(all_new_videos))
 
-                if (not first_run and page_all_seen and not reached_baseline
+                if (not first_run and page_all_seen and not reached_baseline and not role_slugs
                         and not legacy_source_urls
                         and not (site_name == 'Huangguo' and collection_mode)):
                     self._log('  All seen on this page — stopping.')
@@ -2115,6 +2150,22 @@ class SmallToolWorker:
 
 
 # ── GUI ──────────────────────────────────────────────────────────────
+def _category_search_text(value: str) -> str:
+    return ' '.join(unicodedata.normalize('NFKC', value).casefold().split())
+
+
+def _category_search_index(site, group, group_name, target, label) -> str:
+    slug = target.get('role_slug')
+    if site != 'MissAV' or group['id'] != 'roles' or not slug:
+        return _category_search_text(label)
+    from uav_downloader.apps.missav_roles import ROLE_TERMS
+    from uav_downloader.i18n.sites import TAG_GROUPS, TAGS
+    terms = (label, target['name'], slug, slug.replace('-', ' '), group_name, group['name'],
+             'roles', 'บทบาท', *TAG_GROUPS['角色'].values(),
+             *TAGS.get(slug, {}).values(), *ROLE_TERMS.get(slug, ()))
+    return '\n'.join(dict.fromkeys(_category_search_text(term) for term in terms))
+
+
 class SmallToolApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -2587,6 +2638,7 @@ class SmallToolApp(ctk.CTk):
             except (tk.TclError, AttributeError):
                 pass
         self._reflow_settings(logical_width)
+        self._reflow_watcher_controls(logical_width, logical_height)
         columns = category_columns_for_width(logical_width)
         if columns == self._category_columns:
             return
@@ -2673,7 +2725,7 @@ class SmallToolApp(ctk.CTk):
         main = ctk.CTkFrame(self, fg_color='transparent')
         main.pack(fill='both', expand=True, padx=18, pady=(14, 12))
         main.grid_columnconfigure(0, weight=1)
-        main.grid_rowconfigure(1, weight=1)
+        main.grid_rowconfigure(1, weight=3)
         main.grid_rowconfigure(4, weight=0)
         self._main_frame = main
 
@@ -2742,6 +2794,7 @@ class SmallToolApp(ctk.CTk):
             pady=(0, 10), sticky='ew')
         settings_scroll.grid_columnconfigure(1, weight=1)
         self._settings_scroll = settings_scroll
+        self._last_settings_height = None
 
         proxy_label = ctk.CTkLabel(
             settings_scroll, text=T('proxy_url_label'), text_color=TEXT_SEC,
@@ -3069,10 +3122,12 @@ class SmallToolApp(ctk.CTk):
         self._selection_panel = selection
 
         selection_header = ctk.CTkFrame(selection, fg_color='transparent')
+        self._selection_header = selection_header
         selection_header.pack(fill='x', padx=16, pady=(14, 8))
-        ctk.CTkLabel(
+        self._selection_heading = ctk.CTkLabel(
             selection_header, text=T('st_select_hint'), text_color=TEXT_PRI,
-            font=(font_family, 13, 'bold')).pack(side='left')
+            font=(font_family, 13, 'bold'))
+        self._selection_heading.pack(side='left')
         self._selected_count_lbl = ctk.CTkLabel(
             selection_header, text=f'0 {T("selected")}', text_color=TEXT_DIM,
             font=(font_family, 12, 'bold'))
@@ -3112,7 +3167,6 @@ class SmallToolApp(ctk.CTk):
             hover_color=ACCENT_HOVER, text_color=WHITE,
             font=(font_family, 11, 'bold'),
             command=self._start_worker)
-        self._start_btn.pack(side='left')
 
         self._stop_btn = ctk.CTkButton(
             ctrl, text=T('st_stop'), width=92, height=40,
@@ -3122,7 +3176,6 @@ class SmallToolApp(ctk.CTk):
             font=(font_family, 11),
             command=self._stop_worker,
             state='disabled')
-        self._stop_btn.pack(side='left', padx=(8, 0))
 
         self._check_now_btn = ctk.CTkButton(
             ctrl, text=T('st_check_now'), width=112, height=40,
@@ -3131,7 +3184,6 @@ class SmallToolApp(ctk.CTk):
             hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
             font=(font_family, 11),
             command=self._check_now)
-        self._check_now_btn.pack(side='left', padx=(8, 0))
 
         self._schedule_btn = ctk.CTkButton(
             ctrl, text=T('st_schedule'), width=104, height=40,
@@ -3140,7 +3192,6 @@ class SmallToolApp(ctk.CTk):
             hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
             font=(font_family, 12, 'bold'),
             command=self._open_schedule)
-        self._schedule_btn.pack(side='left', padx=(8, 0))
 
         self._activity_toggle_btn = ctk.CTkButton(
             ctrl, text=T('st_activity_show'), width=108, height=40,
@@ -3149,12 +3200,16 @@ class SmallToolApp(ctk.CTk):
             hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
             font=(font_family, 12),
             command=self._toggle_activity)
-        self._activity_toggle_btn.pack(side='left', padx=(8, 0))
 
         status_box = ctk.CTkFrame(
             ctrl, fg_color=BG_BADGE, corner_radius=CONTROL_RADIUS,
             border_width=1, border_color=BORDER)
-        status_box.pack(side='right')
+        self._action_controls = (self._start_btn, self._stop_btn, self._check_now_btn,
+                                 self._schedule_btn, self._activity_toggle_btn, status_box)
+        self._compact_actions = None
+        self._compact_header = None
+        self._watcher_header = hdr
+        self._watcher_header_widgets = (version_box, self._theme_btn, self._lang_menu)
         self._status_lbl = ctk.CTkLabel(
             status_box, text=T(self._status_key), text_color=self._status_fg,
             font=(font_family, 12, 'bold'))
@@ -3209,7 +3264,7 @@ class SmallToolApp(ctk.CTk):
         self._schedule_summary_lbl.pack(side='right')
 
         self._log_box = ctk.CTkTextbox(
-            activity, fg_color=BG_INPUT, text_color=TEXT_SEC,
+            activity, height=92, fg_color=BG_INPUT, text_color=TEXT_SEC,
             border_width=0, corner_radius=6,
             font=('Consolas', 10), wrap='word', state='disabled')
         self._log_box.pack(fill='both', expand=True, padx=10, pady=(0, 10))
@@ -3217,6 +3272,43 @@ class SmallToolApp(ctk.CTk):
         activity.grid_remove()
         self._progress_visible = False
         self._activity_visible = False
+        self._reflow_watcher_controls(*_initial_window_size(*_logical_work_area(self)))
+
+    def _reflow_watcher_controls(self, width, height):
+        """Keep fixed controls reachable and leave categories the flexible space."""
+        compact = width < 780
+        if self._compact_actions != compact:
+            self._compact_actions = compact
+            parent = self._action_controls[0].master
+            for col in range(6):
+                flexible = col < 3 if compact else col == 5
+                parent.grid_columnconfigure(col, weight=int(flexible),
+                                            uniform='action' if compact and flexible else '')
+            for i, widget in enumerate(self._action_controls):
+                row, col = divmod(i, 3) if compact else (0, i)
+                sticky = 'e' if not compact and i == 5 else 'ew'
+                widget.grid(row=row, column=col, sticky=sticky,
+                            padx=(0 if col == 0 else 6, 0), pady=(4 if row else 0, 0))
+            if compact:
+                self._selection_heading.pack_forget()
+            else:
+                self._selection_heading.pack(side='left', before=self._selected_count_lbl)
+        short = height < 600
+        if self._compact_header != short:
+            self._compact_header = short
+            self._watcher_header.configure(height=56 if short else 72)
+            for widget in self._watcher_header_widgets:
+                widget.pack_configure(pady=8 if short else 18)
+            self._main_frame.pack_configure(padx=10 if short else 18,
+                                            pady=(6, 6) if short else (14, 12))
+            self._selection_header.pack_configure(pady=(5, 2) if short else (14, 8))
+            self._selection_panel.grid_configure(pady=(5, 4) if short else (12, 10))
+            if self._settings_expanded:
+                # grid_configure also remaps a removed panel on Tk.
+                self._selection_panel.grid_remove()
+            self._log_box.configure(height=36 if short else 92)
+            for button in self._action_controls[:-1]:
+                button.configure(height=32 if short else 40)
 
     def _schedule_summary_text(self) -> str:
         schedule = _normalize_scan_schedule(
@@ -3602,8 +3694,9 @@ class SmallToolApp(ctk.CTk):
                 border_width=1, border_color=BORDER_CARD)
             group_header = ctk.CTkFrame(group_frame, fg_color='transparent')
             group_header.pack(fill='x', padx=12, pady=(9, 5))
+            group_name = group_label(group)
             ctk.CTkLabel(
-                group_header, text=f'{group_label(group)}  {len(group["targets"])}',
+                group_header, text=f'{group_name}  {len(group["targets"])}',
                 text_color=TEXT_PRI, font=(self._category_font, 11, 'bold')).pack(side='left')
             ctk.CTkCheckBox(
                 group_header, text=T('st_select_all'),
@@ -3640,11 +3733,12 @@ class SmallToolApp(ctk.CTk):
                         self._sync_group_select(sn, gid))
                 row, col = divmod(index, self._category_columns)
                 cb.grid(row=row, column=col, sticky='w', padx=6, pady=3)
-                self._target_widgets.append((cb, label.casefold()))
+                index_text = _category_search_index(site_name, group, group_name, target, label)
+                self._target_widgets.append((cb, index_text))
                 group_widgets.append(cb)
-                filter_items.append((cb, label.casefold()))
-                query = self._category_filter_var.get().strip().casefold()
-                matches = not query or query in label.casefold()
+                filter_items.append((cb, index_text))
+                query = _category_search_text(self._category_filter_var.get())
+                matches = not query or query in index_text
                 filter_group['item_visibility'][cb] = matches
                 if matches:
                     self._set_category_group_visible(filter_group, True)
@@ -3698,7 +3792,7 @@ class SmallToolApp(ctk.CTk):
                 fill='both', expand=True, padx=10, pady=(0, 10))
             if '_main_frame' in self.__dict__:
                 self._main_frame.grid_rowconfigure(
-                    1, weight=1, minsize=0)
+                    1, weight=3, minsize=0)
                 self._selection_panel.grid_configure(sticky='nsew')
             else:
                 self._selection_panel.pack_configure(
@@ -3717,7 +3811,7 @@ class SmallToolApp(ctk.CTk):
             text_color=ACCENT if count else TEXT_DIM)
 
     def _filter_targets(self, *_args):
-        query = self._category_filter_var.get().strip().casefold()
+        query = _category_search_text(self._category_filter_var.get())
         active_site = self._active_category_site()
         for group in self._filter_groups:
             if active_site and group.get('site', active_site) != active_site:
