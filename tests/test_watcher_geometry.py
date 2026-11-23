@@ -45,7 +45,11 @@ def _probe(profile):
         assert x + widget.winfo_width() <= app.winfo_width() + 1, (widget, x)
         assert y + widget.winfo_height() <= app.winfo_height() + 1, (widget, y)
     try:
-        for width, height in ((1180, 780), (640, 500)):
+        # Windows clamps managed windows to the available desktop (the hosted
+        # runner is narrower than 1180). Exercise the real initial size on
+        # each machine; retain the same explicit small-window requirement.
+        normal = watch._initial_window_size(*watch._logical_work_area(app))
+        for width, height in (normal, (640, 500)):
             app.geometry(f'{width}x{height}+0+0')
             settle()
             scale = app._get_window_scaling()
