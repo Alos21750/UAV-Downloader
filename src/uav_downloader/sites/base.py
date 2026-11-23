@@ -1201,9 +1201,10 @@ class M3U8Crawler:
                 else:
                     rem_str = f"{remain_time:.0f}秒"
                 speed_str = f"{speed/1024:.0f} KB/s" if speed < 1024*1024 else f"{speed/1024/1024:.1f} MB/s"
-                print(f'\r下載中: {done}/{self._job_total} 片段 | {speed_str} | 剩餘 {rem_str}  ', end='', flush=True)
+                cached = getattr(self, '_cached_at_start', 0)
+                print(f'\r下載中: {cached + done}/{cached + self._job_total} 片段 | {speed_str} | 剩餘 {rem_str}  ', end='', flush=True)
                 if self._progress_callback:
-                    self._progress_callback(done, self._job_total, speed)
+                    self._progress_callback(cached + done, cached + self._job_total, speed)
             return True
         except StorageWriteError as exc:
             self._storage_error = exc
@@ -1241,6 +1242,10 @@ class M3U8Crawler:
             self, '_segment_retry_max_delay',
             getattr(self, 'segment_retry_max_delay', 6.0))))
         self._denied_indices = set()
+        self._denial_deferred = 0
+        self._cached_at_start = total - self._job_total if self.respect_segment_denials else 0
+        if self._cached_at_start and getattr(self, '_progress_callback', None):
+            self._progress_callback(self._cached_at_start, total, 0)
         for round_num in range(1, max_rounds + 1):
             if not self._pending_set or self._cancel_job:
                 break
@@ -1248,12 +1253,23 @@ class M3U8Crawler:
             if not tasks:
                 break
             self._round_failures = {}
+            if self.respect_segment_denials:
+                tasks.sort(key=lambda task: task[0])
+                if round_num == 1 and self._cached_at_start:
+                    # On resume, do not spend a whole batch before learning
+                    # whether the first missing segment is still refused.
+                    first = tasks[0]
+                    self._scrape(first)
+                    tasks = tasks[1:]
+                    if first[0] in self._denied_indices:
+                        self._denial_deferred = len(tasks)
+                        break
             with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
                 self._t2_executor = executor
                 list(executor.map(self._scrape, tasks, timeout=None))
             self._t2_executor = None
             still_pending = len(self._pending_set)
-            if still_pending == len(self._denied_indices):
+            if self._denial_deferred or still_pending == len(self._denied_indices):
                 break
             if round_num < max_rounds:
                 print(f'\n重試第 {round_num} 次，剩餘 {still_pending} 片段...', flush=True)
@@ -1335,6 +1351,8 @@ class M3U8Crawler:
                 detail = ', '.join(f'{reason} ×{n} (e.g. segment {i + 1})'
                                    for reason, (n, i) in reasons[:6])
                 if denied:
+                    if self._denial_deferred:
+                        detail += f'; {self._denial_deferred} not requested in this round'
                     detail += '; access denied; cache retained; retry manually later'
                 raise DownloadIncompleteError(pending, detail=detail)
         else:

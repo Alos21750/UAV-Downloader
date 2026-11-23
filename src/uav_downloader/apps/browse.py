@@ -1168,10 +1168,11 @@ class DownloadManager:
             task.last_done = done
             task.transfer_complete = total > 0 and done >= total
             item = self._items.get(task.url)
-            if (item is not None and done > 0 and total > done and
+            transferred = done - getattr(task.job, '_cached_at_start', 0)
+            if (item is not None and transferred > 0 and total > done and
                     task.download_started is not None):
                 elapsed = max(0.0, now - task.download_started)
-                item.eta = format_eta(elapsed * (total - done) / done)
+                item.eta = format_eta(elapsed * (total - done) / transferred)
             elif item is not None and total > 0 and done >= total:
                 item.eta = ''
             job = task.job

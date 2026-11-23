@@ -177,6 +177,12 @@ class SiteMissAV(M3U8Crawler):
 
     def _scrape(self, task):
         with self._segment_request_gate:
+            # Admit no more queued requests after repeated explicit denials.
+            # Already-started workers may finish; keep every verified segment.
+            if len(getattr(self, '_denied_indices', ())) >= 3:
+                with self._speed_lock:
+                    self._denial_deferred += 1
+                return False
             return super()._scrape(task)
 
     @classmethod

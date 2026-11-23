@@ -133,6 +133,15 @@ retry later; Watcher may try on the next scheduled scan. This is not a way
 to obtain denied media. If the error mentions storage I/O, check the
 destination before retrying.
 
+From v3.8.3 a MissAV retry first counts the reusable cached segments toward
+the whole video's progress. When some segments are already cached, it tests
+the earliest gap before starting parallel transfers. If that request returns
+403, it keeps the cache and leaves the remaining gaps unrequested. On a fresh
+transfer, three explicit segment denials stop additional queued requests in
+that attempt; already-started requests can finish. The diagnostic distinguishes
+actual HTTP denials from segments that were not requested. A persistent 403
+is not evidence that switching VPNs or retrying the entire batch will help.
+
 Hanime1's Ura Anime and short-anime category pages use a compact card layout.
 UAV Browser supports that layout as well as the standard search/result cards.
 
