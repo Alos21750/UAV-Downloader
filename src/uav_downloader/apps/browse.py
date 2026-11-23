@@ -21,6 +21,7 @@ from typing import Optional
 from urllib.parse import urlsplit
 
 import customtkinter as ctk
+from uav_downloader.ui.scroll import ScrollableFrame
 import requests
 from PIL import Image
 
@@ -2537,7 +2538,7 @@ class ModernApp(ctk.CTk):
         content.pack(fill='both', expand=True)
 
         # Sidebar
-        self._sidebar = ctk.CTkScrollableFrame(
+        self._sidebar = ScrollableFrame(
             content, width=176, fg_color=BG_SIDEBAR,
             corner_radius=0, scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=BORDER_HOVER)
@@ -2547,7 +2548,7 @@ class ModernApp(ctk.CTk):
         grid_area = ctk.CTkFrame(content, fg_color=BG_DARK, corner_radius=0)
         grid_area.pack(side='left', fill='both', expand=True)
 
-        self._grid_scroll = ctk.CTkScrollableFrame(
+        self._grid_scroll = ScrollableFrame(
             grid_area, fg_color=BG_DARK, corner_radius=0,
             scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=BORDER_HOVER)
@@ -2753,7 +2754,7 @@ class ModernApp(ctk.CTk):
                 side='left', padx=16, pady=8)
 
         # ── Download list ───────────────────────────────────────────
-        self._dl_scroll = ctk.CTkScrollableFrame(
+        self._dl_scroll = ScrollableFrame(
             tab, fg_color=BG_DARK, corner_radius=0,
             scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=BORDER_HOVER)
@@ -2811,7 +2812,7 @@ class ModernApp(ctk.CTk):
     def _build_settings_tab(self):
         tab = self._tab_frames['settings']
 
-        outer = ctk.CTkScrollableFrame(
+        outer = ScrollableFrame(
             tab, fg_color=BG_DARK, corner_radius=0,
             scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=BORDER_HOVER)
@@ -4150,7 +4151,7 @@ class ModernApp(ctk.CTk):
             border_color=BORDER, border_width=1, text_color=TEXT_PRI,
             font=(ui_font(), 12)).pack(side='right')
 
-        tag_scroll = ctk.CTkScrollableFrame(
+        tag_scroll = ScrollableFrame(
             tags_card, fg_color='transparent', corner_radius=0,
             scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=BORDER_HOVER)
@@ -4492,7 +4493,7 @@ class ModernApp(ctk.CTk):
             row=0, column=3, padx=(0, 14), pady=12, sticky='ew')
         options.grid_columnconfigure(3, weight=1)
 
-        listing = ctk.CTkScrollableFrame(
+        listing = ScrollableFrame(
             popup, fg_color=BG_DARK, corner_radius=0,
             scrollbar_button_color=BORDER)
         listing.pack(fill='both', expand=True, padx=16)

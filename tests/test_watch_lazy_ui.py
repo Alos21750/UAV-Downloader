@@ -63,6 +63,7 @@ class Widget:
 @pytest.fixture
 def lazy_app(monkeypatch):
     Widget.created = []
+    monkeypatch.setattr(watch, 'ScrollableFrame', Widget)
     for name in ('CTkFrame', 'CTkScrollableFrame', 'CTkLabel', 'CTkCheckBox', 'CTkTabview'):
         monkeypatch.setattr(watch.ctk, name, Widget)
     monkeypatch.setattr(watch.tk, 'BooleanVar', Var)
