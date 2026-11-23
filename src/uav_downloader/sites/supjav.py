@@ -616,7 +616,8 @@ class SiteSupJav(M3U8Crawler):
                                 continue
                             if written + len(chunk) > expected:
                                 raise Exception("直接下載分段長度超出預期")
-                            if speed_limiter.acquire(len(chunk), cancel_check=lambda: self._cancel_job or stop_event.is_set()) is False:
+                            if (speed_limiter.acquire(len(chunk), cancel_check=lambda: self._cancel_job or stop_event.is_set()) is False
+                                    or self._cancel_job or stop_event.is_set()):
                                 break
                             if target.write(chunk) != len(chunk):
                                 raise Exception("直接下載寫入失敗")
@@ -720,7 +721,8 @@ class SiteSupJav(M3U8Crawler):
                             break
                         if not chunk:
                             continue
-                        if speed_limiter.acquire(len(chunk), cancel_check=lambda: bool(self._cancel_job)) is False:
+                        if (speed_limiter.acquire(len(chunk), cancel_check=lambda: bool(self._cancel_job)) is False
+                                or self._cancel_job):
                             break
                         target.write(chunk)
                         done += len(chunk)

@@ -69,6 +69,17 @@ def test_unpack_returns_none_on_non_packer():
     assert _unpack_js_eval('just some normal <script> here') is None
 
 
+def test_unpack_base62_preserves_case_and_unknown_tokens():
+    keys = [''] * 62
+    keys[10], keys[36], keys[61] = 'lower', 'upper', 'last'
+    program = "eval(function(p,a,c,k,e,d){}('a A Z stay',62,62,'%s'.split('|')" % '|'.join(keys)
+    assert _unpack_js_eval(program) == 'lower upper last stay'
+
+
+def test_unpack_rejects_unsupported_radix():
+    assert _unpack_js_eval("eval(function(p,a,c,k,e,d){}('0',63,1,'x'.split('|')") is None
+
+
 def test_page_url_pagination():
     assert MissAVBrowser.page_url('https://missav.ai/dm539/new', 1) == 'https://missav.ai/dm539/new'
     assert MissAVBrowser.page_url('https://missav.ai/dm539/new', 3) == 'https://missav.ai/dm539/new?page=3'

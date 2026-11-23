@@ -117,10 +117,15 @@ lines including the count and any HTTP status actually displayed. Do not
 post cookies, signed stream URLs, proxy credentials or private local paths.
 There is no need to repeat a whole batch to make a report.
 
-In v3.7.0 there is no partial-export button. Renaming a cached segment to the
-final filename is not a workaround: a later attempt can see an existing video
-and skip it. If the error instead mentions a full disk or storage I/O, check
-the destination before retrying.
+Starting in v3.8.0, eligible incomplete MissAV jobs offer **Export partial** in
+the Browser queue. The dialog shows how many consecutive segments from the
+beginning can be saved. It never skips a gap to join unrelated pieces.
+UAV verifies the bytes against the current session’s records, then remuxes
+them to a separate `*.partial.mp4`. Existing files, the retry cache and
+the incomplete job are preserved. After restarting the app, or when the
+first segment cannot be verified, this action is unavailable. Use Retry to
+try for the complete video. If the error mentions storage I/O, check the
+destination before retrying.
 
 Hanime1's Ura Anime and short-anime category pages use a compact card layout.
 UAV Browser supports that layout as well as the standard search/result cards.

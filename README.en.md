@@ -38,6 +38,10 @@
 
 ## Three workflows, one download core
 
+### v3.8.0: missing segments and partial export
+
+For incomplete MissAV jobs, Browser can save a verified contiguous prefix as a separate `*.partial.mp4` without changing the job or its cache. This requires receipts from the current session. Browser and Watcher report final-round segment failure reasons and positions and support AES-128 key changes within a playlist.
+
 ### v3.7.0: clearer desktop UI and custom bandwidth limits
 
 - More readable small text, aligned explanations and improved light/dark contrast. Watcher settings use responsive cards and preserve the action row in short windows.

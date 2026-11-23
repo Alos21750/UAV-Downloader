@@ -639,6 +639,62 @@ def test_direct_download_uses_parallel_ranges_and_assembles_file(monkeypatch, tm
     assert len(range_calls) == 2
 
 
+@pytest.mark.parametrize('mode', ['serial', 'range', 'peer-failure'])
+def test_direct_stop_after_bandwidth_permit_never_writes_chunk(monkeypatch, tmp_path, mode):
+    import time
+
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._cancel_job = False
+    crawler._direct_url = 'https://fixture.invalid/video'
+    crawler._max_workers = 2
+    progress = []
+    crawler._progress_callback = lambda *args: progress.append(args)
+    waiting = threading.Event()
+    failures = []
+
+    def grant(size, cancel_check):
+        if mode == 'peer-failure':
+            waiting.set()
+            end = time.monotonic() + 3
+            while not cancel_check() and time.monotonic() < end:
+                time.sleep(0.005)
+            if not cancel_check():
+                failures.append('peer did not stop its group')
+        else:
+            crawler._cancel_job = True
+        return True
+
+    def get(url, headers, **kwargs):
+        spec = headers.get('Range')
+        if spec:
+            start, end = map(int, spec.removeprefix('bytes=').split('-'))
+            if mode == 'peer-failure' and start > 0:
+                assert waiting.wait(3)
+                raise RuntimeError('peer failed')
+            meta = {'content-range': f'bytes {start}-{end}/8'}
+        else:
+            start, end = 0, 7
+            meta = {'content-length': '8'}
+        return types.SimpleNamespace(status_code=206 if spec else 200, headers=meta,
+                                     iter_content=lambda **kw: [b'A' * (end - start + 1)],
+                                     close=lambda: None)
+
+    monkeypatch.setattr(supjav_mod, '_get_session', lambda: types.SimpleNamespace(get=get))
+    monkeypatch.setattr(supjav_mod, '_DIRECT_RANGE_RETRIES', 0)
+    monkeypatch.setattr(supjav_mod.speed_limiter, 'acquire', grant)
+    part = tmp_path / 'video.part'
+    if mode == 'peer-failure':
+        with pytest.raises(RuntimeError, match='peer failed'):
+            crawler._download_direct_ranges(part, '', time.time())
+    elif mode == 'range':
+        assert crawler._download_direct_ranges(part, '', time.time()) == (0, 8)
+    else:
+        assert crawler._download_direct_serial(part, '', time.time()) == (0, 8)
+    assert not failures
+    assert not progress
+    assert part.read_bytes() == (b'' if mode == 'serial' else bytes(8))
+
+
 def test_direct_parallel_range_resumes_after_connection_reset(monkeypatch, tmp_path):
     payload = bytes(range(256)) * 1024
     calls = []

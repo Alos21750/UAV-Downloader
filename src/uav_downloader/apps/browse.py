@@ -31,7 +31,8 @@ from uav_downloader.i18n import sites as site_i18n
 from uav_downloader.core import updater
 from uav_downloader.core.ssl import SharedSSLAdapter, get_shared_ssl_context
 from uav_downloader.sites.jabletv import JableTVBrowser
-from uav_downloader.sites.missav import MissAVBrowser
+from uav_downloader.sites.missav import MissAVBrowser, SiteMissAV
+from uav_downloader.core.partial_export import Receipts, export_prefix
 from uav_downloader.sites.supjav import SupJavBrowser
 from uav_downloader.sites.huangguo import HuangguoBrowser
 from uav_downloader.sites.hanime1 import (
@@ -39,7 +40,7 @@ from uav_downloader.sites.hanime1 import (
     Hanime1Browser,
     SiteHanime1,
 )
-from uav_downloader.sites.base import MirrorsBlockedError
+from uav_downloader.sites.base import DownloadIncompleteError, MirrorsBlockedError, locate_ffmpeg
 from uav_downloader.core.config import headers
 from uav_downloader.i18n.locales import T, set_lang, get_lang, ui_font, LANGUAGES, state_label
 from uav_downloader.subtitles.engine import (
@@ -183,7 +184,7 @@ class DownloadItem:
         'source_subtitle_evidence', 'local', 'auto_requeues',
         'job_id', 'site', 'resolution', 'filename_template', 'thumbnail',
         'eta', 'error_code', 'retry_count', 'next_retry_at',
-        'not_before', 'created_at', 'updated_at',
+        'not_before', 'created_at', 'updated_at', 'partial_prefix',
     )
 
     def __init__(
@@ -196,6 +197,7 @@ class DownloadItem:
         self.name = name or url.rstrip('/').split('/')[-1]
         self.state = state
         self.progress = 0
+        self.partial_prefix = None  # Volatile: never infer ownership from a restored CSV.
         self.speed = ''
         self.error = ''
         self.dest = dest or ''
@@ -680,6 +682,7 @@ class DownloadManager:
 
     def _run_download(self, task: _DownloadTask):
         url = task.url
+        receipts = None
         self._set_context_state(task, '準備中')
         try:
             self._prep_sem.acquire()
@@ -751,6 +754,9 @@ class DownloadManager:
                 self._complete_download(task, '已取消')
                 return
             self._start_slow_monitor(task)
+            if isinstance(job, SiteMissAV):
+                receipts = Receipts()
+                job._partial_segment_written = receipts.record
             ok = job.start_download()
             task.monitor_stop.set()
             if ok is False and not job._cancel_job:
@@ -768,6 +774,24 @@ class DownloadManager:
             self._complete_download(task, '已下載', progress=100)
         except Exception as exc:
             print(f'[下載失敗] {url}\n  {exc}', flush=True)
+            if isinstance(exc, DownloadIncompleteError) and receipts is not None:
+                plan = receipts.plan(job._temp_folder, job._get_video_savename(), len(job._tsList))
+                with self._lock:
+                    item = self._items.get(url)
+                    if item and not self._context_cancelled_locked(task):
+                        # A retry may only request a missing tail and hence have
+                        # no *new* prefix. The previous receipt remains safe:
+                        # every byte is verified again at export.
+                        old = item.partial_prefix
+                        if plan is not None or (old and (
+                                os.path.abspath(job._get_video_savename()) != str(old.target)
+                                or len(job._tsList) != old.total)):
+                            item.partial_prefix = plan
+            elif not isinstance(exc, DownloadIncompleteError):
+                with self._lock:
+                    item = self._items.get(url)
+                    if item and self._active.get(url) is task:
+                        item.partial_prefix = None
             if isinstance(exc, StorageWriteError):
                 # No automatic queue advance or cleanup writes on a device
                 # that has just failed. The user must explicitly retry.
@@ -1091,6 +1115,7 @@ class DownloadManager:
                     item.speed = ''
                     item.eta = ''
                 if state in DONE_STATES:
+                    item.partial_prefix = None
                     item.retry_count = 0
                     item.next_retry_at = 0.0
                 item.updated_at = time.time()
@@ -4873,6 +4898,43 @@ class ModernApp(ctk.CTk):
         self._status_lbl.configure(
             text=T('subtitle_local_added', n=count))
 
+    def _export_partial(self, url: str):
+        item = next((i for i in self._dlmgr.get_items() if i.url == url), None)
+        plan = item.partial_prefix if item and item.state == '未完成' else None
+        if not plan:
+            return
+        if getattr(self, '_partial_stop', None) is not None:
+            messagebox.showinfo(PRODUCT_NAME, T('partial_busy'), parent=self)
+            return
+        if not messagebox.askyesno(PRODUCT_NAME, T(
+                'partial_confirm', count=len(plan.hashes), total=plan.total), parent=self):
+            return
+        stop = self._partial_stop = threading.Event()
+        future = concurrent.futures.Future()
+
+        def worker():
+            try:
+                future.set_result(export_prefix(plan, locate_ffmpeg(), stop.is_set))
+            except Exception as exc:
+                future.set_exception(exc)
+
+        def poll():
+            if self._is_closing:
+                return
+            if not future.done():
+                self.after(200, poll)
+                return
+            self._partial_stop = None
+            try:
+                path = future.result()
+            except Exception as exc:
+                messagebox.showerror(PRODUCT_NAME, T('partial_error') + '\n' + str(exc), parent=self)
+            else:
+                messagebox.showinfo(PRODUCT_NAME, str(path), parent=self)
+
+        threading.Thread(target=worker, name='uav-partial-export', daemon=False).start()
+        self.after(200, poll)
+
     def _retry_download(self, url: str):
         item = next((i for i in self._dlmgr.get_items() if i.url == url), None)
         if item is None:
@@ -5474,6 +5536,12 @@ class ModernApp(ctk.CTk):
                 text_color=ACCENT, font=(ui_font(), 12, 'bold'),
                 command=lambda u=item.url: self._handle_download_action(u))
 
+            partial_btn = ctk.CTkButton(
+                row, text=T('partial_export'), width=92, height=32,
+                corner_radius=CONTROL_RADIUS, fg_color='transparent', border_width=1,
+                border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
+                command=lambda u=item.url: self._export_partial(u))
+
             metrics = ctk.CTkFrame(row, fg_color='transparent')
             metrics.pack(side='right', padx=(6, 2))
 
@@ -5510,7 +5578,7 @@ class ModernApp(ctk.CTk):
                 'detail_lbl': detail_lbl, 'metrics': metrics,
                 'pb': pb, 'pct_lbl': pct_lbl, 'spd_lbl': spd_lbl,
                 'retry_btn': retry_btn, '_before_remove': remove_btn,
-                'folder_btn': folder_btn,
+                'folder_btn': folder_btn, 'partial_btn': partial_btn, 'partial_visible': False,
                 'thumb_lbl': thumb_lbl,
                 'pb_visible': False, 'pct_visible': False, 'spd_visible': False,
                 'retry_visible': False,
@@ -5588,6 +5656,13 @@ class ModernApp(ctk.CTk):
             w['last_detail'] = detail
 
         retry_action = _download_row_action(item)
+        show_partial = bool(item.state == '未完成' and getattr(item, 'partial_prefix', None))
+        if 'partial_btn' in w and show_partial != w['partial_visible']:
+            if show_partial:
+                w['partial_btn'].pack(side='right', padx=(2, 0), before=w['_before_remove'])
+            else:
+                w['partial_btn'].pack_forget()
+            w['partial_visible'] = show_partial
         if w['last_retry_action'] != retry_action:
             if retry_action:
                 labels = {
@@ -5753,6 +5828,9 @@ class ModernApp(ctk.CTk):
 
     # ── Close ────────────────────────────────────────────────────────
     def _on_close(self):
+        partial_stop = getattr(self, '_partial_stop', None)
+        if partial_stop is not None:
+            partial_stop.set()
         from uav_downloader.ui.bandwidth import commit_bandwidth_controls
         commit_bandwidth_controls(self)
         self._is_closing = True

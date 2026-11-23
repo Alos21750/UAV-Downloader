@@ -150,6 +150,11 @@ def filter_items(items, filter_name: str):
 
 def classify_download_problem(error: object, state: str = '') -> DownloadProblem:
     value = str(error or '').lower()
+    # This prefix is also saved in CSV, where the exception type is lost.
+    # A segment-level HTTP status or example index (e.g. 404) doesn't mean
+    # the *video page* is missing. Keep the normal bounded retry policy.
+    if value.startswith('download incomplete (') and 'segment(s) still unavailable;' in value:
+        return DownloadProblem('incomplete_segments', True)
     if state == '網址錯誤' or 'unsupported' in value or '不支援' in value:
         return DownloadProblem('unsupported_url', False)
     if ('no space' in value or 'disk full' in value or

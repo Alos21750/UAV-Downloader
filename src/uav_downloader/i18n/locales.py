@@ -20,7 +20,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '互動式多站下載器',
-        'version_label': 'v3.7.0',
+        'version_label': 'v3.8.0',
         'by_author': '',
         'status_ready': '就緒',
         'site_label': '網站',
@@ -414,7 +414,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': 'Interactive Multi-Site Downloader',
-        'version_label': 'v3.7.0',
+        'version_label': 'v3.8.0',
         'by_author': '',
         'status_ready': 'Ready',
         'site_label': 'Site',
@@ -809,7 +809,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '交互式多站下载器',
-        'version_label': 'v3.7.0',
+        'version_label': 'v3.8.0',
         'by_author': '',
         'status_ready': '就绪',
         'site_label': '网站',
@@ -1203,7 +1203,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '対話型マルチサイトダウンローダー',
-        'version_label': 'v3.7.0',
+        'version_label': 'v3.8.0',
         'by_author': '',
         'status_ready': '準備完了',
         'site_label': 'サイト',
@@ -1785,6 +1785,15 @@ _THAI_CORE = {
 STRINGS['th'] = dict(STRINGS['en'])
 STRINGS['th'].update(_THAI_CORE)
 
+for _language, _hint in {
+    'en': 'Some segments are still missing. Retry to resume.',
+    'zh': '仍有片段未取得，可重試續傳。',
+    'zh-Hans': '仍有片段未取得，可重试续传。',
+    'ja': '未取得のセグメントがあります。再試行すると再開します。',
+    'th': 'ยังดาวน์โหลดบางส่วนไม่สำเร็จ ลองอีกครั้งเพื่อดาวน์โหลดต่อ',
+}.items():
+    STRINGS[_language]['problem_incomplete_segments'] = _hint
+
 # Watcher-only Huangguo collection option. Keep all five language variants
 # explicit rather than silently falling back to English for a new control.
 for _language, _collection in {
@@ -1875,6 +1884,16 @@ for _language, _labels in {
     ),
 }.items():
     STRINGS[_language].update(zip(_QUEUE_UI_KEYS, _labels))
+
+for _language, _partial_labels in {
+    'en': ('Export partial', 'Export the first {count} of {total} segments to a separate .partial.mp4 beside the intended video? Playback stops at the first gap. The job stays incomplete and can still be retried.', 'A partial export is already running.', 'Partial export failed. Your job and source segments were not changed.'),
+    'zh': ('匯出片段', '將開頭連續的 {count}／{total} 段另存為 .partial.mp4 到影片目的資料夾嗎？播放到第一個缺口為止。原任務仍是未完成，可繼續重試。', '已有一個片段正在匯出。', '匯出失敗。原任務及來源片段未變更。'),
+    'zh-Hans': ('导出片段', '将开头连续的 {count}／{total} 段另存为 .partial.mp4 到视频目标文件夹？播放到第一个缺口为止。原任务仍未完成，可以继续重试。', '已有一个片段正在导出。', '导出失败。原任务和源片段未更改。'),
+    'ja': ('部分を書き出す', '先頭から連続した {count}／{total} セグメントを動画の保存先に別の .partial.mp4 として書き出しますか？最初の欠落箇所で再生が終了します。元のジョブは未完了のまま再試行できます。', '部分書き出しを実行中です。', '書き出しに失敗しました。元のジョブとセグメントは変更されていません。'),
+    'th': ('ส่งออกบางส่วน', 'ส่งออก {count} จาก {total} ส่วนที่ต่อเนื่องจากต้นวิดีโอเป็นไฟล์ .partial.mp4 แยกในโฟลเดอร์ปลายทางหรือไม่? วิดีโอจะจบก่อนส่วนแรกที่ขาด งานเดิมยังไม่เสร็จและลองใหม่ได้', 'กำลังส่งออกบางส่วนอยู่', 'ส่งออกไม่สำเร็จ งานและไฟล์ต้นฉบับไม่ได้เปลี่ยนแปลง'),
+}.items():
+    STRINGS[_language].update(zip(
+        ('partial_export', 'partial_confirm', 'partial_busy', 'partial_error'), _partial_labels))
 
 STATE_LABELS = {
     '下載中': {'en': 'Downloading', 'th': 'กำลังดาวน์โหลด', 'zh': '下載中', 'zh-Hans': '下载中', 'ja': 'ダウンロード中'},

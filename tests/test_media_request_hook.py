@@ -50,8 +50,9 @@ def test_resource_requests_use_site_hook(monkeypatch, tmp_path, kind):
             crawler._load_m3u8(crawler._m3u8url)
         assert calls == [(crawler._m3u8url, 20)]
     elif kind == 'key':
-        crawler._load_m3u8 = lambda url: SimpleNamespace(
-            playlists=[], keys=[SimpleNamespace(uri='key.bin')])
+        crawler._load_m3u8 = lambda url: base.m3u8.loads(
+            '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n'
+            '#EXTINF:1,\nseg.ts\n#EXT-X-ENDLIST\n', uri=url)
         with pytest.raises(Exception, match='AES'):
             crawler._create_m3u8()
         assert calls == [('https://cdn.example/key.bin', 15)]

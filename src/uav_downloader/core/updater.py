@@ -66,12 +66,15 @@ def check_latest(timeout=10):
         with _session() as s:
             response = None
             for api_url in API_CANDIDATES:
-                candidate = s.get(
-                    api_url,
-                    headers=headers,
-                    timeout=timeout,
-                    **config.proxy_request_kwargs(),
-                )
+                try:
+                    candidate = s.get(
+                        api_url,
+                        headers=headers,
+                        timeout=timeout,
+                        **config.proxy_request_kwargs(),
+                    )
+                except (requests.ConnectionError, requests.Timeout):
+                    continue
                 if candidate.status_code == 200:
                     response = candidate
                     break
@@ -132,11 +135,18 @@ def download_asset(url, dest_path, progress_cb=None, timeout=60):
     _remove_quiet(part_path)
     try:
         with _session() as s, s.get(
-                url, stream=True, timeout=timeout,
+                url, stream=True, timeout=timeout, headers={'Accept-Encoding': 'identity'},
                 **config.proxy_request_kwargs()) as r:
             if r.status_code != 200:
                 return False
-            total = int(r.headers.get('content-length') or 0)
+            length_header = r.headers.get('content-length')
+            expected = int(length_header) if length_header is not None else None
+            if expected is not None and expected <= 0:
+                return False
+            # requests.iter_content yields decoded bytes; Content-Length is on
+            # the wire. Do not compare compressed length to the executable size.
+            encoded = r.headers.get('content-encoding', '').strip().lower() not in ('', 'identity')
+            total = (expected or 0) if not encoded else 0
             downloaded = 0
             with open(part_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=1024 * 256):
@@ -149,14 +159,20 @@ def download_asset(url, dest_path, progress_cb=None, timeout=60):
                             progress_cb(downloaded, total)
                         except Exception:
                             pass
+            if expected is not None:
+                measured = r.raw.tell() if encoded else downloaded
+                if measured != expected:
+                    _remove_quiet(part_path)
+                    return False
 
         if os.path.getsize(part_path) <= 3_000_000:
             _remove_quiet(part_path)
             return False
         with open(part_path, 'rb') as f:
-            if f.read(2) != b'MZ':
-                _remove_quiet(part_path)
-                return False
+            valid_header = f.read(2) == b'MZ'
+        if not valid_header:
+            _remove_quiet(part_path)
+            return False
         os.replace(part_path, dest_path)
         return True
     except Exception:

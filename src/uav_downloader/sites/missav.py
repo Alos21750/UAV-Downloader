@@ -3,6 +3,8 @@
 
 import re
 import threading
+import time
+from email.utils import parsedate_to_datetime
 import cloudscraper
 from urllib.parse import urlsplit, unquote
 try:
@@ -26,11 +28,11 @@ def _unpack_js_eval(script_text):
     packed, a, c, keys_str = match.group(1), int(match.group(2)), int(match.group(3)), match.group(4).split('|')
     # Guard against malformed packer params: base<=1 makes to_base loop forever;
     # an absurd `c` would allocate an unbounded lookup dict. Bail on either.
-    if a <= 1 or c < 0 or c > 200000:
+    digits = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    if not 2 <= a <= len(digits) or c < 0 or c > 200000:
         return None
 
     def to_base(n, base):
-        digits = '0123456789abcdefghijklmnopqrstuvwxyz'
         if n == 0: return '0'
         s = ''
         while n:
@@ -87,6 +89,12 @@ def enrich_missav_title(title: str, url_or_slug: str) -> str:
     return title
 
 
+class _MediaCooldown(Exception):
+    def __init__(self, status):
+        self.status_code = status
+        super().__init__(f'HTTP {status}: Retry-After is still in effect')
+
+
 class SiteMissAV(M3U8Crawler):
     """Downloader for missav.ai"""
     # MissAV's surrit.com CDN becomes unreliable under the previous worst case
@@ -98,6 +106,38 @@ class SiteMissAV(M3U8Crawler):
     segment_retry_base_delay = 1.5
     segment_retry_max_delay = 8.0
     _segment_request_gate = threading.BoundedSemaphore(8)
+    _cooldown_lock = threading.Lock()
+
+    def _media_get(self, url, timeout=20, stream=False):
+        # Scope Retry-After to this download and origin. Don't occupy a worker
+        # sleeping for an arbitrary server delay; the ordinary bounded retry
+        # loop can retry after expiry or leave the job resumable.
+        parsed = urlsplit(url)
+        origin = (parsed.scheme, parsed.hostname, parsed.port or
+                  (443 if parsed.scheme == 'https' else 80))
+        with self._cooldown_lock:
+            cooldowns = self.__dict__.setdefault('_media_cooldowns', {})
+            until, status = cooldowns.get(origin, (0, 0))
+            if until > time.monotonic():
+                raise _MediaCooldown(status)
+            cooldowns.pop(origin, None)
+        response = super()._media_get(url, timeout=timeout, stream=stream)
+        if response.status_code in (429, 503):
+            raw = str((getattr(response, 'headers', None) or {}).get('Retry-After', '')).strip()
+            try:
+                if re.fullmatch(r'[0-9]{1,12}', raw):
+                    delay = int(raw)
+                else:
+                    dt = parsedate_to_datetime(raw)
+                    delay = dt.timestamp() - time.time() if dt.tzinfo else 0
+            except (ValueError, OverflowError, TypeError, OSError):
+                delay = 0
+            if delay > 0:
+                deadline = time.monotonic() + delay
+                with self._cooldown_lock:
+                    if deadline > cooldowns.get(origin, (0, 0))[0]:
+                        cooldowns[origin] = (deadline, response.status_code)
+        return response
     # Matches video pages, including optional dm routing and language prefixes:
     #   https://missav.ai/cn/sone-543-chinese-subtitle
     #   https://missav.ai/sone-543

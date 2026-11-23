@@ -5,6 +5,17 @@ import pytest
 from uav_downloader.cli import headless as docker_cli
 
 
+@pytest.mark.parametrize('first_line', ['# title', 'https://example.invalid/a'])
+def test_url_list_accepts_utf8_bom(monkeypatch, tmp_path, first_line):
+    url = 'https://example.invalid/a'
+    listing = tmp_path / 'urls.txt'
+    listing.write_text(first_line + '\n' + url + '\n', encoding='utf-8-sig')
+    monkeypatch.setenv('URLS_FILE', str(listing))
+    monkeypatch.delenv('URLS', raising=False)
+    monkeypatch.delenv('URL', raising=False)
+    assert docker_cli.gather_urls() == [url]
+
+
 def test_docker_worker_limit_is_forwarded_to_each_video(monkeypatch, tmp_path):
     captured = []
 

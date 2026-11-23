@@ -2,6 +2,8 @@
 # coding: utf-8
 
 import platform
+import errno
+import stat
 import html
 import os
 import re
@@ -41,7 +43,7 @@ class MirrorsBlockedError(Exception):
 class DownloadIncompleteError(Exception):
     """A resumable segment download stopped with a few chunks outstanding."""
 
-    def __init__(self, remaining_segments):
+    def __init__(self, remaining_segments, *, detail=''):
         try:
             remaining = max(1, int(remaining_segments))
         except (TypeError, ValueError):
@@ -49,7 +51,7 @@ class DownloadIncompleteError(Exception):
         self.remaining_segments = remaining
         super().__init__(
             f"download incomplete ({remaining} segment(s) still unavailable; "
-            "Retry resumes existing segments)")
+            "Retry resumes existing segments)" + (f"; last attempt: {detail}" if detail else ""))
 
 
 request_headers = {'browser': 'firefox', 'platform': platform.system().lower()}
@@ -321,6 +323,22 @@ speed_limiter = _SpeedLimiter()
 
 def _is_valid_ts_segment(data):
     return bool(data and len(data) >= 188 and data[:1] == b'\x47')
+
+
+def _reusable_ts(path):
+    """Reject obviously incomplete cached parts, without re-reading whole videos."""
+    try:
+        info = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(errno.EINVAL, 'Cached segment is not a regular file')
+        if info.st_size < 188:
+            return False
+        with open(path, 'rb', buffering=0) as part:
+            return _is_valid_ts_segment(part.read(188))
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise StorageWriteError(path, exc, operation='inspect cached segment') from exc
 
 _FFMPEG_PATH = None
 _FFMPEG_RESOLVED = False
@@ -837,46 +855,64 @@ class M3U8Crawler:
             if best:
                 m3u8obj, downloadurl = self._getm3u8PlayList(best.uri, downloadurl)
 
-        # Extract key info (store bytes + IV, not a cipher - cipher is NOT thread-safe)
-        self._key_content = None
-        self._key_method = None
-        self._key_iv = None
-        for key in m3u8obj.keys:
-            if key and key.uri:
-                m3u8_key_uri = urljoin(downloadurl, key.uri)
-                resp = self._media_get(m3u8_key_uri, timeout=15)
-                blocked = _is_cf_block_resp(resp)
-                if resp.status_code != 200 or blocked:
-                    if blocked:
-                        raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
-                    raise Exception("AES 金鑰取得失敗")
-                self._key_content = resp.content
-                self._key_method = getattr(key, 'method', 'AES-128')
-                self._key_iv = getattr(key, 'iv', None)
-                break  # use first key
-
         # Per HLS: a key with no explicit IV uses an implicit IV = the segment's MEDIA
         # SEQUENCE number, which begins at #EXT-X-MEDIA-SEQUENCE (may be non-zero), not 0.
         self._media_sequence = getattr(m3u8obj, 'media_sequence', 0) or 0
         # Build segment URL list
         self._tsList = []
+        # EXT-X-KEY applies from its declaration to the next declaration,
+        # not to every segment in the playlist. Never share a CBC cipher
+        # between worker threads or carry keys across playlist loads.
+        key_cache = {}
+        self._segment_crypto = []
         for seg in m3u8obj.segments:
+            key = seg.key
+            material, iv = None, None
+            if key is not None and key.method != 'NONE':
+                if (key.method != 'AES-128' or not key.uri or
+                        getattr(key, 'keyformat', None) not in (None, 'identity')):
+                    raise ValueError("Unsupported HLS encryption (expected identity AES-128)")
+                uri = urljoin(downloadurl, key.uri)
+                iv = key.iv
+                if iv is not None and not re.fullmatch(r'0[xX][0-9a-fA-F]{1,32}', iv):
+                    raise ValueError("Invalid HLS AES-128 IV")
+                if uri not in key_cache:
+                    resp = self._media_get(uri, timeout=15)
+                    try:
+                        if _is_cf_block_resp(resp):
+                            raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
+                        if resp.status_code != 200 or len(resp.content) != 16:
+                            raise ValueError("AES 金鑰取得失敗 (expected a 16-byte AES-128 key)")
+                        key_cache[uri] = resp.content
+                    finally:
+                        close = getattr(resp, 'close', None)
+                        if callable(close):
+                            close()
+                material = key_cache[uri]
+            self._segment_crypto.append((material, iv))
             self._tsList.append(urljoin(downloadurl, seg.uri))
         if not self._tsList:
             raise Exception("m3u8 無有效片段（可能被阻擋或改版）")
+        self._key_content, self._key_iv = self._segment_crypto[0]
+        self._key_method = 'AES-128' if self._key_content else None
 
     def _make_cipher(self, seq_num=0):
         """Create a fresh AES cipher for one segment (thread-safe)."""
-        if not self._key_content:
+        segment_crypto = getattr(self, '_segment_crypto', None)
+        if segment_crypto is not None:
+            material, iv = segment_crypto[seq_num]
+        else:
+            material, iv = self._key_content, getattr(self, '_key_iv', None)
+        if not material:
             return None
-        if self._key_iv:
-            iv_hex = self._key_iv.replace("0x", "").replace("0X", "")
+        if iv:
+            iv_hex = iv.replace("0x", "").replace("0X", "")
             iv_bytes = bytes.fromhex(iv_hex.zfill(32))
         else:
             # Default IV = this segment's media-sequence number (base + playlist index),
             # as a 16-byte big-endian value.
             iv_bytes = (seq_num + getattr(self, '_media_sequence', 0)).to_bytes(16, 'big')
-        return AES.new(self._key_content, AES.MODE_CBC, iv_bytes)
+        return AES.new(material, AES.MODE_CBC, iv_bytes)
 
     def _seg_savename(self, index):
         """Per-segment temp file named by playlist INDEX, not URL basename. Two segment
@@ -1054,25 +1090,45 @@ class M3U8Crawler:
         print(f'[合成] ffmpeg 重新封裝失敗 rc={proc.returncode}: {tail}', flush=True)
         return False
 
+    def _failed_segment(self, index, reason):
+        # Only fixed, program-generated categories go here, never exception
+        # strings, response bodies, request URLs, keys or filesystem paths.
+        reasons = getattr(self, '_round_failures', None)
+        if reasons is not None:
+            with self._speed_lock:
+                count, earliest = reasons.get(reason, (0, index))
+                reasons[reason] = (count + 1, min(earliest, index))
+        return False
+
     def _scrape(self, task):
         """Download and decrypt one segment. task=(seq_num, url)"""
         if self._cancel_job or getattr(self, '_storage_error', None):
             return False
         seq_num, url = task
         saveName = self._seg_savename(seq_num)
-        if os.path.exists(saveName):
+        try:
+            reusable = _reusable_ts(saveName)
+        except StorageWriteError as exc:
+            self._storage_error = exc
+            raise
+        if reusable:
             # Segment already on disk (e.g. from a resumed job) — drop from pending
             with self._speed_lock:
                 self._pending_set.discard((seq_num, url))
             return True
 
         response = None
+        failure_stage = 'transport failure'
         try:
             throttled = speed_limiter.limit_bps > 0
             options = {'stream': True} if throttled else {}
             response = self._media_get(url, timeout=25, **options)
-            if self._cancel_job or response.status_code != 200:
+            if self._cancel_job:
                 return False
+            if response.status_code != 200:
+                status = response.status_code
+                reason = f'HTTP {status}' if type(status) is int and 100 <= status <= 599 else 'HTTP error'
+                return self._failed_segment(seq_num, reason)
             if getattr(response, '_uav_bandwidth_accounted', False):
                 content_ts = response.content
             elif throttled:
@@ -1089,16 +1145,29 @@ class M3U8Crawler:
                 content_ts = response.content
                 if speed_limiter.acquire(len(content_ts), cancel_check=lambda: bool(self._cancel_job)) is False:
                     return False
-            if not content_ts:
+            if self._cancel_job or getattr(self, '_storage_error', None):
                 return False
-            if self._key_content:
-                cipher = self._make_cipher(seq_num)
+            if not content_ts:
+                return self._failed_segment(seq_num, 'empty response')
+            failure_stage = 'decryption failure'
+            cipher = self._make_cipher(seq_num)
+            if cipher is not None:
                 content_ts = cipher.decrypt(content_ts)
             # Provider wrappers/TS headers belong to the plaintext stream.
             # LUC encrypts the whole segment, so stripping its ciphertext
             # before AES decryption would discard every valid segment.
+            failure_stage = 'invalid media'
             content_ts = self._transform_segment(content_ts)
             if not _is_valid_ts_segment(content_ts):
+                return self._failed_segment(seq_num, failure_stage)
+            # Remove valid CBC padding only when doing so restores the TS
+            # packet boundary. Some providers already supply unpadded TS.
+            if cipher is not None and len(content_ts) % 188:
+                tail = content_ts[-1]
+                if (1 <= tail <= 16 and (len(content_ts) - tail) % 188 == 0
+                        and content_ts.endswith(bytes([tail]) * tail)):
+                    content_ts = content_ts[:-tail]
+            if self._cancel_job or getattr(self, '_storage_error', None):
                 return False
             # Publish only fully written segments. A disk error must not
             # leave a truncated .ts looking resumable on the next run.
@@ -1109,6 +1178,12 @@ class M3U8Crawler:
                 os.replace(part, saveName)
             except OSError as exc:
                 raise StorageWriteError(saveName, exc) from exc
+            observer = getattr(self, '_partial_segment_written', None)
+            if callable(observer):
+                try:
+                    observer(seq_num, content_ts)
+                except Exception:
+                    pass  # Optional export metadata cannot fail a valid transfer.
             with self._speed_lock:
                 self._pending_set.discard((seq_num, url))
                 self._bytes_downloaded += len(content_ts)
@@ -1129,8 +1204,11 @@ class M3U8Crawler:
         except StorageWriteError as exc:
             self._storage_error = exc
             raise
-        except Exception:
-            return False
+        except Exception as exc:
+            status = getattr(exc, 'status_code', None)
+            if failure_stage == 'transport failure' and type(status) is int and 100 <= status <= 599:
+                return self._failed_segment(seq_num, f'HTTP {status}')
+            return self._failed_segment(seq_num, failure_stage)
 
         finally:
             close = getattr(response, 'close', None)
@@ -1162,6 +1240,7 @@ class M3U8Crawler:
             if not self._pending_set or self._cancel_job:
                 break
             tasks = list(self._pending_set)
+            self._round_failures = {}
             with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
                 self._t2_executor = executor
                 list(executor.map(self._scrape, tasks, timeout=None))
@@ -1191,7 +1270,7 @@ class M3U8Crawler:
         self._pending_set = set()
         for i, url in enumerate(self._tsList):
             saveName = self._seg_savename(i)
-            if not os.path.exists(saveName):
+            if not _reusable_ts(saveName):
                 self._pending_set.add((i, url))
         if self._pending_set:
             self._startCrawl()
@@ -1240,7 +1319,11 @@ class M3U8Crawler:
                     raise Exception("merge/publish failed")
             elif not self._cancel_job:
                 pending = len(self._pending_set)
-                raise DownloadIncompleteError(pending)
+                reasons = sorted(getattr(self, '_round_failures', {}).items(),
+                                 key=lambda item: (-item[1][0], item[0]))
+                detail = ', '.join(f'{reason} ×{n} (e.g. segment {i + 1})'
+                                   for reason, (n, i) in reasons[:6])
+                raise DownloadIncompleteError(pending, detail=detail)
         else:
             print("檔案已存在!!", flush=True)
 
