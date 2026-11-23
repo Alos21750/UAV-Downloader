@@ -1,0 +1,49 @@
+name: linux-regressions
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['src/**', 'tests/**', 'pyproject.toml', '.github/workflows/linux-regressions.yml']
+  push:
+    branches: [master]
+    paths: ['src/**', 'tests/**', 'pyproject.toml', '.github/workflows/linux-regressions.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  portable-regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -e '.[dev]'
+      - name: Verify Linux can exercise the cache symlink boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          with TemporaryDirectory() as tmp:
+              target = Path(tmp, 'target')
+              target.touch()
+              link = Path(tmp, 'link')
+              link.symlink_to(target)
+              assert link.is_symlink() and link.samefile(target)
+          PY
+      - name: Exercise desktop scroll routing, resume, and cache on Linux
+        run: |
+          python -m pytest --timeout=30 -q -rs --junitxml=portable.xml \
+            tests/test_scroll_events.py tests/test_watch_lazy_ui.py \
+            tests/test_missav_denied_resume.py tests/test_hls_segment_recovery.py \
+            tests/test_huangguo_collection.py::test_symlink_cache_is_not_followed
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          suite = ET.parse('portable.xml').getroot().find('testsuite')
+          assert suite is not None and int(suite.attrib['skipped']) == 0
+          PY
