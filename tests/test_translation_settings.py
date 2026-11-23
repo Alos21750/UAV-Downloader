@@ -32,6 +32,21 @@ def test_default_is_fully_local_and_creates_no_file(isolated_settings):
     assert not isolated_settings.exists()
 
 
+def test_clear_key_on_invalid_inactive_compatible_profile(isolated_settings):
+    isolated_settings.write_text(json.dumps({
+        'schema': 1, 'selected_provider': 'local',
+        'profiles': {'openai-compatible': {
+            'base_url': '', 'model': '', 'api_key_protected': 'dpapi:fixture'},
+            'openai': {'model': 'keep-this', 'api_key_protected': 'dpapi:other'}},
+    }), encoding='utf-8')
+    cleared = settings.clear_translation_api_key(settings.OPENAI_COMPATIBLE)
+    raw = json.loads(isolated_settings.read_text(encoding='utf-8'))
+    assert cleared.api_key_source == 'none'
+    assert raw['selected_provider'] == 'local'
+    assert raw['profiles']['openai-compatible'] == {'base_url': '', 'model': ''}
+    assert raw['profiles']['openai']['api_key_protected'] == 'dpapi:other'
+
+
 def test_openai_default_model_is_a_supported_model_name():
     assert settings.provider_defaults(settings.OPENAI)['model'] == 'gpt-6-luna'
 

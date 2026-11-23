@@ -61,6 +61,9 @@ def test_video_code_uses_site_specific_evidence(video, expected):
     ('https://cn.jable.tv/videos/ipzz-905/', 'JableTV'),
     ('https://missav.ai/mimk-284', 'MissAV'),
     ('https://missav.ws/mimk-284', 'MissAV'),
+    ('https://www.missav.ai/test-123', 'MissAV'),
+    ('https://www.missav.ws/test-123', 'MissAV'),
+    ('https://www.missav.live/test-123', 'MissAV'),
     ('https://supjav.com/440577.html', 'SupJav'),
     ('https://example.com/ipzz-905', ''),
 ])

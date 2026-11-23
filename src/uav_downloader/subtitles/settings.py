@@ -472,19 +472,21 @@ def save_translation_profile(
 
 
 def clear_translation_api_key(provider: object = None) -> TranslationSettings:
-    selected = normalize_provider(
-        provider if provider is not None
-        else get_translation_settings().provider)
-    settings = get_translation_settings(selected)
-    if selected == LOCAL:
-        return settings
-    return save_translation_profile(
-        selected,
-        base_url=settings.base_url,
-        model=settings.model,
-        clear_key=True,
-        select=(get_translation_settings().provider == selected),
-    )
+    # Credential removal must also work if unrelated fields were left blank
+    # or became invalid. Do not validate/resave a stale copy of the profile.
+    with _LOCK:
+        with _interprocess_settings_lock():
+            raw = _read_raw()
+            active = normalize_provider(raw.get("selected_provider"))
+            selected = active if provider is None else normalize_provider(provider)
+            if selected != LOCAL:
+                profiles = _sanitized_profiles(raw.get("profiles"))
+                profile = profiles.get(selected)
+                if profile is not None:
+                    profile.pop("api_key_protected", None)
+                _write_raw({"schema": _SCHEMA, "selected_provider": active,
+                            "profiles": profiles})
+    return get_translation_settings(selected)
 
 
 def provider_defaults(provider: object) -> dict[str, str]:

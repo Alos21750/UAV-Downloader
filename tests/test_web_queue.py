@@ -46,6 +46,12 @@ def test_reject_unsafe_queue_urls(url):
         validate_job({'url': url})
 
 
+@pytest.mark.parametrize('domain', ['missav.ai', 'missav.ws', 'missav.live', 'missav123.com'])
+def test_web_accepts_supported_missav_www_pages(domain):
+    url = f'https://www.{domain}/ja/test-123'
+    assert validate_job({'url': url})['url'] == url
+
+
 @pytest.mark.parametrize('value', [None, '', 'short', 'x' * 50, 'a b' * 20])
 def test_token_required_and_high_entropy(value):
     with pytest.raises(ValueError):

@@ -38,7 +38,7 @@ TRUSTED_CHINESE_SUBTITLE_EVIDENCE = frozenset({
     'hanime1-tag-chinese-subtitle',
 })
 MAX_SOURCE_SUBTITLE_EVIDENCE_TEXT = 512
-_TRUSTED_MISSAV_HOSTS = frozenset({
+MISSAV_VIDEO_HOSTS = frozenset({
     'missav.ai', 'www.missav.ai',
     'missav.ws', 'www.missav.ws',
     'missav.live', 'www.missav.live',
@@ -88,7 +88,7 @@ def site_from_url(url: str) -> str:
         return 'JableTV'
     if host == 'fs1.app' or host.endswith('.fs1.app'):
         return 'JableTV'
-    if (host.startswith('missav.') or host == 'missav123.com' or
+    if (host in MISSAV_VIDEO_HOSTS or host.startswith('missav.') or
             host.endswith('.missav123.com')):
         return 'MissAV'
     if host == 'supjav.com' or host.endswith('.supjav.com'):
@@ -168,7 +168,7 @@ def _trusted_source_site(url: str) -> str:
         return ''
     if host in _TRUSTED_JABLE_HOSTS:
         return 'JableTV'
-    if host in _TRUSTED_MISSAV_HOSTS:
+    if host in MISSAV_VIDEO_HOSTS:
         return 'MissAV'
     if host in _TRUSTED_SUPJAV_HOSTS:
         return 'SupJav'
@@ -196,7 +196,7 @@ def _trusted_listing_evidence(site: str, listing_url: str) -> str:
         return ''
 
     if site == 'MissAV':
-        if host not in _TRUSTED_MISSAV_HOSTS:
+        if host not in MISSAV_VIDEO_HOSTS:
             return ''
         if re.fullmatch(
                 r'/dm\d+/(?:(?:cn|en|ja|ko|ms|th)/)?'
@@ -268,7 +268,7 @@ def trusted_chinese_subtitle_evidence(video: dict) -> tuple[str, ...]:
             source_host = (urlsplit(url).hostname or '').casefold()
         except (TypeError, ValueError):
             source_host = ''
-        if source_host in _TRUSTED_MISSAV_HOSTS:
+        if source_host in MISSAV_VIDEO_HOSTS:
             slug = url_slug(url)
             if slug.endswith(('-chinese-subtitle', '-chinese-subtitles')):
                 evidence.add('missav-url-chinese-subtitle')

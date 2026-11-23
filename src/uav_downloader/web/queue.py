@@ -14,6 +14,7 @@ import uuid
 
 from uav_downloader import sites
 from uav_downloader.core.storage import StorageWriteError
+from uav_downloader.core.video_identity import MISSAV_VIDEO_HOSTS
 
 MAX_JOBS = 1000
 MAX_STATE_BYTES = 2 * 1024 * 1024
@@ -44,12 +45,10 @@ def validate_job(raw):
         # Restrict this initial remote-control surface to the maintained adapters.
         allowed = cls in sites.FEATURED_SITE_CLASSES
         host = parsed.hostname or ''
-        host_allowed = any(host == h for h in (
+        host_allowed = host in MISSAV_VIDEO_HOSTS or host in (
             'jable.tv', 'fs1.app', 'jablet.com', 'jablet.tv', 'supjav.com',
-            'missav.ws', 'missav.ai', 'missav.com', 'missav.live',
-            'missav123.com', 'missav888.com', 'missav789.com',
             'hanime1.me', 'www.hanime1.me',
-            'huangguoai.com', 'www.huangguoai.com'))
+            'huangguoai.com', 'www.huangguoai.com')
     except (ValueError, TypeError):
         allowed = host_allowed = False
     if not allowed or not host_allowed:

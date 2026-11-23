@@ -2142,7 +2142,10 @@ def _parse_whisper_cli_payload(
                 'Speech recognition runtime returned invalid timing')
         previous_end_ms = end_ms
         cue_text = _normalize_recognized_text(text)
-        if not cue_text:
+        # whisper.cpp can round its final cue start to the exact end of
+        # the audio island. No audio remains for it. Only discard it after
+        # validating the original offsets/timestamps, including overrun bounds.
+        if not cue_text or start_ms == maximum_ms:
             continue
         local_start = min(max(start_ms / 1000.0, 0.0), island_duration)
         local_end = min(max(end_ms / 1000.0, 0.0), island_duration)
@@ -2880,10 +2883,8 @@ def _run_reazonspeech(
                         windows[window_index],
                         window_durations[window_index],
                     )
-                    if not cues:
-                        raise ReazonSpeechStructuralError(
-                            'Speech was detected but ReazonSpeech returned '
-                            'an empty window')
+                    # A valid empty window (e.g. VAD on background audio)
+                    # does not invalidate non-empty windows in this run.
                     if len(recognized) + len(cues) > MAX_WHISPER_CUES:
                         raise ReazonSpeechStructuralError(
                             'ReazonSpeech returned too many segments')

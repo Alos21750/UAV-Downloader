@@ -334,6 +334,19 @@ def test_cli_payload_strictly_rejects_bad_timing(segment):
         )
 
 
+def test_cli_payload_discards_zero_duration_trailing_quantized_cue():
+    good = _cli_segment(100, 1900, 'first')
+    island = subtitles.SpeechIsland(10.0, 12.0)
+    result = subtitles._parse_whisper_cli_payload(
+        _cli_payload(good, _cli_segment(2000, 2200, 'tail')), island, 2.0)
+    assert result == [subtitles.RecognizedSegment(10.1, 11.9, 'first')]
+    # The end clamp is not permission to accept contradictory raw timestamps.
+    invalid = _cli_segment(2000, 2200, 'tail')
+    invalid['timestamps']['to'] = '00:00:00,000'
+    with pytest.raises(subtitles.SubtitleError):
+        subtitles._parse_whisper_cli_payload(_cli_payload(good, invalid), island, 2.0)
+
+
 def test_cli_payload_rejects_overlapping_cues():
     with pytest.raises(subtitles.SubtitleError):
         subtitles._parse_whisper_cli_payload(

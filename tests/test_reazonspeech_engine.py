@@ -469,6 +469,33 @@ def test_reazonspeech_structural_failure_lazily_falls_back_to_balanced(
     assert outcomes == [('balanced', 'whisper', True)]
 
 
+@pytest.mark.parametrize('all_empty', [False, True])
+def test_empty_window_falls_back_only_when_entire_detection_is_empty(
+        monkeypatch, tmp_path, all_empty):
+    wav = tmp_path / 'audio.wav'
+    _write_pcm16_wav(wav, 14.0)
+    whisper = tmp_path / 'whisper-cli.exe'
+    vad = tmp_path / 'whisper-vad-speech-segments.exe'
+    whisper.write_bytes(b'fixture')
+    vad.write_bytes(b'fixture')
+    monkeypatch.setattr(subtitles, '_run_external_vad', lambda *a, **kw: [
+        subtitles.SpeechIsland(0.1, 1.5), subtitles.SpeechIsland(10.0, 12.0)])
+    monkeypatch.setattr(subtitles, '_verify_reazonspeech_install', lambda root, **kw: root)
+    monkeypatch.setattr(subtitles, '_run_reazonspeech_cli_batch', lambda *a, **kw: [
+        _reazon_payload(text=''), _reazon_payload(text='') if all_empty else _reazon_payload()])
+    fallback = []
+    monkeypatch.setattr(subtitles, '_prepare_whisper_fallback_model',
+                        lambda *a: fallback.append(True) or 'fixture-model')
+    monkeypatch.setattr(subtitles, '_run_whisper', lambda *a, **kw: 'fallback.srt')
+    path = subtitles._run_reazonspeech(str(whisper), str(tmp_path / 'pack'), 'vad.bin',
+                                      str(wav), str(tmp_path / 'out'), 'log', None)
+    if all_empty:
+        assert fallback == [True] and path == 'fallback.srt'
+    else:
+        assert not fallback and path == str(tmp_path / 'out.srt')
+        assert subtitles.parse_srt((tmp_path / 'out.srt').read_text(encoding='utf-8'))
+
+
 def test_reazonspeech_primary_reports_actual_engine_without_fallback(
         monkeypatch, tmp_path):
     wav = tmp_path / 'audio.wav'
