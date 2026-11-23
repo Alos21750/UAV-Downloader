@@ -68,6 +68,8 @@ MissAV downloads use at most 4 segment requests per video and 8 across all
 active MissAV videos. If a transient CDN failure leaves a few segments missing,
 UAV Watcher keeps validated chunks, leaves the run pending, and resumes only
 the missing segments on the next check.
+If the same video repeatedly stalls, see [what “segments missing” means and
+what to report](uav-browser.md#if-a-retry-still-says-segments-missing).
 
 Destination storage errors (including a full disk or device I/O failure) stop
 monitoring immediately. The affected video stays pending and validated chunks

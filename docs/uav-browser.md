@@ -102,6 +102,26 @@ Validated HLS segments are resumable. If a MissAV CDN request remains
 unavailable after the automatic retry window, Retry requests only the missing
 segments rather than restarting the complete video.
 
+### If a retry still says “segments missing”
+
+The number is a count of segments not yet obtained, **not** the index of
+the first gap. Requests run concurrently, so “1 missing” does not mean only
+the last seconds are missing. The count alone cannot distinguish an HTTP
+response, a connection failure or a segment that failed validation.
+
+Keep the cache, destination and quality unchanged. In Browser, retry the
+existing job; in Watcher, allow the next check to resume it. If the same job
+still fails, report one public video **page** URL, app version, Browser or
+Watcher, quality, bandwidth cap (0 means unlimited), and the last retry/error
+lines including the count and any HTTP status actually displayed. Do not
+post cookies, signed stream URLs, proxy credentials or private local paths.
+There is no need to repeat a whole batch to make a report.
+
+In v3.7.0 there is no partial-export button. Renaming a cached segment to the
+final filename is not a workaround: a later attempt can see an existing video
+and skip it. If the error instead mentions a full disk or storage I/O, check
+the destination before retrying.
+
 Hanime1's Ura Anime and short-anime category pages use a compact card layout.
 UAV Browser supports that layout as well as the standard search/result cards.
 
