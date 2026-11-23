@@ -192,6 +192,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
+from uav_downloader.ui.scroll import ScrollableFrame
 
 from uav_downloader import sites as M3U8Sites
 from uav_downloader.sites.jabletv import JableTVBrowser
@@ -2779,7 +2780,7 @@ class SmallToolApp(ctk.CTk):
         ctk.CTkLabel(quick, text=T('bandwidth_quick_hint'), text_color=TEXT_DIM,
                      font=(font_family, 11)).pack(side='left', padx=16)
 
-        settings_scroll = ctk.CTkScrollableFrame(
+        settings_scroll = ScrollableFrame(
             cfg_card,
             height=_settings_viewport_height(
                 max(self.winfo_height(), MIN_WINDOW_HEIGHT)),
@@ -3683,7 +3684,7 @@ class SmallToolApp(ctk.CTk):
                 16, lambda: self._run_category_build_batch(site, gen, epoch))
 
     def _iter_category_widgets(self, site_name):
-        inner = ctk.CTkScrollableFrame(
+        inner = ScrollableFrame(
             self._category_tabview.tab(self._category_tab_names[site_name]),
             fg_color='transparent', corner_radius=0,
             scrollbar_button_color=BORDER, scrollbar_button_hover_color=BORDER_HOVER)
@@ -4100,7 +4101,7 @@ class SmallToolApp(ctk.CTk):
             font=(ui_font(), 12), justify='left', wraplength=760).pack(
                 anchor='w', padx=22, pady=(0, 16))
 
-        content = ctk.CTkScrollableFrame(
+        content = ScrollableFrame(
             popup, fg_color='transparent', corner_radius=0,
             scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=BORDER_HOVER)
