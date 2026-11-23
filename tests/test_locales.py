@@ -83,7 +83,8 @@ def test_set_lang_accepts_supported_and_falls_back_to_english():
     assert locales.get_lang() == 'en'
 
 
-def test_ui_font_tracks_current_language():
+def test_ui_font_tracks_current_language(monkeypatch):
+    monkeypatch.setattr(locales.sys, 'platform', 'win32')
     locales.set_lang('zh')
     assert locales.ui_font() == 'Microsoft JhengHei'
 
@@ -92,6 +93,13 @@ def test_ui_font_tracks_current_language():
 
     locales.set_lang('en')
     assert locales.ui_font() == 'Microsoft JhengHei'
+
+
+def test_ui_font_uses_available_linux_family(monkeypatch):
+    monkeypatch.setattr(locales.sys, 'platform', 'linux')
+    for language, _ in locales.LANGUAGES:
+        locales.set_lang(language)
+        assert locales.ui_font() == 'Arial'
 
 
 def test_state_label_translates_known_codes_and_keeps_unknown_codes():

@@ -7,6 +7,7 @@ from tkinter import messagebox
 from typing import Callable, Optional
 
 import customtkinter as ctk
+from uav_downloader.ui.scroll import ScrollableFrame
 
 from uav_downloader.i18n.locales import T, ui_font
 from uav_downloader.subtitles.settings import (
@@ -205,7 +206,7 @@ class TranslationSettingsDialog(ctk.CTkToplevel):
             font=(font, 10),
         ).pack(anchor="w", padx=24)
 
-        body = ctk.CTkScrollableFrame(
+        body = ScrollableFrame(
             self,
             fg_color=BG_DARK,
             corner_radius=0,

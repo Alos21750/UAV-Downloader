@@ -235,6 +235,8 @@ reduce proxy load.
 
 On Linux, install `python3-tk` with your system package manager if Tk is not already available. macOS and Linux run from source; the portable EXE release is for Windows.
 
+If Linux text or control icons look pixelated even at a larger size, check the Tk build used by your Python interpreter. Some Conda builds lack Xft support and use bitmap fonts. Use an Xft-enabled Tk build (for example, the conda-forge `tk=8.6.13=xft*` build) in your application environment, or use system Python with `python3-tk`. Increasing widget scaling alone does not fix bitmap rendering.
+
 ## Docker / NAS
 
 The public image is `ghcr.io/alos21750/uav-downloader:latest`. GitHub Actions builds both amd64 and arm64 variants.

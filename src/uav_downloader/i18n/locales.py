@@ -2,6 +2,8 @@
 # coding: utf-8
 """Localization strings for the GUI apps."""
 
+import sys
+
 LANGUAGES = [
     ('en', 'English'), ('th', 'ไทย'), ('zh', '繁體中文'),
     ('zh-Hans', '简体中文'), ('ja', '日本語'),
@@ -1962,6 +1964,8 @@ def get_lang() -> str:
 
 
 def ui_font():
+    if sys.platform.startswith('linux'):
+        return 'Arial'
     return FONTS.get(_current_lang, 'Segoe UI')
 
 
