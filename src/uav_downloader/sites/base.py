@@ -1266,8 +1266,16 @@ class M3U8Crawler:
                         break
             with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
                 self._t2_executor = executor
-                list(executor.map(self._scrape, tasks, timeout=None))
+                try:
+                    list(executor.map(self._scrape, tasks, timeout=None))
+                except concurrent.futures.CancelledError:
+                    if self._storage_error is not None:
+                        raise self._storage_error
+                    if not self._cancel_job:
+                        raise
             self._t2_executor = None
+            if self._storage_error is not None:
+                raise self._storage_error
             still_pending = len(self._pending_set)
             if self._denial_deferred or still_pending == len(self._denied_indices):
                 break

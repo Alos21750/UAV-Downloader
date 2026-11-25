@@ -1,5 +1,7 @@
 """Local storage failures must not enter network retry/fallback loops (#54)."""
+import concurrent.futures
 import errno
+import threading
 import types
 import pytest
 
@@ -239,3 +241,97 @@ def test_subtitle_atomic_write_classifies_device_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(engine.tempfile, 'mkstemp', broken)
     with pytest.raises(StorageWriteError):
         engine._atomic_write_text(str(tmp_path / 'video.en.srt'), 'subtitle')
+
+
+@pytest.mark.parametrize('stage', ['storage_open', 'os_replace'])
+def test_scrape_preserves_storage_error_when_racing_with_cancellation(
+        monkeypatch, tmp_path, stage):
+    job = base.M3U8Crawler.__new__(base.M3U8Crawler)
+    job._cancel_job = False
+    job._storage_error = None
+    job._seg_savename = lambda index: str(tmp_path / 'segment.ts')
+    job._m3u8_headers = lambda: {}
+    job._key_content = None
+    job._transform_segment = lambda data: data
+    job._pending_set = {(0, 'https://example.test/segment.ts')}
+    job._speed_lock = threading.Lock()
+    job._bytes_downloaded = 0
+    job._speed_start = 0.0
+    job._job_total = 1
+    job._progress_callback = None
+
+    monkeypatch.setattr(base, '_http_get', lambda *a, **kw: types.SimpleNamespace(
+        status_code=200, content=b'\x47' + b'\0' * 187, close=lambda: None))
+    monkeypatch.setattr(base, '_is_valid_ts_segment', lambda data: True)
+
+    if stage == 'storage_open':
+        def broken_open(*args, **kwargs):
+            job._cancel_job = True
+            raise StorageWriteError(str(tmp_path), OSError(errno.EIO, 'device offline'))
+
+        monkeypatch.setattr(base, 'storage_open', broken_open)
+    else:
+        def broken_replace(_src, dst):
+            job._cancel_job = True
+            raise OSError(errno.EIO, 'device offline')
+
+        monkeypatch.setattr(base.os, 'replace', broken_replace)
+
+    with pytest.raises(StorageWriteError):
+        job._scrape((0, 'https://example.test/segment.ts'))
+    assert isinstance(job._storage_error, StorageWriteError)
+
+
+@pytest.mark.parametrize('mode', ['before_cancel_error', 'during_exit', 'pure_cancel'])
+def test_start_crawl_preserves_storage_error_across_cancelled_executor_future(
+        monkeypatch, tmp_path, mode):
+    job = base.M3U8Crawler.__new__(base.M3U8Crawler)
+    job._cancel_job = False
+    job._storage_error = None
+    job._tsList = ['https://example.test/0.ts', 'https://example.test/1.ts']
+    job._pending_set = {
+        (0, 'https://example.test/0.ts'),
+        (1, 'https://example.test/1.ts'),
+    }
+    job._max_workers = 2
+    job._segment_retry_rounds = 1
+    job._segment_retry_base_delay = 0.0
+    job._segment_retry_max_delay = 0.0
+    job.respect_segment_denials = False
+    job._progress_callback = None
+    job._t2_executor = None
+
+    disk_err = StorageWriteError(str(tmp_path), OSError(errno.EIO, 'device offline'))
+
+    class FakeExecutor:
+        def __init__(self, max_workers=1):
+            self.max_workers = max_workers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            if mode == 'during_exit':
+                job._storage_error = disk_err
+            return False
+
+        def map(self, _fn, _tasks, timeout=None):
+            if mode == 'before_cancel_error':
+                job._storage_error = disk_err
+                job._cancel_job = True
+                raise concurrent.futures.CancelledError()
+            if mode == 'during_exit':
+                job._cancel_job = True
+                raise concurrent.futures.CancelledError()
+            job._cancel_job = True
+            raise concurrent.futures.CancelledError()
+
+    monkeypatch.setattr(base.concurrent.futures, 'ThreadPoolExecutor', FakeExecutor)
+
+    if mode == 'pure_cancel':
+        job._startCrawl()
+        assert job._storage_error is None
+    else:
+        with pytest.raises(StorageWriteError):
+            job._startCrawl()
+        assert job._storage_error is disk_err
