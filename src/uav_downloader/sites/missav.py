@@ -108,16 +108,17 @@ class SiteMissAV(M3U8Crawler):
     segment_retry_max_delay = 8.0
     _segment_request_gate = threading.BoundedSemaphore(8)
     _cooldown_lock = threading.Lock()
+    _media_cooldowns = {}  # (scheme, host, port) -> (monotonic deadline, status)
 
     def _media_get(self, url, timeout=20, stream=False):
-        # Scope Retry-After to this download and origin. Don't occupy a worker
+        # Share the requested pause across jobs for this origin only. Don't occupy a worker
         # sleeping for an arbitrary server delay; the ordinary bounded retry
         # loop can retry after expiry or leave the job resumable.
         parsed = urlsplit(url)
         origin = (parsed.scheme, parsed.hostname, parsed.port or
                   (443 if parsed.scheme == 'https' else 80))
         with self._cooldown_lock:
-            cooldowns = self.__dict__.setdefault('_media_cooldowns', {})
+            cooldowns = self._media_cooldowns
             until, status = cooldowns.get(origin, (0, 0))
             if until > time.monotonic():
                 raise _MediaCooldown(status)
@@ -136,6 +137,9 @@ class SiteMissAV(M3U8Crawler):
             if delay > 0:
                 deadline = time.monotonic() + delay
                 with self._cooldown_lock:
+                    now = time.monotonic()
+                    for expired in [k for k, (end, _) in cooldowns.items() if end <= now]:
+                        del cooldowns[expired]
                     if deadline > cooldowns.get(origin, (0, 0))[0]:
                         cooldowns[origin] = (deadline, response.status_code)
         return response

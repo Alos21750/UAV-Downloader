@@ -1383,8 +1383,13 @@ class DownloadManager:
                             pass
                         item.speed = row.get('速度', '') or ''
                         item.error = row.get('錯誤', '') or ''
+                        saved_code = row.get('錯誤代碼', '') or ''
+                        # v3.8.3 used one code for refusals and transient gaps.
+                        if saved_code == 'incomplete_segments':
+                            if classify_download_problem(item.error, item.state).code == 'segment_access_denied':
+                                saved_code = 'segment_access_denied'
                         item.error_code = (
-                            row.get('錯誤代碼', '') or
+                            saved_code or
                             classify_download_problem(
                                 item.error, item.state).code)
                         try:

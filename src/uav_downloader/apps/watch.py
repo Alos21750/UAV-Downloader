@@ -1966,7 +1966,10 @@ class SmallToolWorker:
             # Each crawler stores validated segments in a URL-specific temp
             # folder.  Preserve those files so the next unattended check only
             # requests the missing tail instead of restarting a large video.
-            self._log(f'  [RETRY] {e}')
+            if classify_download_problem(e).code == 'segment_access_denied':
+                self._log(f'  [HTTP 403] {T("problem_segment_access_denied")} · {e}')
+            else:
+                self._log(f'  [RETRY] {e}')
             return 'download_incomplete'
         except MirrorsBlockedError as e:
             self._log(f'  [BLOCKED] {e}')

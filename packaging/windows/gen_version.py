@@ -4,7 +4,7 @@
 from pathlib import Path
 
 
-VERSION = (3, 8, 3, 0)
+VERSION = (3, 8, 4, 0)
 HERE = Path(__file__).resolve().parent
 
 

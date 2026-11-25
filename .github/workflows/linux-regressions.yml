@@ -41,6 +41,7 @@ jobs:
           python -m pytest --timeout=30 -q -rs --junitxml=portable.xml \
             tests/test_scroll_events.py tests/test_watch_lazy_ui.py \
             tests/test_missav_denied_resume.py tests/test_hls_segment_recovery.py \
+            tests/test_missav_retry_after.py tests/test_upstream_backoff.py \
             tests/test_huangguo_collection.py::test_symlink_cache_is_not_followed
           python - <<'PY'
           import xml.etree.ElementTree as ET

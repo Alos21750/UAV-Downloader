@@ -20,7 +20,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '互動式多站下載器',
-        'version_label': 'v3.8.3',
+        'version_label': 'v3.8.4',
         'by_author': '',
         'status_ready': '就緒',
         'site_label': '網站',
@@ -414,7 +414,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': 'Interactive Multi-Site Downloader',
-        'version_label': 'v3.8.3',
+        'version_label': 'v3.8.4',
         'by_author': '',
         'status_ready': 'Ready',
         'site_label': 'Site',
@@ -809,7 +809,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '交互式多站下载器',
-        'version_label': 'v3.8.3',
+        'version_label': 'v3.8.4',
         'by_author': '',
         'status_ready': '就绪',
         'site_label': '网站',
@@ -1203,7 +1203,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'UAV Browser',
         'app_brand_2': '対話型マルチサイトダウンローダー',
-        'version_label': 'v3.8.3',
+        'version_label': 'v3.8.4',
         'by_author': '',
         'status_ready': '準備完了',
         'site_label': 'サイト',
@@ -1793,6 +1793,15 @@ for _language, _hint in {
     'th': 'ยังดาวน์โหลดบางส่วนไม่สำเร็จ ลองอีกครั้งเพื่อดาวน์โหลดต่อ',
 }.items():
     STRINGS[_language]['problem_incomplete_segments'] = _hint
+
+for _language, _hint in {
+    'en': 'Source refused a segment (403). Cache kept; no need to retry repeatedly.',
+    'zh': '來源拒絕提供片段（403）。快取已保留，不必連續重試。',
+    'zh-Hans': '来源拒绝提供片段（403）。已保留缓存，无需连续重试。',
+    'ja': '配信元が一部を拒否しました（403）。キャッシュは保持されています。再試行を繰り返す必要はありません。',
+    'th': 'ต้นทางปฏิเสธบางส่วน (403) เก็บแคชไว้แล้ว ไม่จำเป็นต้องลองซ้ำติดกัน',
+}.items():
+    STRINGS[_language]['problem_segment_access_denied'] = _hint
 
 # Watcher-only Huangguo collection option. Keep all five language variants
 # explicit rather than silently falling back to English for a new control.

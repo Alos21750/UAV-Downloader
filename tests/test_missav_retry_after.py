@@ -6,6 +6,11 @@ from uav_downloader.sites import missav
 from uav_downloader.sites.base import M3U8Crawler
 
 
+@pytest.fixture(autouse=True)
+def fresh_origin_state(monkeypatch):
+    monkeypatch.setattr(missav.SiteMissAV, '_media_cooldowns', {})
+
+
 @pytest.mark.parametrize("status", [429, 503])
 def test_same_job_honors_retry_after_without_blocking_other_origins(monkeypatch, status):
     now = [100.0]

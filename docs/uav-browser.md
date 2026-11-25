@@ -142,6 +142,16 @@ that attempt; already-started requests can finish. The diagnostic distinguishes
 actual HTTP denials from segments that were not requested. A persistent 403
 is not evidence that switching VPNs or retrying the entire batch will help.
 
+From v3.8.4 a saved MissAV segment refusal is labeled separately from a
+temporary gap, even when reopening a v3.8.3 Browser queue. Keep the cache;
+there is no need to press Retry repeatedly. If the source permits the missing
+segments later, retry just that item. If Export partial is offered, it saves
+only the verified prefix; it does not complete the original. Watcher no longer
+labels explicit segment refusals as ordinary retries. For HTTP **429/503 with
+a valid Retry-After**, MissAV media requests to the same origin share the
+requested pause across jobs in the **same running process**. Other origins
+are not paused. A 403 alone neither specifies a wait time nor proves an IP ban.
+
 Hanime1's Ura Anime and short-anime category pages use a compact card layout.
 UAV Browser supports that layout as well as the standard search/result cards.
 
