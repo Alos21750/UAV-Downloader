@@ -8,6 +8,7 @@ constructing a window and can later be reused by another UI.
 from __future__ import annotations
 
 import csv
+import errno
 import json
 import os
 import re
@@ -148,7 +149,26 @@ def filter_items(items, filter_name: str):
     return list(items)
 
 
+def storage_problem_code(error: object) -> str:
+    # StorageWriteError is serialized in the queue. Match our own prefix, not
+    # arbitrary digits or keywords in the destination or OS-provided details.
+    tag = re.match(r'^\[Errno (\d{1,5})\] Destination storage I/O failed \[', str(error or ''))
+    if not tag:
+        return ''
+    code = int(tag[1])
+    if code == errno.ENOSPC:
+        return 'disk_full'
+    if code in (errno.EACCES, errno.EPERM):
+        return 'permission'
+    if code in (errno.ENOENT, errno.ENOTDIR):
+        return 'storage_path'
+    return 'storage_io'
+
+
 def classify_download_problem(error: object, state: str = '') -> DownloadProblem:
+    disk = storage_problem_code(error)
+    if disk:
+        return DownloadProblem(disk, False)
     value = str(error or '').lower()
     # This prefix is also saved in CSV, where the exception type is lost.
     # A segment-level HTTP status or example index (e.g. 404) doesn't mean

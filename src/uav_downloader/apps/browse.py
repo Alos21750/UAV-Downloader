@@ -86,6 +86,7 @@ from uav_downloader.apps.downloads import (
     load_url_file,
     next_schedule_epoch,
     site_name,
+    storage_problem_code,
     storage_preflight,
     video_code,
 )
@@ -1389,7 +1390,7 @@ class DownloadManager:
                             if classify_download_problem(item.error, item.state).code == 'segment_access_denied':
                                 saved_code = 'segment_access_denied'
                         item.error_code = (
-                            saved_code or
+                            storage_problem_code(item.error) or saved_code or
                             classify_download_problem(
                                 item.error, item.state).code)
                         try:
@@ -5874,13 +5875,24 @@ class ModernApp(ctk.CTk):
             return
         try:
             clp = self.clipboard_get()
-            if clp != self._clp_text:
+            if isinstance(clp, str) and 0 < len(clp) <= 2048 and clp != self._clp_text:
                 self._clp_text = clp
-                urls = extract_urls(clp)
-                if urls and getattr(self, '_dl_url_var', None) is not None:
-                    # Clipboard monitoring is a convenience hint only.  It no
-                    # longer mutates the persistent queue without a click.
-                    self._dl_url_var.set(urls[0])
+                url = clp.strip()
+                field = getattr(self, '_dl_url_var', None)
+                if (field is not None and field.get() in ('', getattr(self, '_last_clipboard_hint', None))
+                        and url.startswith('https://')
+                        and not any(c.isspace() or ord(c) < 32 for c in url)):
+                    parts = urlsplit(url)
+                    # Passive hints should never surface unrelated links,
+                    # arbitrary query/fragment secrets, or replace typed text.
+                    plain_query = not parts.query or (
+                        parts.hostname in {'hanime1.me', 'www.hanime1.me'} and
+                        parts.path.rstrip('/') == '/watch' and re.fullmatch(r'v=[0-9]+', parts.query))
+                    if (plain_query and not parts.fragment and parts.username is None
+                            and parts.password is None and parts.port in (443, None)
+                            and (M3U8Sites.VaildateUrl(url) or self._is_listing_url(url))):
+                        field.set(url)
+                        self._last_clipboard_hint = url
         except (tk.TclError, Exception):
             pass
         finally:

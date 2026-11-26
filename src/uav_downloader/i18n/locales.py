@@ -1803,6 +1803,21 @@ for _language, _hint in {
 }.items():
     STRINGS[_language]['problem_segment_access_denied'] = _hint
 
+for _language, _storage_hints in {
+    'en': ('Free space on the destination drive before retrying.', 'Check write access to the destination folder.',
+           'The download folder is unavailable. Check the drive and folder.', 'Writing failed. Check the destination drive before retrying.'),
+    'zh': ('下載磁碟空間不足，請先清出空間。', '無法寫入下載資料夾，請檢查權限。',
+           '找不到下載資料夾，請確認磁碟已連接、路徑正確。', '寫入失敗，請先檢查下載磁碟再重試。'),
+    'zh-Hans': ('下载磁盘空间不足，请先清理空间。', '无法写入下载文件夹，请检查权限。',
+                '找不到下载文件夹，请确认磁盘已连接、路径正确。', '写入失败，请先检查下载磁盘再重试。'),
+    'ja': ('保存先の空き容量を確保してください。', '保存先フォルダーへの書き込み権限を確認してください。',
+           '保存先が見つかりません。ドライブとパスを確認してください。', '書き込みに失敗しました。再試行する前に保存先を確認してください。'),
+    'th': ('เพิ่มพื้นที่ว่างในไดรฟ์ปลายทางก่อนลองอีกครั้ง', 'ตรวจสอบสิทธิ์เขียนในโฟลเดอร์ปลายทาง',
+           'ไม่พบโฟลเดอร์ดาวน์โหลด โปรดตรวจสอบไดรฟ์และพาธ', 'เขียนไฟล์ไม่สำเร็จ โปรดตรวจสอบไดรฟ์ก่อนลองอีกครั้ง'),
+}.items():
+    for _code, _hint in zip(('disk_full', 'permission', 'storage_path', 'storage_io'), _storage_hints):
+        STRINGS[_language]['problem_' + _code] = _hint
+
 # Watcher-only Huangguo collection option. Keep all five language variants
 # explicit rather than silently falling back to English for a new control.
 for _language, _collection in {
