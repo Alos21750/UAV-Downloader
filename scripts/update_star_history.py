@@ -16,6 +16,8 @@ import math
 import os
 from pathlib import Path
 import re
+import time
+import urllib.error
 import urllib.request
 
 
@@ -24,7 +26,7 @@ OUTPUT_PATH = (
     Path(__file__).resolve().parents[1] / 'docs' / 'assets' /
     'star-history.svg'
 )
-RENDER_VERSION = '2'
+RENDER_VERSION = '3'
 
 QUERY = '''
 query StarHistory($owner: String!, $name: String!, $cursor: String) {
@@ -59,38 +61,53 @@ def graphql(token: str, variables: dict) -> dict:
     with urllib.request.urlopen(request, timeout=30) as response:
         result = json.load(response)
     if result.get('errors'):
-        messages = '; '.join(
-            str(item.get('message', 'GraphQL error'))
-            for item in result['errors'])
-        raise RuntimeError(messages)
+        raise RuntimeError('GitHub returned a GraphQL error')
     return result['data']['repository']
 
 
-def fetch_star_times(token: str, repository: str) -> tuple[int, list[str]]:
-    try:
-        owner, name = repository.split('/', 1)
-    except ValueError as exc:
-        raise ValueError('GITHUB_REPOSITORY must be owner/name') from exc
-
+def _read_pages(token, owner, name, transport):
     cursor = None
+    seen_cursors = set()
     timestamps = []
-    total = None
     while True:
-        data = graphql(token, {'owner': owner, 'name': name, 'cursor': cursor})
-        total = int(data['stargazerCount'])
+        data = transport(token, {'owner': owner, 'name': name, 'cursor': cursor})
+        total = data['stargazerCount']
+        if type(total) is not int or total < 0:
+            raise ValueError('Invalid GitHub star count')
         connection = data['stargazers']
-        timestamps.extend(
-            edge['starredAt'] for edge in connection['edges']
-            if edge.get('starredAt'))
+        for edge in connection['edges']:
+            stamp = edge['starredAt']
+            if not isinstance(stamp, str) or not stamp.endswith('Z'):
+                raise ValueError('Invalid GitHub star timestamp')
+            datetime.fromisoformat(stamp[:-1] + '+00:00')
+            timestamps.append(stamp)
         page_info = connection['pageInfo']
+        if type(page_info['hasNextPage']) is not bool:
+            raise ValueError('Invalid GitHub pagination metadata')
         if not page_info['hasNextPage']:
-            break
+            return total, timestamps
         cursor = page_info['endCursor']
+        if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+            raise RuntimeError('Invalid or repeated pagination cursor')
+        seen_cursors.add(cursor)
 
-    if total != len(timestamps):
-        raise RuntimeError(
-            f'Incomplete star data: expected {total}, received {len(timestamps)}')
-    return total, timestamps
+
+def fetch_star_times(token: str, repository: str, *, transport=graphql, sleep=time.sleep):
+    owner, name = repository.split('/', 1)
+    for delay in (10, 30, 60, None):
+        try:
+            total, timestamps = _read_pages(token, owner, name, transport)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (500, 502, 503, 504) or delay is None:
+                raise
+        else:
+            received = len(timestamps)
+            if (total == received or
+                    0 < received < total and total - received <= max(3, math.ceil(total * .005))):
+                return total, sorted(timestamps)
+            if delay is None:
+                raise RuntimeError(f'Inconsistent star data: {total} reported, {received} dated')
+        sleep(delay)
 
 
 def daily_series(timestamps: list[str], today: date | None = None):
@@ -128,8 +145,8 @@ def nice_upper(value: int) -> int:
     return int(step * magnitude)
 
 
-def history_hash(timestamps: list[str]) -> str:
-    payload = RENDER_VERSION + '\n' + '\n'.join(timestamps)
+def history_hash(total: int, timestamps: list[str]) -> str:
+    payload = '\n'.join([RENDER_VERSION, str(total), str(len(timestamps)), *sorted(timestamps)])
     return sha256(payload.encode()).hexdigest()[:20]
 
 
@@ -177,12 +194,15 @@ def render_svg(repository: str, total: int, timestamps: list[str]) -> str:
 
     updated = datetime.now(timezone.utc).date().isoformat()
     repo_label = escape(repository)
-    digest = history_hash(timestamps)
+    digest = history_hash(total, timestamps)
+    coverage = f'{len(timestamps)} dated stars plotted'
+    if len(timestamps) != total:
+        coverage += f' · {total - len(timestamps)} without a visible timestamp'
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"
   viewBox="0 0 {width} {height}" role="img"
   aria-labelledby="title description" data-history-hash="{digest}">
   <title id="title">GitHub star history for {repo_label}</title>
-  <desc id="description">{total} current stargazers grouped by the date each star was added. Updated {updated}.</desc>
+  <desc id="description">GitHub reports {total} stars. {coverage}. Data last changed {updated}.</desc>
   <defs>
     <linearGradient id="area" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ff5263" stop-opacity="0.34"/>
@@ -190,9 +210,9 @@ def render_svg(repository: str, total: int, timestamps: list[str]) -> str:
     </linearGradient>
   </defs>
   <rect x="1" y="1" width="1198" height="478" rx="18" fill="#0d1117" stroke="#30363d"/>
-  <text x="42" y="48" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="24" font-weight="700">Star history</text>
-  <text x="42" y="75" fill="#8b949e" font-family="Segoe UI, sans-serif" font-size="14">Current stargazers grouped by starredAt · updated {updated}</text>
-  <text x="1158" y="52" fill="#ff6374" font-family="Segoe UI, sans-serif" font-size="30" font-weight="700" text-anchor="end">{total} stars</text>
+  <text x="42" y="48" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="24" font-weight="700">Star history · {len(timestamps)} dated stars</text>
+  <text x="42" y="75" fill="#8b949e" font-family="Segoe UI, sans-serif" font-size="14">{coverage} · data last changed {updated}</text>
+  <text x="1158" y="52" fill="#ff6374" font-family="Segoe UI, sans-serif" font-size="30" font-weight="700" text-anchor="end">{total} stars on GitHub</text>
   <g font-family="Segoe UI, sans-serif" font-size="13">
     {''.join(y_grid)}
     {x_labels}
@@ -212,7 +232,7 @@ def main() -> None:
         raise SystemExit('GITHUB_TOKEN and GITHUB_REPOSITORY are required')
 
     total, timestamps = fetch_star_times(token, repository)
-    digest = history_hash(timestamps)
+    digest = history_hash(total, timestamps)
     if OUTPUT_PATH.exists():
         current = OUTPUT_PATH.read_text(encoding='utf-8')
         match = re.search(r'data-history-hash="([0-9a-f]+)"', current)

@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/star-history.yml'
       - 'scripts/update_star_history.py'
+      - 'tests/test_star_history.py'
   schedule:
     - cron: '23 2 * * *'
   workflow_dispatch: {}
@@ -13,11 +14,16 @@ on:
 permissions:
   contents: write
 
+concurrency: star-history
+
 jobs:
   update:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Test chart rules offline
+        run: python -m unittest discover -s tests -p test_star_history.py
 
       - name: Generate chart from GitHub star timestamps
         env:
@@ -35,4 +41,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "docs: refresh star history"
+          git pull --rebase origin master
           git push
