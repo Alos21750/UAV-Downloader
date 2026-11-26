@@ -21,6 +21,7 @@ MAX_STATE_BYTES = 2 * 1024 * 1024
 TERMINAL = {'completed', 'failed', 'cancelled', 'interrupted'}
 STATUSES = TERMINAL | {'pending', 'running', 'cancelling'}
 QUALITIES = {'highest', 'lowest', '1080', '720', '480', '360'}
+STORAGE_STOP = 'Storage I/O failed; check the disk, then explicitly resume'
 
 
 def validate_job(raw):
@@ -155,6 +156,13 @@ class QueueManager:
                 job['status'] = ('interrupted' if saved['status'] in {'running', 'cancelling'}
                                  else saved['status'])
                 job['logs'] = [job['status']]
+                # v1 already stored logs. Recover this actionable, fixed
+                # terminal reason only; never replay arbitrary saved text.
+                logs = saved.get('logs')
+                if (saved['status'] in {'failed', 'interrupted'} and isinstance(logs, list)
+                        and logs[-1:] == [STORAGE_STOP]):
+                    job['status'] = 'failed'
+                    job['logs'] = [STORAGE_STOP]
                 self._jobs.append(job)
             self._halted = data['halted']
         except (ValueError, KeyError, TypeError, OSError) as exc:
@@ -283,7 +291,7 @@ class QueueManager:
                 status = 'completed' if completed else 'failed'
                 detail = status
             except StorageWriteError:
-                status, detail = 'failed', 'Storage I/O failed; check the disk, then explicitly resume'
+                status, detail = 'failed', STORAGE_STOP
                 storage_failed = True
             except Exception as exc:
                 # Do not expose provider URLs, query credentials or arbitrary response bodies.
@@ -292,7 +300,7 @@ class QueueManager:
                 self._active = None
                 if not storage_failed and self._cancel.is_set():
                     status = detail = 'cancelled'
-                self._event(job, 'interrupted' if self._closed else status, detail)
+                self._event(job, 'interrupted' if self._closed and not storage_failed else status, detail)
                 self._halted = self._halted or storage_failed
                 try:
                     self._save()

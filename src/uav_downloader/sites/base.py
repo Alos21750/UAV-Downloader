@@ -1223,6 +1223,41 @@ class M3U8Crawler:
                 except Exception:
                     pass  # Cleanup must not replace the download outcome.
 
+    def _run_segment_round(self, tasks):
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers)
+        try:
+            with executor:
+                self._t2_executor = executor
+                if self._cancel_job:
+                    # Stop may have run just before the pool became visible.
+                    # Do not allocate one cancelled/no-op future per segment.
+                    if self._storage_error is not None:
+                        raise self._storage_error
+                    return
+                try:
+                    # map submits eagerly on supported Python versions. Stop can
+                    # shut down this pool before its last submit has happened.
+                    results = executor.map(self._scrape, tasks, timeout=None)
+                except RuntimeError as exc:
+                    if not (self._cancel_job and type(exc) is RuntimeError
+                            and exc.args == ('cannot schedule new futures after shutdown',)):
+                        raise
+                else:
+                    # Worker exceptions belong to the result iterator, not to
+                    # submission; never mistake one for an expected shutdown.
+                    for _ in results:
+                        pass
+        except concurrent.futures.CancelledError:
+            if self._storage_error is None and not self._cancel_job:
+                raise
+        finally:
+            # __exit__ has joined active writers, including a writer whose
+            # on-disk error was recorded after another future was cancelled.
+            if self._t2_executor is executor:
+                self._t2_executor = None
+        if self._storage_error is not None:
+            raise self._storage_error
+
     def _startCrawl(self):
         self._storage_error = None
         self._progress_unit = 'segments'
@@ -1264,18 +1299,7 @@ class M3U8Crawler:
                     if first[0] in self._denied_indices:
                         self._denial_deferred = len(tasks)
                         break
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-                self._t2_executor = executor
-                try:
-                    list(executor.map(self._scrape, tasks, timeout=None))
-                except concurrent.futures.CancelledError:
-                    if self._storage_error is not None:
-                        raise self._storage_error
-                    if not self._cancel_job:
-                        raise
-            self._t2_executor = None
-            if self._storage_error is not None:
-                raise self._storage_error
+            self._run_segment_round(tasks)
             still_pending = len(self._pending_set)
             if self._denial_deferred or still_pending == len(self._denied_indices):
                 break
@@ -1288,7 +1312,6 @@ class M3U8Crawler:
                     if delay > 0:
                         time.sleep(delay)
 
-        self._t2_executor = None
         spent = time.time() - self._speed_start
         if not self._cancel_job:
             final_pending = len(self._pending_set)
@@ -1371,10 +1394,11 @@ class M3U8Crawler:
     def cancel_download(self, cleanup=True):
         print("\n取消下載....", flush=True)
         self._cancel_job = True
-        if self._t2_executor:
-            try: self._t2_executor.shutdown(wait=False, cancel_futures=True)
-            except TypeError: self._t2_executor.shutdown(wait=False)
-            self._t2_executor = None
+        segment_executor = self._t2_executor
+        if segment_executor is not None:
+            try: segment_executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError: segment_executor.shutdown(wait=False)
+            # The owner clears the reference after all active writers retire.
         if self._t_executor:
             try: self._t_executor.shutdown(wait=False, cancel_futures=True)
             except TypeError: self._t_executor.shutdown(wait=False)

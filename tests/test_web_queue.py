@@ -138,6 +138,8 @@ def test_storage_failure_halts_pending_and_requires_explicit_resume(tmp_path):
         q.close()
         restored = QueueManager(tmp_path / 'downloads', tmp_path / 'state', autostart=False)
         assert restored.snapshot()['halted']
+        assert restored.snapshot()['jobs'][0]['logs'][-1] == (
+            'Storage I/O failed; check the disk, then explicitly resume')
         restored.resume()
         assert not restored.snapshot()['halted']
     finally:
@@ -151,6 +153,40 @@ def test_corrupt_state_fails_closed(tmp_path):
     with pytest.raises(ValueError):
         QueueManager(tmp_path / 'downloads', state)
     assert (state / 'queue.json').read_text() == '{bad'
+
+
+def test_restore_does_not_replay_unknown_or_stale_log_details(tmp_path):
+    q = QueueManager(tmp_path / 'downloads', tmp_path / 'state', autostart=False)
+    q.add([{'url': URL}])
+    saved = json.loads(q.path.read_text(encoding='utf-8'))
+    saved['jobs'][0].update(status='failed', logs=[
+        'Storage I/O failed; check the disk, then explicitly resume',
+        'PRIVATE_LOCAL_PATH_AND_TOKEN'])
+    q.path.write_text(json.dumps(saved), encoding='utf-8')
+    restored = QueueManager(q.root, q.state_dir, autostart=False)
+    assert restored.snapshot()['jobs'][0]['logs'] == ['failed']
+
+
+def test_disk_error_during_shutdown_survives_restart(tmp_path):
+    from uav_downloader.core.storage import StorageWriteError
+    writing = threading.Event()
+
+    def runner(job, root, cancel, progress):
+        writing.set()
+        assert cancel.wait(5)
+        raise StorageWriteError(tmp_path, OSError('fixture disk offline'))
+
+    q = QueueManager(tmp_path / 'downloads', tmp_path / 'state', runner=runner)
+    try:
+        q.add([{'url': URL}, {'url': URL.replace('123', '456')}])
+        assert writing.wait(5)
+    finally:
+        q.close()
+    restored = QueueManager(q.root, q.state_dir, autostart=False).snapshot()
+    assert restored['halted']
+    assert [job['status'] for job in restored['jobs']] == ['failed', 'pending']
+    assert restored['jobs'][0]['logs'] == [
+        'Storage I/O failed; check the disk, then explicitly resume']
 
 
 def test_state_write_failure_halts_without_accepting_unpersisted_jobs(tmp_path, monkeypatch):

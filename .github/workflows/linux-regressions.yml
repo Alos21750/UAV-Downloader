@@ -42,6 +42,10 @@ jobs:
             tests/test_scroll_events.py tests/test_watch_lazy_ui.py \
             tests/test_missav_denied_resume.py tests/test_hls_segment_recovery.py \
             tests/test_missav_retry_after.py tests/test_upstream_backoff.py \
+            tests/test_crawl_stop_ordering.py tests/test_storage_failures.py \
+            tests/test_web_queue.py::test_disk_error_during_shutdown_survives_restart \
+            tests/test_web_queue.py::test_restore_does_not_replay_unknown_or_stale_log_details \
+            tests/test_web_queue.py::test_storage_failure_halts_pending_and_requires_explicit_resume \
             tests/test_huangguo_collection.py::test_symlink_cache_is_not_followed
           python - <<'PY'
           import xml.etree.ElementTree as ET
