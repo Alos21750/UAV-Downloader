@@ -36,17 +36,39 @@
   <img src="./docs/assets/uav-browser.png" width="100%" alt="UAV Downloader UAV Browser v3.1.0 English dark interface with JableTV, MissAV and SupJav browse tabs" />
 </p>
 
-## Three workflows, one download core
+## Release notes
 
-### v3.8.1: role tracking and responsive layouts
+[All releases and downloads](https://github.com/Alos21750/UAV-Downloader/releases)
+
+### [v3.8.6](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.6) — Safe resume when the source or quality changes
+
+Browser and Watcher no longer mix segments from different sources, qualities, or timelines in one MP4. Cancellation waits for writers to finish, and retries keep only one managed set of segments per output. Upgrading from v3.8.5 or earlier leaves old segments untouched, but the first resume may need to download them again. [How the cache works](docs/transfer-cache.md)
+
+### [v3.8.5](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.5) — Storage errors survive cancellation and restart
+
+Stopping a download no longer hides a disk error from a write already in progress. After restarting, the Docker/NAS queue still tells you to check the disk and resume manually. Browser clipboard suggestions no longer replace a URL you are typing.
+
+### [v3.8.4](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.4) — MissAV: distinguish rate limits from refused segments
+
+MissAV downloads in the same process honor a valid HTTP 429/503 `Retry-After` for the same origin without pausing other origins. For a segment HTTP 403, Browser and Watcher explain that the source refused the request and the cache was kept. This does not grant access to refused segments.
+
+### [v3.8.3](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.3) — MissAV: check the first missing segment before a batch
+
+If that segment still returns 403 on resume, UAV keeps the verified segments and stops requesting the rest of the batch. Browser counts cached segments toward progress even when the retry downloads nothing new.
+
+### [v3.8.2](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.2) — Keep partial export available after restarting Browser
+
+Browser saves MissAV export receipts with the queue. After a failed retry or restart, you can still export the verified, uninterrupted beginning to a separate `*.partial.mp4`, without skipping gaps or overwriting the final video. When moving the queue CSV, keep its adjacent `.receipts` directory with it and leave the media cache in place.
+
+### [v3.8.1](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.1) — role tracking and responsive layouts
 
 In Watcher → MissAV → **Roles (title keywords)**, choose any of 13 roles. They share a scan of the first 10 recent-feed pages. Titles without matching words are not included. Selecting the full Latest feed still tracks all its items.
 
 Browser moves search to a second row when space is tight. Watcher keeps its categories and controls accessible in shorter windows. The NAS queue switches between one and two columns and avoids redrawing unchanged jobs.
 
-### v3.8.0: missing segments and partial export
+### [v3.8.0](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.0) — missing segments and partial export
 
-From v3.8.2, Browser saves partial-export receipts with the queue. After a failed retry or restart, export the verified contiguous beginning to a separate `*.partial.mp4`. Unverified legacy caches are not adopted. A MissAV segment returning HTTP 403 is not requested again in the same download attempt; transient failures still retry.
+Browser can export the verified beginning of an incomplete MissAV download from the current session to a separate `*.partial.mp4`. Diagnostics identify missing segments and their failure reasons. HLS downloads also honor per-segment AES-128 keys and IVs when a playlist rotates keys.
 
 ### v3.7.0: clearer desktop UI and custom bandwidth limits
 
@@ -114,6 +136,8 @@ Browser now closes safely during startup; background UI updates run on the main 
 - Destination write errors stop downloads instead of retrying disk failures
   as network errors. Check the device before explicitly resuming.
 
+## Three workflows, one download core
+
 | What you want to do | Choose | Workflow |
 |---|---|---|
 | Browse, search, and pick individual videos | **UAV_Browser.exe** | Browse cards, multi-select, queue, or download now |
@@ -127,8 +151,6 @@ If you are unsure, start with **UAV Browser**. Both Windows executables are port
 > Each release provides `UAV_Browser.exe`, `UAV_Watcher.exe`, `UAV_Watcher_portable.zip`, `UAV_SHA256SUMS.txt`, and the bundled FFmpeg's corresponding source archive, `UAV_FFmpeg_7.1_Corresponding_Source.tar.xz`. **Ordinary users do not need the source archive or a separate FFmpeg installation.** The app fetches AI components automatically on first use, so users do not need to download or extract model packs. Legacy ALOS and Jable filenames are no longer published.
 
 Learn more: [UAV Browser](./docs/uav-browser.md) · [UAV Watcher unattended automation](./docs/uav-watcher.md) · [AI subtitles](./docs/ai-subtitles.md) · [Docker / CLI](./docs/docker-cli.md) · [migrate to UAV](./docs/migration-to-uav.md)
-
-Upgrade note: old partial downloads are preserved but never mixed with a new source or quality. See [resume and cache behavior](docs/transfer-cache.md).
 
 ## Windows: start in 30 seconds
 

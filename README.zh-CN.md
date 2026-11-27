@@ -36,17 +36,39 @@
   <img src="./docs/assets/uav-browser.png" width="100%" alt="UAV Downloader UAV Browser 深色界面，包含 JableTV、MissAV 与 SupJav 浏览标签" />
 </p>
 
-## 三种工作模式，一个下载核心
+## 版本更新
 
-### v3.8.1: 角色追踪与自适应界面
+[所有版本与下载文件](https://github.com/Alos21750/UAV-Downloader/releases)
+
+### [v3.8.6](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.6) — 更换片源或画质时安全续传
+
+Browser 和 Watcher 不再把不同片源、画质或时间轴的分段混成一个 MP4。取消时会等写入结束再清理；同一输出只保留一代受管分段，无人值守重试不会不断堆积缓存。从 v3.8.5 或更早版本升级时，旧分段会保留，但首次续传可能需要重新下载。[续传与缓存说明](docs/transfer-cache.md)
+
+### [v3.8.5](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.5) — 停止下载时保留真实的磁盘错误
+
+点击停止时，已经开始的写入如果遇到磁盘错误，不会被误报为取消或网络失败。Docker／NAS 队列重启后仍会提示检查磁盘并手动恢复；Browser 的剪贴板提示也不会覆盖正在输入的网址。
+
+### [v3.8.4](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.4) — MissAV 区分限流和拒绝访问
+
+同一进程内的 MissAV 下载会遵守同一来源返回的有效 `Retry-After`（HTTP 429／503），不会暂停其他来源。分段返回 403 时，Browser 和 Watcher 会说明来源拒绝请求、缓存已保留；这不代表能获取被拒绝的分段。
+
+### [v3.8.3](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.3) — MissAV 续传先检查第一个缺失分段
+
+如果第一个缺失分段仍返回 403，就保留已验证的分段，不再请求后面整批。即使本次重试没有下载到新分段，Browser 的进度也会计入已有分段，不会归零。
+
+### [v3.8.2](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.2) — 重启 Browser 后仍可导出已验证的开头
+
+MissAV 任务的导出验证记录会随队列保存。重试失败或重启后，仍可将从开头连续且可验证的分段另存为 `*.partial.mp4`，不跳过缺口，也不覆盖成品。移动队列 CSV 时请一并保留旁边的 `.receipts` 文件夹，视频缓存需留在原处。
+
+### [v3.8.1](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.1) — 角色追踪与自适应界面
 
 在 Watcher → MissAV → **角色（标题关键词）** 中可多选 13 个角色。每次共用最近更新的前 10 页；标题未提到角色便不会命中。同时勾选「最近更新」则按原设置追踪整个列表。
 
 Browser 在空间不足时将搜索框换到下一行；Watcher 在较矮的窗口保留分类和操作区。Web 队列随屏幕宽度切换单／双栏，内容不变时不重绘。
 
-### v3.8.0：缺片诊断与部分导出
+### [v3.8.0](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.0) — 缺片诊断与部分导出
 
-从 v3.8.2 起，Browser 随队列保存验证记录。重试失败或重启后仍可把从开头连续且已验证的片段另存为 `*.partial.mp4`；旧版本无记录的缓存不能直接导出。MissAV 明确返回 HTTP 403 的分片不会在同一次下载中反复请求，暂时性错误仍会重试。
+Browser 可将本次运行中已验证的、从开头连续的 MissAV 分段另存为 `*.partial.mp4`。缺片诊断会显示失败原因和位置；HLS 播放列表中途更换 AES-128 密钥时，会使用各分段指定的密钥和 IV。
 
 ### v3.7.0：更清楚的界面、自定义下载限速
 
@@ -110,6 +132,8 @@ Browser 在空间不足时将搜索框换到下一行；Watcher 在较矮的窗�
 - Watcher 移除原有 50 页限制，增加“全部版本”；不同版本存入每站指定目录下的 `versions/<kind>`。
 - SupJav 增加 EVS、VAS、LUC、VOE 来源；HTTP 429 等待重试，真正的 403 验证仍需有效会话。
 - 磁盘写入异常会停止下载，避免按网络错误反复重试；检查设备后手动恢复。
+
+## 三种工作模式，一个下载核心
 
 | 需求 | 建议 | 操作方式 |
 |---|---|---|
@@ -268,8 +292,6 @@ Docker 是无界面、执行完即退出的下载任务，不包含 UAV Browser 
 - 不要上传 Cookie、Proxy 帐号密码、Token 或其他私密信息。
 
 需要 Proxy 时，可在 UAV Browser“设置”或 UAV Watcher 顶部选择自定义代理、Windows 系统代理或禁用。两个 GUI 共用该设置，而且只作用于本程序；Windows 模式目前支持已启用的手动 ProxyServer。PAC 配置网址会被提示但不会执行，尚不支持 WPAD 自动检测。
-
-升级提醒：旧版未完成的分段会保留，但不会与新片源或画质混合。[续传与缓存说明](docs/transfer-cache.md)。
 
 ## Stars 与项目活动
 

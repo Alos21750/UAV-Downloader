@@ -34,3 +34,12 @@ is not bundled with Python.
 
 Windows executable releases are created only by the pinned GitHub Actions
 workflow. Do not attach locally built executables to project releases.
+
+## Release notes in the READMEs
+
+In the same change that bumps `uav_downloader.metadata.VERSION`, prepend a
+localized release entry to README.md, README.en.md, README.zh-CN.md and
+README.ja.md. Link the version heading to its GitHub release tag. Explain what
+changes for a user and mention any upgrade action; keep previous entries in
+newest-first order. Publishing GitHub release notes does not update the READMEs.
+Run `python -m pytest -q tests/test_readme_release_history.py` before tagging.

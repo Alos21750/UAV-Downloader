@@ -36,17 +36,39 @@
   <img src="./docs/assets/uav-browser.png" width="100%" alt="UAV Downloader UAV Browser v3.1.0 English dark interface with JableTV, MissAV and SupJav browse tabs" />
 </p>
 
-## 三種工作模式，一個下載核心
+## 版本更新
 
-### v3.8.1: 角色追蹤與自適應介面
+[所有版本與下載檔](https://github.com/Alos21750/UAV-Downloader/releases)
+
+### [v3.8.6](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.6) — 換片源或畫質時安全續傳
+
+Browser 和 Watcher 不再把不同片源、畫質或時間軸的分段混成一支 MP4。取消會等到寫入結束再清理；同一輸出只保留一代受管分段，無人值守重試不會一直累積快取。從 v3.8.5 或更早版本升級，舊分段會保留，但第一次續傳可能要重抓。[續傳與快取說明](docs/transfer-cache.md)
+
+### [v3.8.5](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.5) — 停止下載時保留真正的磁碟錯誤
+
+按下停止時，已開始寫入的工作若遇到磁碟錯誤，不會被誤報成取消或網路失敗。Docker／NAS 佇列重開後仍會提示檢查磁碟並手動恢復；Browser 的剪貼簿提示也不再覆蓋正在輸入的網址。
+
+### [v3.8.4](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.4) — MissAV 限流與拒絕存取分開處理
+
+同一程序內的 MissAV 下載會共用同一來源回覆的有效 `Retry-After`（HTTP 429／503），不會連帶暫停其他來源。片段若收到 403，Browser 和 Watcher 會說明來源拒絕請求、快取已保留；這不代表能取得被拒絕的片段。
+
+### [v3.8.3](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.3) — MissAV 續傳先檢查第一個缺片
+
+若第一個缺片仍回覆 403，就保留已驗證分段，不再請求後面整批。Browser 的進度會計入已有分段，即使這次沒有下載到新分段，也不會歸零。
+
+### [v3.8.2](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.2) — 重開 Browser 後仍可匯出已驗證的開頭
+
+MissAV 工作的匯出驗證紀錄會隨佇列保存。重試失敗或重開後，仍可將從開頭連續且可驗證的分段另存為 `*.partial.mp4`，不跳過缺口、不覆寫成品。搬移佇列時請一併保留 CSV 旁的 `.receipts` 資料夾，影片快取需留在原處。
+
+### [v3.8.1](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.1) — 角色追蹤與自適應介面
 
 Watcher → MissAV → **角色（標題關鍵字）** 可多選 13 個角色。每次共用最近更新的前 10 頁；標題沒提到角色就不會命中。若同時勾選「最近更新」，則依原本設定追蹤整個清單。
 
 Browser 會在空間不足時把搜尋欄換到下一列；Watcher 在矮視窗保留分類與操作區。Web 佇列會隨螢幕寬度切換單／雙欄，內容不變時保留原畫面。
 
-### v3.8.0：缺片診斷與部分匯出
+### [v3.8.0](https://github.com/Alos21750/UAV-Downloader/releases/tag/v3.8.0) — 缺片診斷與部分匯出
 
-從 v3.8.2 起，Browser 會隨佇列保存部分匯出的驗證紀錄。重試失敗或重開後也能另存經驗證的連續開頭為 `*.partial.mp4`，不覆寫成品；舊版未記錄的快取不會被視為已驗證。MissAV 明確回覆 HTTP 403 的分片不會在同一次下載中反覆請求，其他暫時性錯誤仍會重試。
+Browser 可從未完成的 MissAV 工作匯出本次執行中已驗證的連續開頭，另存為 `*.partial.mp4`。缺片診斷會顯示原因和位置；HLS 播放清單中途更換 AES-128 金鑰時，也會使用各分段指定的金鑰與 IV。
 
 ### v3.7.0：更清楚的介面、自訂下載限速
 
@@ -110,6 +132,8 @@ Browser 會在空間不足時把搜尋欄換到下一列；Watcher 在矮視窗�
 - Watcher 移除原本 50 頁上限，新增「全部版本」；不同版本存入每站指定資料夾下的 `versions/<kind>`，避免覆寫。
 - SupJav 新增 EVS、VAS、LUC、VOE 來源；HTTP 429 會等待重試，真正的 403 驗證仍需有效工作階段。
 - 磁碟寫入異常會停止下載，不再當成網路錯誤反覆重試；檢查裝置後再手動恢復。
+
+## 三種工作模式，一個下載核心
 
 | 需求 | 建議 | 操作方式 |
 |---|---|---|
@@ -268,8 +292,6 @@ Docker 是無介面、執行完即結束的下載工作，不包含 UAV Browser 
 - 不要上傳 Cookie、Proxy 帳密、Token 或其他私密值。
 
 需要 Proxy 時，可在 UAV Browser「設定」或 UAV Watcher 頂部選擇自訂代理、Windows 系統代理或停用。兩個 GUI 共用設定，且只作用於本程式；Windows 模式目前支援已啟用的手動 ProxyServer。PAC 設定網址會提示但不執行，WPAD 自動偵測尚未支援。
-
-升級提醒：舊版未完成的分段會保留，但不會與新片源或畫質混合。[續傳與快取說明](docs/transfer-cache.md)。
 
 ## Stars 與專案活動
 
