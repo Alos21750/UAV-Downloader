@@ -2,7 +2,9 @@
 
 UAV Browser, Watcher, and the headless downloader keep incomplete HLS segments in a
 playlist-specific folder in the selected destination. A changed source, quality, or
-timeline starts a separate cache. A matching playlist may resume even if its known
+timeline starts a separate cache and retires numbered segments from the previously
+recorded generation under an exclusive output lock. Repeated retries cannot keep
+adding a full cache per attempt for the same output. A matching playlist may resume even if its known
 authentication query parameters have been refreshed. Unknown query selectors are
 part of the fingerprint. Folder names contain hashes, not media URLs or keys.
 

@@ -334,6 +334,7 @@ def _parse_videos(soup):
 
 
 class SiteSupJav(M3U8Crawler):
+    playlist_auth_params = ('t', 's')
     website_pattern = r'https://supjav\.com/(?:(?:zh|ja)/)?\d+\.html$'
     website_dirname_pattern = r'https://supjav\.com/(?:(?:zh|ja)/)?(\d+)\.html$'
     direct_site_name = 'SupJav'

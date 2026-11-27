@@ -47,9 +47,9 @@ def _job(tmp_path, body, resources):
 def _seed_cache(job, calls):
     """Only a cache bound to this very playlist is eligible for resume."""
     job._create_m3u8()
-    cache = Path(job._dest_folder) / base.hls_cache.cache_name(
-        job._dirName, job._targetName, job._playlist_fingerprint)
-    cache.mkdir(exist_ok=True)
+    with base.hls_cache.output_lease(job._dest_folder, job._targetName):
+        cache = Path(base.hls_cache.select_cache(job._dest_folder, job._dirName,
+                     job._targetName, job._playlist_fingerprint, len(job._tsList)))
     calls.clear()
     return cache
 

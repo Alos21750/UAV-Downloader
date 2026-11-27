@@ -526,6 +526,7 @@ def _parse_videos(soup, listing_url):
 
 
 class SiteHuangguo(M3U8Crawler):
+    playlist_auth_params = ('sig',)
     website_pattern = r'https://(?:www\.)?huangguoai\.com/video/[1-9][0-9]*(?:/ep-[1-9][0-9]*)?/?\Z'
     website_dirname_pattern = website_pattern
 

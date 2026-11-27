@@ -1384,11 +1384,9 @@ class M3U8Crawler:
         self.download_image()
         if not self.is_target_video_exist():
             self._create_m3u8()
-            self._temp_folder = os.path.join(self._dest_folder, hls_cache.cache_name(
-                self._dirName, self._targetName, self._playlist_fingerprint))
-            self._create_temp_folder()
-            if not hls_cache.plain_dir(self._temp_folder):
-                raise StorageWriteError(self._temp_folder, OSError(errno.EINVAL, 'Unsafe segment cache'))
+            self._temp_folder = hls_cache.select_cache(
+                self._dest_folder, self._dirName, self._targetName,
+                self._playlist_fingerprint, len(self._tsList))
             # A true disk failure must propagate and preserve the cache, even
             # when a cancel request arrived while the last writer was retiring.
             result = self._transfer_segments()
