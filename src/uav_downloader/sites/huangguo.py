@@ -627,7 +627,7 @@ class HuangguoBrowser:
     _listing_url_allowed = is_listing_url
 
     @classmethod
-    def fetch_categories(cls):
+    def fetch_categories(cls, lang=''):
         return [{'name': site_i18n.loc(site_i18n.CATEGORY_I18N, url, name),
                  'url': url, 'count': 0} for name, url in cls.CATEGORIES]
 

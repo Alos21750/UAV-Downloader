@@ -7,6 +7,8 @@ import time
 import types
 from types import SimpleNamespace
 
+import pytest
+
 
 def _stub(name, factory=None):
     try:
@@ -102,7 +104,8 @@ def test_listing_fetch_rejects_404_grid_page(monkeypatch):
     monkeypatch.setattr(
         'uav_downloader.sites.missav.fetch_with_mirrors', fake_fetch)
 
-    assert MissAVBrowser.fetch_page(response.url) == []
+    with pytest.raises(RuntimeError, match='MissAV'):
+        MissAVBrowser.fetch_page(response.url)
 
 
 def test_enrich_missav_title_adds_uncensored_leak_suffix():
@@ -116,4 +119,137 @@ def test_enrich_missav_title_adds_uncensored_leak_suffix():
 def test_enrich_missav_title_avoids_duplicate_suffix():
     assert enrich_missav_title('POW-093-UNCENSORED-LEAK Melcy-chan', 'pow-093-uncensored-leak') == 'POW-093-UNCENSORED-LEAK Melcy-chan'
     assert enrich_missav_title('POW-093 梅爾西醬 [無碼流出]', 'pow-093-uncensored-leak') == 'POW-093-UNCENSORED-LEAK 梅爾西醬 [無碼流出]'
+
+
+@pytest.mark.parametrize(('url', 'html'), [
+    (
+        'https://missav.ai/en/search/nonexistent',
+        (
+            b'<html><body>'
+            b'<header>MissAV</header>'
+            b'<h1>Search result of nonexistent</h1>'
+            b'<a href="https://missav.ai/en/search/nonexistent?filters=individual">Single actress</a>'
+            b'<div x-init="$nextTick(() => { window.recombeeClient.send('
+            b'new recombee.SearchItems(window.user_uuid, window.searchQuery, perPage)) })">'
+            b'<div class="grid">'
+            b'<div class="thumbnail group" x-show="! recommendItems.length"><a href="#">&nbsp;</a></div>'
+            b'<template x-for="item in recommendItems">'
+            b'<div class="thumbnail group"><a href="#">x</a></div>'
+            b'</template>'
+            b'</div></div>'
+            b'<footer>MissAV</footer>'
+            b'</body></html>'
+        ),
+    ),
+    (
+        'https://missav.ai/en/search/nonexistent',
+        b'<html><body><section class="no-results"><p>No videos found</p></section></body></html>',
+    ),
+    (
+        'https://missav.ai/dm36/en/siro?filters=english-subtitle&page=999',
+        b'<html><body><div class="text-center text-xl text-nord13 font-light">No records</div></body></html>',
+    ),
+])
+def test_empty_search_page_returns_empty_list(monkeypatch, url, html):
+    from uav_downloader.core import config
+    from uav_downloader.sites import base
+
+    response = SimpleNamespace(
+        status_code=200,
+        content=html,
+        headers={},
+        url=url,
+    )
+    monkeypatch.setattr(config, 'MIRRORS', {'missav': ['missav.ai', 'backup.invalid']})
+    monkeypatch.setattr(config, 'RATE_LIMIT_WAITS', {})
+    monkeypatch.setattr(config, 'get_cf_override', lambda _host: None)
+    monkeypatch.setattr(config, 'proxy_request_kwargs', lambda: {})
+    monkeypatch.setattr(base, '_active_host', {})
+
+    def get(req_url, **_kwargs):
+        if 'backup.invalid' in req_url:
+            raise AssertionError('confirmed empty listing should not fail over to backup mirror')
+        return response
+
+    monkeypatch.setattr(MissAVBrowser, '_get_scraper', classmethod(lambda cls: SimpleNamespace(get=get)))
+    assert MissAVBrowser.fetch_page(url) == []
+
+
+def test_search_error_page_with_chrome_fails_over_to_working_mirror(monkeypatch):
+    from uav_downloader.core import config
+    from uav_downloader.sites import base
+
+    error_html = (
+        b'<html><header>MissAV</header><nav>Menu</nav>'
+        b'<main><h1>502 Bad Gateway</h1><p>Upstream error</p></main>'
+        b'<footer>MissAV</footer></html>'
+    )
+    valid_html = (
+        b'<html><body><div class="thumbnail">'
+        b'<a href="https://missav.ws/en/sone-543">'
+        b'<img alt="SONE-543 Sample" data-src="https://img.example/sone-543.jpg"/></a>'
+        b'<div class="my-2"><a href="https://missav.ws/en/sone-543">SONE-543 Sample</a></div>'
+        b'</div></body></html>'
+    )
+    monkeypatch.setattr(config, 'MIRRORS', {'missav': ['missav.ai', 'missav.ws']})
+    monkeypatch.setattr(config, 'RATE_LIMIT_WAITS', {})
+    monkeypatch.setattr(config, 'get_cf_override', lambda _host: None)
+    monkeypatch.setattr(config, 'proxy_request_kwargs', lambda: {})
+    monkeypatch.setattr(base, '_active_host', {})
+
+    seen_urls = []
+
+    def get(url, **_kwargs):
+        seen_urls.append(url)
+        if 'missav.ai' in url:
+            return SimpleNamespace(status_code=200, content=error_html, headers={}, url=url)
+        return SimpleNamespace(status_code=200, content=valid_html, headers={}, url=url)
+
+    monkeypatch.setattr(MissAVBrowser, '_get_scraper', classmethod(lambda cls: SimpleNamespace(get=get)))
+    videos = MissAVBrowser.fetch_page('https://missav.ai/en/search/sone-543')
+    assert len(seen_urls) == 2
+    assert videos == [{
+        'url': 'https://missav.ws/en/sone-543',
+        'title': 'SONE-543 Sample',
+        'thumbnail': 'https://img.example/sone-543.jpg',
+        'duration': '',
+    }]
+
+
+def test_search_service_unavailable_grid_fails_instead_of_looking_empty(monkeypatch):
+    from bs4 import BeautifulSoup
+    from uav_downloader.apps.browse import fetch_page_data
+    from uav_downloader.core import config
+    from uav_downloader.sites import base
+
+    url = 'https://missav.ai/en/search/sone-543'
+    error_grid_html = (
+        b'<main><h1>Service unavailable</h1>'
+        b'<div class="grid"><div>Try later</div></div></main>'
+    )
+    soup = BeautifulSoup(error_grid_html, 'html.parser')
+    assert MissAVBrowser._has_listing_cards(soup, url) is False
+    assert MissAVBrowser._is_empty_search(soup, url) is False
+
+    monkeypatch.setattr(config, 'MIRRORS', {'missav': ['missav.ai']})
+    monkeypatch.setattr(config, 'RATE_LIMIT_WAITS', {})
+    monkeypatch.setattr(config, 'get_cf_override', lambda _host: None)
+    monkeypatch.setattr(config, 'proxy_request_kwargs', lambda: {})
+    monkeypatch.setattr(base, '_active_host', {})
+    monkeypatch.setattr(
+        MissAVBrowser,
+        '_get_scraper',
+        classmethod(lambda cls: SimpleNamespace(
+            get=lambda req_url, **_kw: SimpleNamespace(
+                status_code=200, content=error_grid_html, headers={}, url=req_url
+            )
+        )),
+    )
+
+    with pytest.raises(RuntimeError, match='MissAV'):
+        MissAVBrowser.fetch_page(url)
+
+    result = fetch_page_data(MissAVBrowser, url)
+    assert result['videos'] == []
+    assert 'MissAV' in result['error']
 
