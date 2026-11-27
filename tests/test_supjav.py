@@ -829,3 +829,115 @@ def test_create_m3u8_raises_on_zero_segments(monkeypatch):
 
     with pytest.raises(Exception):
         DummyCrawler()._create_m3u8()
+
+
+def _make_pes_ts_packet(pid=0x0100, cc=0, *, pusi=True, payload_len=184):
+    assert 12 <= payload_len <= 184
+    b1 = (0x40 if pusi else 0x00) | ((pid >> 8) & 0x1F)
+    b2 = pid & 0xFF
+    prefix = b'\x00\x00\x01\xe0\x00\x00\x80\x00\x00' if pusi else b''
+    payload = prefix + b'\x22' * (payload_len - len(prefix))
+    if payload_len == 184:
+        return bytes([0x47, b1, b2, 0x10 | (cc & 0x0F)]) + payload
+    af_len = 183 - payload_len
+    af = bytes([af_len]) if af_len == 0 else (bytes([af_len, 0x00]) + b'\xff' * (af_len - 1))
+    return bytes([0x47, b1, b2, 0x30 | (cc & 0x0F)]) + af + payload
+
+
+def _make_psi_ts_packet(pid, table_id, cc=0):
+    b1 = 0x40 | ((pid >> 8) & 0x1F)
+    b2 = pid & 0xFF
+    section = bytes([0x00, table_id, 0xB0, 0x0D, 0x00, 0x01, 0xC1, 0x00, 0x00])
+    return bytes([0x47, b1, b2, 0x10 | (cc & 0x0F)]) + section + b'\xff' * (184 - len(section))
+
+
+def test_strip_fake_header_handles_genuine_short_tail_segments():
+    png_hdr = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR'
+    single_tail = _make_pes_ts_packet(pid=0x0100, cc=3, pusi=True, payload_len=96)
+    assert _strip_fake_header(png_hdr + single_tail) == single_tail
+    assert crawler_mod._is_valid_ts_segment(single_tail)
+
+    two_pkt_tail = (
+        _make_pes_ts_packet(pid=0x0100, cc=4, pusi=True, payload_len=184)
+        + _make_pes_ts_packet(pid=0x0100, cc=5, pusi=False, payload_len=64)
+    )
+    assert _strip_fake_header(png_hdr + two_pkt_tail) == two_pkt_tail
+
+    pat_pmt_pes = (
+        _make_psi_ts_packet(0x0000, 0x00, cc=0)
+        + _make_psi_ts_packet(0x1000, 0x02, cc=0)
+        + _make_pes_ts_packet(pid=0x0100, cc=0, pusi=True, payload_len=120)
+    )
+    assert _strip_fake_header(b'GIF89a\x01\x00\x01\x00' + pat_pmt_pes) == pat_pmt_pes
+
+
+def test_strip_fake_header_rejects_gateway_html_and_malformed_short_tails():
+    gateway_html = b'<html><body>Bad ' + b'Gateway' + b'x' * 167 + b'</body></html>'
+    assert len(b'Gateway' + b'x' * 167 + b'</body></html>') == 188
+    assert _strip_fake_header(gateway_html) == b''
+
+    bare_gateway = b'Gateway' + b'x' * 167 + b'</body></html>'
+    assert _strip_fake_header(bare_gateway) == b''
+    assert not crawler_mod._is_valid_ts_segment(bare_gateway)
+
+    png_gateway = b'\x89PNG\r\n\x1a\n' + bare_gateway
+    assert _strip_fake_header(png_gateway) == b''
+    assert _strip_fake_header(b'\xef\xbb\xbf' + gateway_html) == b''
+    assert _strip_fake_header(b'{"error":"Gateway' + b'x' * 178 + b'"}') == b''
+    assert _strip_fake_header(b'#EXTM3U\n#EXTINF:1,\nGateway' + b'x' * 180) == b''
+
+    # Unanchored PUSI=0 or broken continuity counter must not pass as a short tail.
+    unanchored = _make_pes_ts_packet(pid=0x0100, cc=1, pusi=False, payload_len=184)
+    assert _strip_fake_header(b'\x89PNG\r\n\x1a\n' + unanchored) == b''
+
+    bad_cc = (
+        _make_pes_ts_packet(pid=0x0100, cc=4, pusi=True, payload_len=184)
+        + _make_pes_ts_packet(pid=0x0100, cc=6, pusi=False, payload_len=64)
+    )
+    assert _strip_fake_header(b'\x89PNG\r\n\x1a\n' + bad_cc) == b''
+    assert _strip_fake_header(b'\x89PNG' + b'\x00' * 100) == b''
+    assert _strip_fake_header(
+        b'\x89PNG\r\n\x1a\n' + _make_pes_ts_packet(pusi=True, payload_len=96) + b'\x00'
+    ) == b''
+
+
+def test_direct_download_downloads_thumbnail_when_present(monkeypatch, tmp_path):
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._cancel_job = False
+    crawler._dest_folder = str(tmp_path)
+    crawler._targetName = 'thumb_test'
+    crawler._imageUrl = 'https://img.example/cover.jpg'
+    crawler._direct_url = 'https://example.test/video.mp4'
+    crawler._direct_referer = 'https://example.test/embed'
+    crawler._progress_callback = None
+    crawler._t2_executor = None
+
+    thumb_calls = []
+    crawler.download_image = lambda: thumb_calls.append(crawler._imageUrl)
+    monkeypatch.setattr(supjav_mod.shutil, 'rmtree', lambda *_a, **_kw: None)
+
+    def fake_publish(*_args):
+        part = tmp_path / 'thumb_test.mp4.part'
+        part.write_bytes(b'0123456789')
+        return (10, 10)
+
+    crawler._download_direct_ranges = fake_publish
+    assert crawler._download_direct() is True
+    assert thumb_calls == ['https://img.example/cover.jpg']
+
+
+def test_crawler_init_clamps_long_dirname_and_sets_fallback_target_name(tmp_path):
+    long_slug = 'a' * 100
+
+    class DummyCrawler(M3U8Crawler):
+        website_dirname_pattern = r'https://example\.test/([a-z]+)'
+
+        def get_url_infos(self):
+            self._m3u8url = 'https://example.test/master.m3u8'
+            self._targetName = ''
+
+    crawler = DummyCrawler(f'https://example.test/{long_slug}', savepath=str(tmp_path), silence=True)
+    assert crawler.is_url_vaildate() is True
+    assert len(crawler._dirName) == 80
+    assert crawler._targetName == 'a' * 80
+    assert crawler._temp_folder.endswith('a' * 80)

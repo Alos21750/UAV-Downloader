@@ -6,7 +6,7 @@ import threading
 import time
 from email.utils import parsedate_to_datetime
 import cloudscraper
-from urllib.parse import urlsplit, unquote
+from urllib.parse import urljoin, urlsplit, urlunsplit, unquote
 try:
     from curl_cffi import requests as cffi_requests
     _use_cffi = True
@@ -299,46 +299,123 @@ class MissAVBrowser:
             cats.append({'name': localized_name, 'url': url, 'count': 0})
         return cats
 
+    _EMPTY_LISTING_RECORDS = frozenset({
+        'No records',
+        '未有記錄',
+        '未有记录',
+        '結果が見つかりません',
+        '기록 없음',
+        'Tiada rekod',
+        'ไม่มีบันทึก',
+    })
+    _SEARCH_HEADING_MARKERS = (
+        'Search result of',
+        '的搜尋結果',
+        '的搜寻结果',
+        'の検索結果',
+        '의 검색 결과',
+        'Hasil carian',
+        'ผลการค้นหาของ',
+    )
+
     @classmethod
-    def fetch_page(cls, url):
+    def _is_usable_video_url(cls, video_url, base_url):
+        if '/search/' in video_url:
+            return False
+        clean_url = video_url.split('?', 1)[0].split('#', 1)[0]
+        if SiteMissAV.validate_url(clean_url):
+            return True
+        parsed = urlsplit(clean_url)
+        base_host = (urlsplit(str(base_url or '')).hostname or '').lower()
+        cand_host = (parsed.hostname or '').lower()
+        if not cand_host or cand_host != base_host:
+            return False
+        swapped = urlunsplit(('https', 'missav.ai', parsed.path, '', ''))
+        return bool(SiteMissAV.validate_url(swapped))
+
+    @classmethod
+    def _parse_videos(cls, soup, base_url):
+        cards = (
+            soup.select('div.thumbnail')
+            or soup.select('div.group, article.video-item, div[class*="grid"] > div')
+        )
+        videos = []
+        for card in cards:
+            if card.find_parent('template') is not None:
+                continue
+            if 'recommendItems.length' in str(card.get('x-show', '')):
+                continue
+            link = card.select_one('a[href]')
+            if not link:
+                continue
+            href = (link.get('href', '') or '').strip()
+            if not href or href.startswith(('#', 'javascript:')):
+                continue
+            video_url = urljoin(str(base_url), href)
+            if not cls._is_usable_video_url(video_url, base_url):
+                continue
+            img = card.select_one('img')
+            thumbnail = (img.get('data-src', '') or img.get('src', '')) if img else ''
+            title_text = img.get('alt', '') if img else ''
+            title_a = card.select_one('div.my-2 a, div.truncate a')
+            if title_a:
+                title_text = title_a.get_text(strip=True) or title_text
+            title_text = enrich_missav_title(title_text, video_url)
+            duration_span = card.select_one('span.absolute.bottom-1.right-1')
+            duration = duration_span.get_text(strip=True) if duration_span else ''
+            videos.append({
+                'url': video_url,
+                'title': title_text,
+                'thumbnail': thumbnail,
+                'duration': duration,
+            })
+        return videos
+
+    @classmethod
+    def _has_listing_cards(cls, soup, page_url=''):
+        return bool(cls._parse_videos(soup, page_url or 'https://missav.ai/'))
+
+    @classmethod
+    def _is_empty_search(cls, soup, page_url):
+        path = urlsplit(str(page_url or '')).path
+        if soup.select_one('body.search-no-results, section.no-results, div.no-results'):
+            return '/search/' in path
+        for empty_div in soup.select('div.text-nord13'):
+            if empty_div.get_text(strip=True) in cls._EMPTY_LISTING_RECORDS:
+                return True
+        if '/search/' not in path:
+            return False
+        has_empty_recombee = bool(soup.select_one(
+            '[x-init*="recombee.SearchItems"], '
+            '[x-show*="recommendItems.length"], '
+            'template[x-for*="recommendItems"]'
+        ))
+        if not has_empty_recombee:
+            return False
+        if soup.select_one('a[href*="/search/"][href*="filters="]'):
+            return True
+        h1 = soup.select_one('h1')
+        h1_text = h1.get_text(' ', strip=True) if h1 else ''
+        return any(marker in h1_text for marker in cls._SEARCH_HEADING_MARKERS)
+
+    @classmethod
+    def fetch_page(cls, url, *, cancel_check=None):
         def _validate(resp):
             if getattr(resp, 'status_code', 0) != 200:
                 return False
+            page_url = getattr(resp, 'url', url)
             s = BeautifulSoup(resp.content, 'html.parser')
-            return bool(s.select('div.thumbnail') or s.select('div.group, article.video-item, div[class*="grid"] > div'))
+            return cls._has_listing_cards(s, page_url) or cls._is_empty_search(s, page_url)
+
         resp, host, reason = fetch_with_mirrors(cls._get_scraper(), url, 'missav', _validate)
+        if reason == 'blocked':
+            raise MirrorsBlockedError(url)
         if reason != 'ok':
-            if reason == 'blocked':
-                raise MirrorsBlockedError(url)
-            return []
-        try:
-            soup = BeautifulSoup(resp.content, 'html.parser')
-            cards = soup.select('div.thumbnail') or soup.select('div.group, article.video-item, div[class*="grid"] > div')
-            videos = []
-            from urllib.parse import urljoin
-            for card in cards:
-                link = card.select_one('a[href]')
-                if not link:
-                    continue
-                video_url = urljoin(str(resp.url), link.get('href', ''))
-                if '/search/' in video_url:
-                    continue
-                last_seg = video_url.rstrip('/').rsplit('/', 1)[-1].split('?')[0]
-                if not re.search(r'\d', last_seg):
-                    continue
-                img = card.select_one('img')
-                thumbnail = (img.get('data-src', '') or img.get('src', '')) if img else ''
-                title_text = img.get('alt', '') if img else ''
-                title_a = card.select_one('div.my-2 a, div.truncate a')
-                if title_a:
-                    title_text = title_a.get_text(strip=True) or title_text
-                title_text = enrich_missav_title(title_text, video_url)
-                duration_span = card.select_one('span.absolute.bottom-1.right-1')
-                duration = duration_span.get_text(strip=True) if duration_span else ''
-                videos.append({'url': video_url, 'title': title_text, 'thumbnail': thumbnail, 'duration': duration})
-            return videos
-        except Exception:
-            return []
+            raise RuntimeError(
+                'MissAV returned an unrecognized listing page. '
+                'Check the network/proxy and Cloudflare settings, then retry.')
+        soup = BeautifulSoup(resp.content, 'html.parser')
+        return cls._parse_videos(soup, getattr(resp, 'url', url))
 
     @classmethod
     def search(cls, query, lang=''):

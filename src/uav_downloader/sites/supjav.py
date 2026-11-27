@@ -64,19 +64,140 @@ def _extract_title(soup):
     return h1.get_text(strip=True) if h1 else (soup.title.get_text(strip=True) if soup.title else '')
 
 
+def _valid_ts_adaptation_field(pkt, af_len):
+    if af_len == 0:
+        return True
+    end = 5 + af_len
+    if end > 188:
+        return False
+    flags = pkt[5]
+    pos = 6
+    if flags & 0x10:
+        pos += 6
+    if flags & 0x08:
+        pos += 6
+    if flags & 0x04:
+        pos += 1
+    if flags & 0x02:
+        if pos >= end:
+            return False
+        pos += 1 + pkt[pos]
+    if flags & 0x01:
+        if pos >= end:
+            return False
+        pos += 1 + pkt[pos]
+    return pos <= end and pkt[pos:end] == b'\xff' * (end - pos)
+
+
+def _valid_ts_packet_header(pkt):
+    if len(pkt) != 188 or pkt[0] != 0x47:
+        return False
+    if (pkt[1] & 0x80) != 0 or (pkt[3] & 0xC0) != 0:
+        return False
+    afc = (pkt[3] >> 4) & 0x03
+    if afc == 0:
+        return False
+    pid = ((pkt[1] & 0x1F) << 8) | pkt[2]
+    if 0x0003 <= pid <= 0x000F:
+        return False
+    pusi = bool(pkt[1] & 0x40)
+    if pid == 0x1FFF:
+        return (not pusi) and afc == 1
+    if afc == 2:
+        return (not pusi) and pkt[4] == 183 and _valid_ts_adaptation_field(pkt, 183)
+    if afc == 3:
+        if pkt[4] > 182 or not _valid_ts_adaptation_field(pkt, pkt[4]):
+            return False
+    if pusi:
+        payload_off = 4 if afc == 1 else 5 + pkt[4]
+        if (payload_off + 4 <= 188
+                and pkt[payload_off:payload_off + 3] == b'\x00\x00\x01'
+                and pkt[payload_off + 3] >= 0xBC):
+            return True
+        if payload_off >= 188:
+            return False
+        sec = payload_off + 1 + pkt[payload_off]
+        if sec + 3 > 188 or (pkt[sec + 1] & 0x30) != 0x30:
+            return False
+        sec_len = ((pkt[sec + 1] & 0x0F) << 8) | pkt[sec + 2]
+        if sec_len > 1021:
+            return False
+        if pid == 0 and (pkt[sec] != 0x00 or (pkt[sec + 1] & 0x80) != 0x80):
+            return False
+    return True
+
+
+def _is_valid_short_ts_tail(tail):
+    n_packets, rem = divmod(len(tail), 188)
+    if rem != 0 or not 1 <= n_packets < 5:
+        return False
+    if not (tail[1] & 0x40):
+        # A standalone HLS TS segment begins at a PSI or PES unit boundary,
+        # never on an unanchored continuation packet.
+        return False
+    prev_cc = {}
+    for idx in range(n_packets):
+        pkt = tail[idx * 188:(idx + 1) * 188]
+        if not _valid_ts_packet_header(pkt):
+            return False
+        pid = ((pkt[1] & 0x1F) << 8) | pkt[2]
+        if pid == 0x1FFF:
+            continue
+        afc = (pkt[3] >> 4) & 0x03
+        cc = pkt[3] & 0x0F
+        if pid in prev_cc:
+            expected = (prev_cc[pid] + 1) & 0x0F if afc in (1, 3) else prev_cc[pid]
+            if cc != expected:
+                return False
+        prev_cc[pid] = cc
+    return True
+
+
+def _looks_like_non_media_body(data):
+    head = data[:512].lstrip(b' \t\r\n')
+    if head.startswith(b'\xef\xbb\xbf'):
+        head = head[3:].lstrip(b' \t\r\n')
+    if not head:
+        return True
+    if head.startswith((b'<', b'{', b'[')) or head[:7].upper() == b'#EXTM3U':
+        return True
+    probe = head[:32]
+    return len(probe) >= 16 and all(32 <= b <= 126 or b in (9, 10, 13) for b in probe)
+
+
 def _strip_fake_header(data):
     """SupJav segments are MPEG-TS hidden behind a fake PNG header. Return the stream
     from the first valid MPEG-TS sync (0x47 on a 188-byte stride). Plain TS is returned unchanged."""
-    if data[:1] == b'\x47':
+    if not data or _looks_like_non_media_body(data):
+        return b''
+    is_gif_wrapper = data.startswith((b'GIF87a', b'GIF89a'))
+    if data[:1] == b'\x47' and not is_gif_wrapper:
         return data
-    limit = min(len(data) - 188 * 4 - 1, 8000)
-    i = 0
+    if len(data) < 188:
+        return b''
+    limit = min(len(data) - 188, 8000)
+    i = 6 if is_gif_wrapper else 0
     while 0 <= i <= limit:
         j = data.find(b'\x47', i)
         if j < 0 or j > limit:
             break
-        if all(data[j + 188 * n] == 0x47 for n in range(5)):
-            return data[j:]
+        prefix = data[:j]
+        if prefix and (
+            is_gif_wrapper
+            or not all(32 <= b <= 126 or b in (9, 10, 13) for b in prefix)
+        ):
+            rem = len(data) - j
+            if rem >= 188 * 5:
+                if all(
+                    data[j + 188 * n] == 0x47
+                    and (data[j + 188 * n + 1] & 0x80) == 0
+                    and (data[j + 188 * n + 3] & 0xC0) == 0
+                    and (data[j + 188 * n + 3] & 0x30) != 0
+                    for n in range(5)
+                ):
+                    return data[j:]
+            elif _is_valid_short_ts_tail(data[j:]):
+                return data[j:]
         i = j + 1
     return b''
 
@@ -489,6 +610,8 @@ class SiteSupJav(M3U8Crawler):
             return False
         self._cancel_job = False
         self._create_dest_folder()
+        if getattr(self, '_imageUrl', None):
+            self.download_image()
         if self.is_target_video_exist():
             print("檔案已存在!!", flush=True)
             return True
@@ -804,7 +927,7 @@ class SupJavBrowser:
                 for n, u in cls.CATEGORIES]
 
     @classmethod
-    def fetch_page(cls, url):
+    def fetch_page(cls, url, *, cancel_check=None):
         def _is_empty_search(soup):
             # An actual empty search is not the same as an empty response,
             # gateway error, consent page, or a changed listing template.

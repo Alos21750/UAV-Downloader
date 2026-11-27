@@ -322,7 +322,10 @@ speed_limiter = _SpeedLimiter()
 
 
 def _is_valid_ts_segment(data):
-    return bool(data and len(data) >= 188 and data[:1] == b'\x47')
+    return bool(
+        data and len(data) >= 188 and data[0] == 0x47
+        and (data[1] & 0x80) == 0 and (data[3] & 0xC0) == 0
+    )
 
 
 def _reusable_ts(path):
@@ -719,8 +722,8 @@ class M3U8Crawler:
             self.get_url_infos()
             self.add_source_video_metadata({'url': self._url})
             if self.is_url_vaildate():
+                self._targetName = _sanitize_filename(self._targetName or '')
                 if self._targetName:
-                    self._targetName = _sanitize_filename(self._targetName)
                     if self._filename_template == config.DEFAULT_FILENAME_TEMPLATE:
                         self._targetName = _apply_filename_mode(
                             self._targetName, self._filename_mode)
@@ -728,14 +731,14 @@ class M3U8Crawler:
                         self._targetName = _apply_filename_template(
                             self._targetName, self._dirName, self._url,
                             self._filename_template)
-                    if len(self._dirName) > 80:
-                        self._dirName = self._dirName[:80]
-                        self._temp_folder = os.path.join(self._dest_folder, self._dirName)
-                    if not self._targetName.strip():
-                        self._targetName = (_sanitize_filename(self._dirName)
-                                            or 'video')
-                    self._targetName = _truncate_target_name(
-                        self._targetName, self._dest_folder, self._dirName)
+                if len(self._dirName) > 80:
+                    self._dirName = self._dirName[:80]
+                    self._temp_folder = os.path.join(self._dest_folder, self._dirName)
+                if not self._targetName.strip():
+                    self._targetName = (_sanitize_filename(self._dirName)
+                                        or 'video')
+                self._targetName = _truncate_target_name(
+                    self._targetName, self._dest_folder, self._dirName)
                 if not self.silence:
                     if self._targetName: print("檔案名稱: " + self._targetName, flush=True)
                     if self._dest_folder: print("儲存位置: " + self._dest_folder, flush=True)
