@@ -14,7 +14,6 @@ import ctypes
 import json
 import multiprocessing
 import os
-import shutil
 import sys
 import threading
 import time
@@ -865,7 +864,7 @@ class SmallToolWorker:
             site_obj = self._active_site
         if site_obj and hasattr(site_obj, 'cancel_download'):
             try:
-                site_obj.cancel_download()
+                site_obj.cancel_download(cleanup=False)
             except Exception:
                 pass
 
@@ -1856,13 +1855,10 @@ class SmallToolWorker:
             ok = site_obj.start_download()
             if ok is False and not getattr(site_obj, '_cancel_job', False):
                 self._log('  [ERR] download failed')
-                if not getattr(site_obj, 'respect_segment_denials', False):
-                    self._cleanup_temp(site_obj)
                 return
 
             if getattr(site_obj, '_cancel_job', False):
                 self._log('  [CANCELLED]')
-                self._cleanup_temp(site_obj)
                 return
             subtitle_mode = normalize_subtitle_mode(
                 self._subtitle_mode if subtitle_mode is None else subtitle_mode)
@@ -1973,13 +1969,9 @@ class SmallToolWorker:
             return 'download_incomplete'
         except MirrorsBlockedError as e:
             self._log(f'  [BLOCKED] {e}')
-            if site_obj and not getattr(site_obj, 'respect_segment_denials', False):
-                self._cleanup_temp(site_obj)
             return 'blocked'
         except Exception as e:
             self._log(f'  [ERR] {e}')
-            if site_obj and not getattr(site_obj, 'respect_segment_denials', False):
-                self._cleanup_temp(site_obj)
         finally:
             with self._active_site_lock:
                 if self._active_site is site_obj:
@@ -2088,18 +2080,6 @@ class SmallToolWorker:
         finally:
             with self._progress_lock:
                 self._progress = None
-
-    def _cleanup_temp(self, site_obj):
-        """Remove temp folder with partial segment clips if final video doesn't exist."""
-        try:
-            if site_obj.is_target_video_exist():
-                return  # Video completed, nothing to clean
-            temp = getattr(site_obj, '_temp_folder', None)
-            if temp and os.path.isdir(temp):
-                shutil.rmtree(temp, ignore_errors=True)
-                self._log(f'  [CLEANUP] removed partial clips')
-        except Exception:
-            pass
 
     def _successful_seen_candidates(self, candidate_codes: set[str]) -> list[dict]:
         """Return successful prior downloads that can collide with this scan."""

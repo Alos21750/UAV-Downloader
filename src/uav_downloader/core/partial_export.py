@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from .hls_cache import namespace
 
 
 @dataclass(frozen=True)
@@ -103,7 +104,8 @@ def restore_prefix(queue, item, key, slug):
                 entry[:2] != [1, receipt_binding(item)]):
             return None
         cache, target, total, hashes = entry[2:]
-        if (cache != slug[:80] or not _plain(cache) or not _plain(target) or
+        if (not _plain(cache) or (cache != slug[:80] and
+                not re.fullmatch(re.escape(namespace(slug)) + '[0-9a-f]{32}', cache)) or not _plain(target) or
                 not target.lower().endswith('.mp4') or type(total) is not int or
                 not isinstance(hashes, list) or not 0 < len(hashes) < total <= 100_000 or
                 any(type(n) is not int or not 0 < n <= 2**32 or

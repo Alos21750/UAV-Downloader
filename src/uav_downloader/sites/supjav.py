@@ -455,6 +455,7 @@ class SiteSupJav(M3U8Crawler):
             [('HLS', self._m3u8url, getattr(self, '_extra_headers', {}))] if self._m3u8url else [])
         last_error = None
         for index, (name, media_url, source_headers) in enumerate(sources):
+            self._hls_source_name = name
             self._m3u8url = media_url
             self._extra_headers = source_headers
             try:
@@ -468,7 +469,7 @@ class SiteSupJav(M3U8Crawler):
                 if index + 1 >= len(sources) and not getattr(self, '_direct_url', None):
                     raise
                 print(f'\n[SupJav] {name} failed; trying the next playback source.', flush=True)
-                self.cleanup_temp()
+                # Each source has its own fingerprinted cache; retain it for retry.
         if getattr(self, '_direct_url', None):
             return self._download_direct()
         if last_error:
@@ -487,8 +488,14 @@ class SiteSupJav(M3U8Crawler):
         self._progress_unit = 'bytes'
         if self._cancel_job:
             return False
-        self._cancel_job = False
         self._create_dest_folder()
+        from uav_downloader.core.hls_cache import output_lease
+        with output_lease(self._dest_folder, self._targetName):
+            return self._download_direct_owned()
+
+    def _download_direct_owned(self):
+        if self._cancel_job:
+            return False
         if self.is_target_video_exist():
             print("檔案已存在!!", flush=True)
             return True

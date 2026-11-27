@@ -269,6 +269,8 @@ Docker 是无界面、执行完即退出的下载任务，不包含 UAV Browser 
 
 需要 Proxy 时，可在 UAV Browser“设置”或 UAV Watcher 顶部选择自定义代理、Windows 系统代理或禁用。两个 GUI 共用该设置，而且只作用于本程序；Windows 模式目前支持已启用的手动 ProxyServer。PAC 配置网址会被提示但不会执行，尚不支持 WPAD 自动检测。
 
+升级提醒：旧版未完成的分段会保留，但不会与新片源或画质混合。[续传与缓存说明](docs/transfer-cache.md)。
+
 ## Stars 与项目活动
 
 <p align="center">

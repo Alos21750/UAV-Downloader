@@ -17,7 +17,7 @@ except Exception:
     _use_cffi = False
 import urllib.request
 import m3u8
-from uav_downloader.core import config
+from uav_downloader.core import config, hls_cache
 from uav_downloader.core.storage import StorageWriteError, storage_open
 from Crypto.Cipher import AES
 from uav_downloader.core.config import headers
@@ -664,6 +664,7 @@ class M3U8Crawler:
         self._t_future = None
         self._t2_executor = None
         self._cancel_job = None
+        self._cleanup_requested = False
         self._ffmpeg_proc = None
         self._extra_headers = {}   # subclass may set (e.g. Referer)
         self._dirName = None
@@ -850,6 +851,7 @@ class M3U8Crawler:
     def _create_m3u8(self):
         m3u8obj = self._load_m3u8(self._m3u8url)
         downloadurl = self._playlist_base(m3u8obj, self._m3u8url)
+        best = None
         if len(m3u8obj.playlists) > 0:
             # Pick variant based on resolution preference
             best = select_variant(m3u8obj.playlists, self._resolution_pref)
@@ -896,6 +898,7 @@ class M3U8Crawler:
             raise Exception("m3u8 無有效片段（可能被阻擋或改版）")
         self._key_content, self._key_iv = self._segment_crypto[0]
         self._key_method = 'AES-128' if self._key_content else None
+        self._playlist_fingerprint = hls_cache.fingerprint(self, m3u8obj, downloadurl, best)
 
     def _make_cipher(self, seq_num=0):
         """Create a fresh AES cipher for one segment (thread-safe)."""
@@ -1028,7 +1031,7 @@ class M3U8Crawler:
         print(f'\n合成完成，花費 {spent_time:.1f} 秒', flush=True)
         self._deleteMp4Chunks()
         if self._temp_folder != self._dest_folder:
-            try: os.removedirs(self._temp_folder)
+            try: os.rmdir(self._temp_folder)
             except OSError: pass
         return spent_time
 
@@ -1344,55 +1347,87 @@ class M3U8Crawler:
                 return None
         return self._get_image_savename()
 
-    def cleanup_temp(self):
+    def _retire_cache(self):
+        """Owner only, inside the output lease, after all segment writers exit."""
         try:
             temp = getattr(self, '_temp_folder', None)
             dest = getattr(self, '_dest_folder', None)
-            if (temp and os.path.isdir(temp) and
-                    os.path.abspath(temp) != os.path.abspath(dest or '')):
-                shutil.rmtree(temp, ignore_errors=True)
-        except Exception:
+            if (not temp or not dest or os.path.dirname(os.path.abspath(temp)) != os.path.abspath(dest)
+                    or not hls_cache.plain_dir(temp)
+                    or os.path.basename(temp) != hls_cache.cache_name(
+                        self._dirName, self._targetName, self._playlist_fingerprint)):
+                return
+            for index in range(len(self._tsList)):
+                for file in (self._seg_savename(index), self._seg_savename(index) + '.part'):
+                    try: os.remove(file)
+                    except FileNotFoundError: pass
+            os.rmdir(temp)  # Never remove the destination or an unrelated file.
+        except OSError:
             pass
+
+    def cleanup_temp(self):
+        # Requests from the UI (including a late cancellation) must never
+        # touch the filesystem. Only the current owner can retire its cache.
+        self._cleanup_requested = True
 
     def start_download(self):
         if self._cancel_job:
             return False
-        self._cancel_job = False
         self._progress_unit = 'preparing'
         self._create_dest_folder()
+        with hls_cache.output_lease(self._dest_folder, self._targetName):
+            return self._start_owned_download()
+
+    def _start_owned_download(self):
+        if self._cancel_job:
+            return False
         self.download_image()
         if not self.is_target_video_exist():
-            self._create_temp_folder()
             self._create_m3u8()
-            if not self._cancel_job:
-                self._prepareCrawl()
-            if not self._cancel_job and not self._pending_set:
-                self._progress_unit = 'postprocess'
-                merged = self._mergeMp4Chunks()
-                if not merged and not self._cancel_job:
-                    raise Exception("merge/publish failed")
-            elif not self._cancel_job:
-                pending = len(self._pending_set)
-                reasons = sorted(getattr(self, '_round_failures', {}).items(),
-                                 key=lambda item: (-item[1][0], item[0]))
-                denied = getattr(self, '_denied_indices', ())
-                if denied:
-                    reasons = [('HTTP 403', (len(denied), min(denied)))] + [
-                        pair for pair in reasons if pair[0] != 'HTTP 403']
-                detail = ', '.join(f'{reason} ×{n} (e.g. segment {i + 1})'
-                                   for reason, (n, i) in reasons[:6])
-                if denied:
-                    if self._denial_deferred:
-                        detail += f'; {self._denial_deferred} not requested in this round'
-                    detail += '; access denied; cache retained; retry manually later'
-                raise DownloadIncompleteError(pending, detail=detail)
+            self._temp_folder = os.path.join(self._dest_folder, hls_cache.cache_name(
+                self._dirName, self._targetName, self._playlist_fingerprint))
+            self._create_temp_folder()
+            if not hls_cache.plain_dir(self._temp_folder):
+                raise StorageWriteError(self._temp_folder, OSError(errno.EINVAL, 'Unsafe segment cache'))
+            # A true disk failure must propagate and preserve the cache, even
+            # when a cancel request arrived while the last writer was retiring.
+            result = self._transfer_segments()
+            if self._cancel_job and getattr(self, '_cleanup_requested', False):
+                self._retire_cache()
+            return result
         else:
             print("檔案已存在!!", flush=True)
+        return not self._cancel_job
 
+    def _transfer_segments(self):
+        if not self._cancel_job:
+            self._prepareCrawl()
+        if not self._cancel_job and not self._pending_set:
+            self._progress_unit = 'postprocess'
+            merged = self._mergeMp4Chunks()
+            if not merged and not self._cancel_job:
+                raise Exception("merge/publish failed")
+        elif not self._cancel_job:
+            pending = len(self._pending_set)
+            reasons = sorted(getattr(self, '_round_failures', {}).items(),
+                             key=lambda item: (-item[1][0], item[0]))
+            denied = getattr(self, '_denied_indices', ())
+            if denied:
+                reasons = [('HTTP 403', (len(denied), min(denied)))] + [
+                    pair for pair in reasons if pair[0] != 'HTTP 403']
+            detail = ', '.join(f'{reason} ×{n} (e.g. segment {i + 1})'
+                               for reason, (n, i) in reasons[:6])
+            if denied:
+                if self._denial_deferred:
+                    detail += f'; {self._denial_deferred} not requested in this round'
+                detail += '; access denied; cache retained; retry manually later'
+            raise DownloadIncompleteError(pending, detail=detail)
         return not self._cancel_job
 
     def cancel_download(self, cleanup=True):
         print("\n取消下載....", flush=True)
+        if cleanup:
+            self._cleanup_requested = True
         self._cancel_job = True
         segment_executor = self._t2_executor
         if segment_executor is not None:
@@ -1407,8 +1442,6 @@ class M3U8Crawler:
         if proc is not None:
             try: proc.kill()
             except Exception: pass
-        if cleanup:
-            self.cleanup_temp()
         print("\n下載已取消", flush=True)
 
     def begin_concurrent_download(self):

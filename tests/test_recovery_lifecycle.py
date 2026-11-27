@@ -24,7 +24,7 @@ def test_denied_segment_is_not_requested_ten_times(tmp_path):
         job.start_download()
     assert calls.count('missing') == 1
     assert not classify_download_problem(str(result.value)).retryable
-    assert '403' in str(result.value) and (tmp_path / '000000.mp4').read_bytes() == PACKET
+    assert '403' in str(result.value) and Path(job._seg_savename(0)).read_bytes() == PACKET
     media['missing'] = (200, PACKET)
     assert job.start_download()
     assert calls.count('ok') == 1 and calls.count('missing') == 2
@@ -95,13 +95,18 @@ export_prefix(row.partial_prefix, sys.argv[2])
     assert list(tmp_path.glob('*.partial*.mp4')) == [clip]
 
 
-def test_receipt_bound_to_settings_job_and_digest(tmp_path):
+@pytest.mark.parametrize('modern', [False, True])
+def test_receipt_bound_to_settings_job_and_digest(tmp_path, modern):
     from uav_downloader.core.partial_export import Receipts, store_prefix, restore_prefix
     queue = tmp_path / 'queue.csv'
     row = browse.DownloadItem('https://missav.ws/test-123', dest=str(tmp_path))
     receipts = Receipts()
     receipts.record(0, b'original')
     plan = receipts.plan(tmp_path / 'test-123', tmp_path / 'safe.mp4', 3)
+    if modern:
+        from dataclasses import replace
+        from uav_downloader.core.hls_cache import cache_name
+        plan = replace(plan, cache=tmp_path / cache_name('test-123', 'safe', 'offline'))
     key = store_prefix(queue, row, plan)
     def restore():
         return restore_prefix(queue, row, key, 'test-123')

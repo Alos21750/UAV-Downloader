@@ -1103,11 +1103,6 @@ class DownloadManager:
                     pass
             except Exception:
                 pass
-            if cleanup and hasattr(job, 'cleanup_temp'):
-                try:
-                    job.cleanup_temp()
-                except Exception:
-                    pass
 
     def _set_state(self, url: str, state: str, name: str = '', progress: int = -1, error=None):
         with self._lock:

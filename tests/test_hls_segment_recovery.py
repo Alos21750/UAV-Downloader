@@ -1,6 +1,7 @@
 """Offline segment-level recovery regressions; no real pages, keys or media."""
 import threading
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 from Crypto.Cipher import AES
@@ -16,6 +17,7 @@ def _job(tmp_path, body, resources):
     job = base.M3U8Crawler.__new__(base.M3U8Crawler)
     job._cancel_job = False
     job._temp_folder = str(tmp_path)
+    job._dest_folder, job._dirName, job._targetName = str(tmp_path), 'fixture', 'fixture'
     job._speed_lock = threading.Lock()
     job._segment_retry_rounds = 1
     job._segment_retry_base_delay = 0
@@ -42,6 +44,16 @@ def _job(tmp_path, body, resources):
     return job, calls
 
 
+def _seed_cache(job, calls):
+    """Only a cache bound to this very playlist is eligible for resume."""
+    job._create_m3u8()
+    cache = Path(job._dest_folder) / base.hls_cache.cache_name(
+        job._dirName, job._targetName, job._playlist_fingerprint)
+    cache.mkdir(exist_ok=True)
+    calls.clear()
+    return cache
+
+
 def test_rotating_keys_ivs_and_clear_segments(tmp_path):
     keys = [b'A' * 16, b'B' * 16]
     manifest = ('#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:20\n#EXTINF:1,\nclear0\n'
@@ -57,7 +69,7 @@ def test_rotating_keys_ivs_and_clear_segments(tmp_path):
     job, calls = _job(tmp_path, manifest, resources)
     assert job.start_download() is True
     assert calls.count('keyB') == 1
-    assert all((tmp_path / f'{i:06d}.mp4').read_bytes() == PACKET for i in range(5))
+    assert all(Path(job._seg_savename(i)).read_bytes() == PACKET for i in range(5))
 
 
 def test_retry_details_are_bounded_and_redacted(tmp_path):
@@ -81,15 +93,16 @@ def test_cancel_after_permit_never_publishes_segment(monkeypatch, tmp_path):
         return True
     monkeypatch.setattr(base.speed_limiter, 'acquire', cancel)
     assert not job.start_download()
-    assert job._pending_set and list(tmp_path.iterdir()) == []
+    assert job._pending_set and not list(Path(job._temp_folder).iterdir())
 
 
 def test_resume_replaces_bad_cache_only_after_valid_transfer(tmp_path):
     job, calls = _job(tmp_path, '#EXTM3U\n#EXTINF:1,\na\n#EXTINF:1,\nb\n', {
         'a': (200, b'bad network body'), 'b': (200, PACKET)})
-    damaged = tmp_path / '000000.mp4'
+    cache = _seed_cache(job, calls)
+    damaged = cache / '000000.mp4'
     damaged.write_bytes(b'not a saved packet')
-    retained = tmp_path / '000001.mp4'
+    retained = cache / '000001.mp4'
     retained.write_bytes(PACKET)
     with pytest.raises(base.DownloadIncompleteError):
         job.start_download()
@@ -139,12 +152,12 @@ def test_resume_never_follows_a_nonregular_cache_target(tmp_path):
         pytest.skip('symlinks unavailable')
     unrelated = tmp_path / 'unrelated.ts'
     unrelated.write_bytes(PACKET)
-    link = tmp_path / '000000.mp4'
+    job, calls = _job(tmp_path, '#EXTM3U\n#EXTINF:1,\na\n', {})
+    link = _seed_cache(job, calls) / '000000.mp4'
     try:
         link.symlink_to(unrelated)
     except OSError:
         pytest.skip('no symlink privilege')
-    job, calls = _job(tmp_path, '#EXTM3U\n#EXTINF:1,\na\n', {})
     with pytest.raises(base.StorageWriteError):
         job.start_download()
     assert link.is_symlink() and unrelated.read_bytes() == PACKET and calls == ['playlist']

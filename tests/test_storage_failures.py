@@ -99,6 +99,7 @@ def test_hls_write_error_is_fatal_not_pending_retry(monkeypatch, tmp_path):
 
 def test_direct_storage_error_never_falls_back_to_serial(monkeypatch, tmp_path):
     job = supjav.SiteSupJav.__new__(supjav.SiteSupJav)
+    job._dest_folder, job._targetName = str(tmp_path), 'video'
     job._cancel_job = False
     job._direct_referer = 'https://example.test/'
     job._create_dest_folder = lambda: None

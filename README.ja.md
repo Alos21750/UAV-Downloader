@@ -269,6 +269,8 @@ Docker は GUI なしで処理完了後に終了するダウンロードジョ�
 
 Proxy が必要な場合は、UAV Browser の「設定」または UAV Watcher 上部で、独自 Proxy、Windows システム Proxy、または無効を選択できます。2 つの GUI はこの設定を共有し、本アプリだけに適用します。Windows モードは現在、有効な手動 ProxyServer に対応しています。PAC 設定 URL は表示しますが実行せず、WPAD 自動検出にはまだ対応していません。
 
+アップグレード前の未完了データは削除されません。異なる配信元や画質の動画には再利用しません。[再開とキャッシュの仕様](docs/transfer-cache.md)。
+
 ## Stars とプロジェクト活動
 
 <p align="center">

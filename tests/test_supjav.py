@@ -479,7 +479,7 @@ def test_new_hls_sources_fallback_without_streamtape(monkeypatch):
     assert crawler.start_download() is True
     assert len(attempts) == 2
     assert attempts[1][1] == {'Referer': 'https://vas.example/e/video'}
-    assert cleaned == [True]
+    assert cleaned == []  # Different sources now have independent playlist-bound caches.
 
 
 def test_blocked_source_resolution_does_not_mask_new_fallback(monkeypatch):

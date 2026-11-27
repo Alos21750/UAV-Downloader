@@ -2,7 +2,7 @@
 import pytest
 from uav_downloader.sites import base
 from uav_downloader.sites.missav import SiteMissAV
-from test_hls_segment_recovery import _job, PACKET
+from test_hls_segment_recovery import _job, _seed_cache, PACKET
 
 
 @pytest.mark.parametrize('workers', [1, 4])
@@ -10,10 +10,11 @@ def test_large_denial_preserves_bandwidth_and_retry_progress(tmp_path, workers):
     total, cached = 231, 108
     manifest = '#EXTM3U\n' + ''.join(f'#EXTINF:1,\ns{i}\n' for i in range(total))
     resources = {f's{i}': (403, b'') for i in range(cached, total)}
-    for i in range(cached):
-        (tmp_path / f'{i:06d}.mp4').write_bytes(PACKET)
     job, calls = _job(tmp_path, manifest, resources)
     job.__class__ = SiteMissAV
+    cache = _seed_cache(job, calls)
+    for i in range(cached):
+        (cache / f'{i:06d}.mp4').write_bytes(PACKET)
     job._max_workers = workers
     progress = []
     job._progress_callback = lambda done, count, _: progress.append((done, count))

@@ -171,7 +171,7 @@ class SiteMissAV(M3U8Crawler):
         if not isinstance(url, str) or len(url) > 2048:
             return None
         slug = super().validate_url(url)
-        if (not slug or not any('0' <= char <= '9' for char in slug) or
+        if (not slug or slug.lower() in {'fc2', '1pondo'} or not any('0' <= char <= '9' for char in slug) or
                 re.fullmatch(r'dm\d+', slug, flags=re.I)):
             return None
         return slug
